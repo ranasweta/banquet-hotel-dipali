@@ -1,0 +1,3 @@
+Migrations 0002+ go here as NNNN_name.sql and are applied in lexical order.
+Migration 0001 is db/schema.sql itself — see db/migrate.ts.
+Schema changes happen in SQL first; db/schema.ts is introspected from the live DB.

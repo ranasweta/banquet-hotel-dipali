@@ -1,0 +1,859 @@
+{
+  "_source": {
+    "itemsAndCategoriesFrom": "MAIN COURSE 650 - 1250 (1) (1).pdf (base card)",
+    "weddingRatesFrom": "BANQUET MENU WITH VENUE PROPOSAL UPDATE  2026 (2) (1) (1).pdf (wedding card, pp. 4-16)",
+    "note": "The two PDFs are the same menu at two price points. Item lists are identical; only the per-plate rate differs, always by exactly Rs. 50 (BR-M5). Category and item text is taken from the base card because the wedding card's text extracts without word spacing (VEGMANCHOWSOUP)."
+  },
+  "_conventions": {
+    "pick": "Copied verbatim from the printed \"(ANY N)\". null = no (ANY N) printed = every item included (BR: all-included categories render read-only, always count complete, and are excluded from the free-increase rule).",
+    "itemCase": "Cards are printed ALL CAPS; stored Title Case for display. Spelling is otherwise preserved as printed, typos included (Desert, Orinental, Woldrop, Noddle, Bombey, Macroni, Seasnol, Hydrabadi). These are the hotel's own product names — see SEED_ASSUMPTIONS.md, open question on menu spelling.",
+    "categoryNames": "Normalised (Desert -> Dessert, Live Counte -> Live Counter, Asst Indian Bread -> Assorted Indian Bread) because category names are structural: BR-M2/BR-M3 match on them. Where normalised, printedAs records the original.",
+    "slashes": "Slash-separated dishes stay ONE item as printed (\"Paneer Makhani / Handi Paneer\") — the kitchen picks. EXCEPTION: Crown's Pickle/Chutney/Papad counters print a delimited list in a single cell against \"(ANY THREE)\"; kept whole they would be 1 item and could never satisfy a pick of 3, so those three are split. Flagged below.",
+    "freeIncreaseEligible": "BR-M2 allows one free +1 from {Salad, Appetizer/Starter, Main Course, Soup}. Paneer Main Course is excluded because BR-M3 names paneer increases as exception-raising. Salad Bar (Platinum/Diamond/Crown) is all-included so there is nothing to increase — the free salad increase therefore exists only on Silver and Gold."
+  },
+  "effectiveFrom": "2026-01-01",
+  "weddingSurchargePaise": 5000,
+  "tiers": [
+    {
+      "name": "Silver",
+      "printedAs": "SILVER SPOON",
+      "baseRatePaise": 65000,
+      "weddingRatePaise": 70000,
+      "categories": [
+        {
+          "name": "Welcome Drink",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Soft Drink",
+            "Virgin Mojito",
+            "Blue Lagoon",
+            "Shikanji / Aam Pana (Seasonal)",
+            "Jaljeera"
+          ]
+        },
+        {
+          "name": "Soup",
+          "pick": 1,
+          "freeIncreaseEligible": true,
+          "items": ["Veg Manchow Soup", "Hot & Sour Soup", "Cream of Tomato", "Sweet Corn Soup"]
+        },
+        {
+          "name": "Veg Appetizer",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": ["Hara Bhara Kabab", "Cocktail Kabab", "Beetroot Kabab", "Veg Kothey"]
+        },
+        {
+          "name": "Veg Main Course",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Mix Vegetable",
+            "Veg Kofta",
+            "Aloo Palak Chaman",
+            "Bhindi Do-Pyaza",
+            "Aloo Mutter"
+          ]
+        },
+        {
+          "name": "Paneer Main Course",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Kadai Paneer",
+            "Paneer Lababdar",
+            "Paneer Makhani / Handi Paneer",
+            "Mutter Paneer"
+          ]
+        },
+        {
+          "name": "Dal",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": ["Dal Tadka", "Dal Fry", "Dal Hyderabadi", "Dal Panchmel"]
+        },
+        {
+          "name": "Rice",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": ["Steam Rice", "Jeera Rice", "Veg Pulav", "Green Peas Pulav"]
+        },
+        {
+          "name": "Assorted Indian Bread",
+          "printedAs": "ASST INDIAN BREAD",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": ["Tandoori Roti", "Tandoori Naan", "Missi Roti / Poori Two Types"]
+        },
+        {
+          "name": "Dessert",
+          "printedAs": "DESERT",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": ["Gulab Jamun", "Seasonal Halwa", "Shahi Tukda", "Ice-Cream"]
+        },
+        {
+          "name": "Accompaniments",
+          "printedAs": "ACHAR, PAPAD, GREEN CHILLY FRIED",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": ["Achar", "Papad", "Green Chilly Fried"]
+        },
+        {
+          "name": "Raita",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": ["Mix Veg Raita", "Boondi Raita", "Aloo Mint Raita", "Cucumber Raita"]
+        },
+        {
+          "name": "Salad",
+          "pick": 3,
+          "freeIncreaseEligible": true,
+          "items": ["Green Salad", "Kachumber Salad", "Russian Salad", "Pasta Salad"]
+        },
+        {
+          "name": "Live Counter",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": ["Pani Puri \\ Dosa / Aloo Tikki Chaat", "Bombey Bhel \\ Papdi Chaat"]
+        }
+      ]
+    },
+    {
+      "name": "Gold",
+      "printedAs": "GOLD SPOON",
+      "baseRatePaise": 75000,
+      "weddingRatePaise": 80000,
+      "categories": [
+        {
+          "name": "Welcome Drink",
+          "pick": 3,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Soft Drink",
+            "Virgin Mojito / Jaljeera",
+            "Blue Lagoon",
+            "Shikanji / Aam Pana (Seasonal)"
+          ]
+        },
+        {
+          "name": "Soup",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": ["Veg Manchow Soup", "Hot & Sour Soup", "Cream of Tomato", "Sweet Corn Soup"]
+        },
+        {
+          "name": "Veg Appetizer",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Hara Bara Kabab / Paneer Tikka",
+            "Cocktail Kabab / Hakka Noddles",
+            "Rajma Kabab / Manchurian",
+            "Cheese Fitter / Crispy Veg"
+          ]
+        },
+        {
+          "name": "Veg Main Course",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Mix Vegetable / Veg Kolhapuri",
+            "Aloo Gobhi Mutter / Tawa Veg",
+            "Veg Kofta / Chana Masala / Punjabi Kofta",
+            "Aloo Mutter / Dum Aloo Chutney Wale"
+          ]
+        },
+        {
+          "name": "Paneer Main Course",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Kadai Paneer / Paneer Radar (White Gravy)",
+            "Paneer Lababdar",
+            "Paneer Makhani",
+            "Paneer Butter Masala"
+          ]
+        },
+        {
+          "name": "Dal",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": ["Dal Tadka", "Dal Punjabi", "Dal Bukhara", "Dal Fry"]
+        },
+        {
+          "name": "Rice",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": ["Green Peas Pulav", "Jeera Rice / Steam Rice", "Veg Pulav", "Veg Biryani"]
+        },
+        {
+          "name": "Assorted Indian Bread",
+          "printedAs": "ASST INDIAN BREAD",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tandoori Roti",
+            "Tandoori Naan / Tawa Roti",
+            "Missi Roti / Poori Two Types (Plain, Masala)"
+          ]
+        },
+        {
+          "name": "Dessert",
+          "printedAs": "DESERT",
+          "pick": 3,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Seasonal Halwa / Coconut Barfi",
+            "Gulab Jamun / Shahi Tukda / Gulab Barfi",
+            "Mawa Bati / Paan Barfi / Jalebi Rabdi",
+            "Ice-Cream"
+          ]
+        },
+        {
+          "name": "Salad",
+          "pick": 3,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Green Salad",
+            "Russian Salad",
+            "Kimchi Salad / Kachumber Salad",
+            "Pasta Salad / Sprouts"
+          ]
+        },
+        {
+          "name": "Raita",
+          "pick": 1,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Boondi Raita / Fruit Raita",
+            "Cucumber Raita",
+            "Dahi Vada / Mix Veg Raita",
+            "Dahi Bhalla"
+          ]
+        },
+        {
+          "name": "Accompaniments",
+          "printedAs": "ACHAR, PAPAD, PICKLE, CHUTNEY",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": ["Achar", "Papad", "Pickle", "Chutney"]
+        },
+        {
+          "name": "Live Counter",
+          "printedAs": "LIVE COUNTE",
+          "pick": 3,
+          "freeIncreaseEligible": false,
+          "items": ["Pani Puri", "Aloo Tikki / Papdi Chaat", "Dosa / Bombey Bhel"]
+        }
+      ]
+    },
+    {
+      "name": "Platinum",
+      "printedAs": "PLATINUM SPOON",
+      "baseRatePaise": 85000,
+      "weddingRatePaise": 90000,
+      "categories": [
+        {
+          "name": "Welcome Drink",
+          "pick": 3,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Soft Drink / Jal Jeera",
+            "Virgin Mojito / Butter Milk",
+            "Blue Lagoon / Shikanji / Roohafza",
+            "Fresh Lime Soda / Aam Pana Seasonal"
+          ]
+        },
+        {
+          "name": "Soup",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Veg Manchow Soup",
+            "Hot & Sour Soup",
+            "Veg Tom Yam",
+            "Tomato Dhaniya Shorba",
+            "Cream of Tomato",
+            "Sweet Corn Soup"
+          ]
+        },
+        {
+          "name": "Veg Appetizer",
+          "pick": 4,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Hara Bara Kabab / Veg Manchurian",
+            "Veg Spring Rolls / Chilly Paneer",
+            "Baby Corn Sigar / Paneer Tikka",
+            "Soya Chap Tikka / Paneer Chutney Tikka",
+            "Veg Lollypop / Shehzwan Potato (Chinese)"
+          ]
+        },
+        {
+          "name": "Veg Main Course",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Mix Vegetable / Dum Aloo Banarasi",
+            "Corn Palak / Dum Aloo Achari",
+            "Veg Kofta / Lauki Kofta / Haryali Kofta",
+            "Methi Mutter Malai (White, Brown Gravy)",
+            "Aloo Gobhi Mutter / Chana Masala"
+          ]
+        },
+        {
+          "name": "Paneer Main Course",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Kadai Paneer",
+            "Paneer Lababdar",
+            "Paneer Makhani",
+            "Paneer Hydrabadi",
+            "Shahi Paneer",
+            "Paneer Butter Masala",
+            "Paneer Punjabi"
+          ]
+        },
+        {
+          "name": "Dal",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": ["Dal Tadka", "Dal Fry", "Dal Punjabi", "Dal Makhani"]
+        },
+        {
+          "name": "Rice",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": ["Steam Rice", "Jeera Rice", "Veg Pulav / Veg Biryani", "Green Peas Pulav"]
+        },
+        {
+          "name": "Assorted Indian Bread",
+          "printedAs": "ASST INDIAN BREAD",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tandoori Roti",
+            "Puri Two Types",
+            "Tawa Roti",
+            "Tandoori Naan",
+            "Missi Roti / Kulcha"
+          ]
+        },
+        {
+          "name": "Dessert",
+          "printedAs": "DESERT",
+          "pick": 3,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Kapoor Kand Barfi (Chef Special)",
+            "Rasbhari / Gulab Jamun",
+            "Rabdi Jalebi / Rose Barfi / Paan Barfi",
+            "Ice Cream",
+            "Mawa Bati / Coconut Barfi",
+            "Seasonal Halwa / Rasmalai"
+          ]
+        },
+        {
+          "name": "Live Counter",
+          "pick": 4,
+          "freeIncreaseEligible": false,
+          "items": [
+            "South Indian Dosa Plain, Masala",
+            "Orinental - Chowmein / Hakka Noddles / Schezwan Noddle / Singapori Noddle",
+            "Aloo Tikki Chaat / Continental Pasta in Tomato Sauce (Pink and White)",
+            "Pani Puri / Pav Bhaji",
+            "Papdi Chaat / Dahi Bhalla Chaat"
+          ]
+        },
+        {
+          "name": "Salad Bar",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Green Salad",
+            "Green Tosed Salad",
+            "Russian Salad",
+            "Kimchi Salad",
+            "Pasta Salad",
+            "Woldrof Salad / Sprouts"
+          ]
+        },
+        {
+          "name": "Accompaniments",
+          "printedAs": "ACHAR, PAPAD, GREEN CHILLY FRIED",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": ["Achar", "Papad", "Green Chilly Fried"]
+        },
+        {
+          "name": "Raita",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Mix Veg Raita / Cucumber Raita",
+            "Boondi Raita / Fruit Raita",
+            "Dahi Vada / Dahi Gujia",
+            "Dahi Bhalla"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Diamond",
+      "printedAs": "DIAMOND SPOON",
+      "baseRatePaise": 95000,
+      "weddingRatePaise": 100000,
+      "categories": [
+        {
+          "name": "Welcome Drink",
+          "pick": 4,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Soft Drink / Jal Jeera / Butter Milk",
+            "Virgin Mojito / Kanji Bada",
+            "Blue Lagoon / Roohafza",
+            "Fresh Lime Soda / Aam Panna (Seasonal)"
+          ]
+        },
+        {
+          "name": "Soup",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Veg Manchow Soup",
+            "Hot & Sour Soup",
+            "Veg Tom Yam",
+            "Veg Spanish Soup",
+            "Cream of Tomato",
+            "Sweet Corn Soup"
+          ]
+        },
+        {
+          "name": "Veg Starters",
+          "pick": 5,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Hara Bhara Kabab",
+            "Paneer Tikka / Veg Mexican Roll",
+            "Paneer Punjabi Tikka",
+            "Veg Spring Roll",
+            "Corn Cheese Kabab",
+            "Peanut Ke Kabab",
+            "Cheese Ball / Soya Chap Achari Tikka",
+            "Cocktail Kabab"
+          ]
+        },
+        {
+          "name": "Veg Main Course",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Tawa Veg / Lakhnavi Veg Korma",
+            "Corn Palak / Malai Kofta / Palak Kofta",
+            "Veg Kofta / Punjabi Kofta",
+            "Amritsari Chhole",
+            "Aloo Gobhi Mutter",
+            "Bhindi Do-Pyaza / Bhindi Masala",
+            "Methi Mutter Malai"
+          ]
+        },
+        {
+          "name": "Paneer Main Course",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Kadai Paneer / Paneer Aavdhi",
+            "Paneer Lababdar / Paneer Tikka Masala",
+            "Paneer Makhani",
+            "Paneer Rogan Josh",
+            "Shahi Paneer",
+            "Paneer Butter Masala",
+            "Radar Paneer"
+          ]
+        },
+        {
+          "name": "Dal",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Dal Tadka / Dal Lauki Chana",
+            "Dal Fry / Dal Hyderabadi",
+            "Dal Makhani / Rajma Raseele",
+            "Dal Panchmel"
+          ]
+        },
+        {
+          "name": "Rice",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Steam Rice / Corn Pulav",
+            "Jeera Rice / Lemon Rice",
+            "Veg Pulav",
+            "Veg Biryani"
+          ]
+        },
+        {
+          "name": "Assorted Indian Bread",
+          "printedAs": "ASST INDIAN BREAD",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tandoori Roti",
+            "Tawa Roti / Kulcha",
+            "Tandoori Naan",
+            "Missi Roti, Puri, Masala Puri"
+          ]
+        },
+        {
+          "name": "Dessert",
+          "printedAs": "DESERT",
+          "pick": 4,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Gulab Jamun",
+            "Rasmalai / Rabdi with Jalebi",
+            "Shahi Tukda",
+            "Ice-Cream",
+            "Pan Barffi / Mawa Barfi / Rose Barfi",
+            "Seasnol Halwa (Gajar/Moong Dal/Lauki)"
+          ]
+        },
+        {
+          "name": "Live Counter",
+          "pick": 4,
+          "_dataIssue": "PRINTED AS \"(ANY FIVE)\" BUT ONLY 4 ITEMS ARE LISTED — identical in both PDFs. As printed this is unsatisfiable and no Diamond menu could ever reach complete, blocking the lock checklist (FR-7.1). Seeded as 4 (= all items) pending the client's answer: add a 5th live counter item, or is the correct pick 4?",
+          "freeIncreaseEligible": false,
+          "items": [
+            "(South Indian) Dosa / Moong Dal Chilla",
+            "Orinental - Chawmein / Hakka Noddle / Schezwan Noddle / Singapori Noddle",
+            "(Continental) Two Type of Pasta Choice of Sauce",
+            "Aloo Tikki Chaat / Panipuri / Bombey Bhel / Papdi Chaat / Raj Kachouri"
+          ]
+        },
+        {
+          "name": "Salad Bar",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Green Salad",
+            "Kimchi Salad",
+            "Pasta Salad",
+            "Woldrop Salad",
+            "Macroni Peanut Salad",
+            "Three Bean Salad",
+            "Potato and Chick Peace Salad"
+          ]
+        },
+        {
+          "name": "Accompaniments",
+          "printedAs": "ACHAR, PAPAD, GREEN CHILLY FRIED",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": ["Achar", "Papad", "Green Chilly Fried"]
+        },
+        {
+          "name": "Raita",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Aloo Mint Raita",
+            "Boondi Raita / Fruit Raita",
+            "Dahi Vada / Dahi Gujia",
+            "Dahi Bhalla / Cucumber Raita"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Crown",
+      "printedAs": "CROWN SPOON",
+      "baseRatePaise": 125000,
+      "weddingRatePaise": 130000,
+      "categories": [
+        {
+          "name": "Welcome Drink",
+          "pick": 4,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Soft Drink / Aam Panna",
+            "Virgin Mojito, Roohafza",
+            "Blue Lagoon, Jal Jeera",
+            "Fresh Lime Soda, Butter Milk"
+          ]
+        },
+        {
+          "name": "Soup",
+          "pick": 2,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Veg Manchow Soup",
+            "Hot & Sour Soup",
+            "Veg Tom Yam (Spicy)",
+            "Lemon Corriander",
+            "Cream of Tomato / Tomato Dhaniya Shorba",
+            "Sweet Corn Soup"
+          ]
+        },
+        {
+          "name": "Veg Starters",
+          "pick": 5,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Hara Bara Kabab / Beetroot Kabab",
+            "Paneer Tikka / Sami Veg Kabab",
+            "Chilly Paneer",
+            "Paneer Punjabi Tikka",
+            "Veg Lollypop / Veg Kothey",
+            "Cheese Corn Kabab",
+            "Peanut Ke Kabab / Veg Manchurian",
+            "Achari Soya Chap",
+            "Mexican Roll / Spring Roll / Spanish Roll",
+            "Cheese Fiters / Cocktail Kabab",
+            "Stuffed Cheese Subz Kabab"
+          ]
+        },
+        {
+          "name": "Veg Main Course",
+          "pick": 3,
+          "freeIncreaseEligible": true,
+          "items": [
+            "Mix Vegetable / Veg Kolhapuri / Thai Curry",
+            "Corn Palak / Jasmine Rice",
+            "Sarso Ka Saag (Seasonal) / Mushroom Dhaniya Masala",
+            "Veg / Punjabi / Malai / Palak Kofta",
+            "Aloo Methi Chaman / Aloo Palak Chaman",
+            "Methi Mutter Malai / Rajma Masala",
+            "Amritsari Chhole / Mushroom Do-Pyaza",
+            "Gobhi Mutter Ghotala / Mushroom Mutter"
+          ]
+        },
+        {
+          "name": "Paneer Main Course",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Kadai Paneer / Paneer Tikka Masala",
+            "Paneer Lababdar / Paneer Avdhi",
+            "Paneer Makhani / Paneer Khazana",
+            "Paneer Rogan Josh",
+            "Shahi Paneer",
+            "Paneer Butter Masala",
+            "Mutter Paneer"
+          ]
+        },
+        {
+          "name": "Dal",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": ["Dal Tadka", "Dal Fry / Dal Bhukara", "Dal Makhni", "Dal Punjabi", "Dal Panchmel"]
+        },
+        {
+          "name": "Rice",
+          "pick": 2,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Peas Pulav / Corn Pulav",
+            "Jeera Rice / Steam Rice / Lemon Rice",
+            "Veg Pulav / Navratan Pulav",
+            "Veg Biryani"
+          ]
+        },
+        {
+          "name": "Assorted Indian Bread",
+          "printedAs": "ASST INDIAN BREAD",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tandoori Roti / Lachha Paratha",
+            "Tawa Roti",
+            "Tandoori Naan / Kulcha",
+            "Missi Roti, Puri, Masala Puri"
+          ]
+        },
+        {
+          "name": "Live Counter",
+          "pick": 5,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Aloo Tikki Chaat / Panipuri / Papdi Chaat",
+            "Pav Bhaji / Mutter Kulcha",
+            "Dosa / Moong Dal Chilla / Besan Chilla",
+            "Pizza Veg Delight",
+            "Pasta with Choice of Sauce Arabiata / Alfredo / Mix / Rajkachodi",
+            "Dahi Bhalla Papdi Chat",
+            "Orinental - Chowmein / Hakka Noddle / Schezwan Noddle / Singapori Noddle / Veg Fried Rice"
+          ]
+        },
+        {
+          "name": "Salad Bar",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Green Salad",
+            "Green Tosed Salad",
+            "Russian Salad",
+            "Kimchi Salad",
+            "Pasta Salad",
+            "Fresh Cut Fruit",
+            "Woldrop Salad",
+            "Macroni Peanut Salad",
+            "Greek Salad",
+            "Three Bean Salad",
+            "Potato and Chick Peace Salad"
+          ]
+        },
+        {
+          "name": "Raita Bar",
+          "pick": 3,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Dahi Vada / Dahi Bhalla",
+            "Mix Fruit Raita / Boondi Raita / Pineapple Raita",
+            "Cucumber Raita / Aloo Mint Raita"
+          ]
+        },
+        {
+          "name": "Pickle Counter",
+          "pick": 3,
+          "_split": "Printed as one comma-separated cell against \"(ANY THREE)\"; split into 6 items so the pick is satisfiable. Marked NEW COUNTER on the card.",
+          "freeIncreaseEligible": false,
+          "items": ["Mango", "Indian Gooseberry", "Lemon", "Mix", "Chili", "Turmeric"]
+        },
+        {
+          "name": "Chutney Counter",
+          "pick": 3,
+          "_split": "Printed as one slash-separated cell against \"(ANY THREE)\"; split into 7 items so the pick is satisfiable. The card omits the slash between \"Amrood ( Seasonal )\" and \"Aam ( Seasonal )\" — read as two items. Marked NEW COUNTER.",
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tomato",
+            "Hari",
+            "Emli Ki Meethi",
+            "Amrood (Seasonal)",
+            "Aam (Seasonal)",
+            "Rajasthani",
+            "Pudina"
+          ]
+        },
+        {
+          "name": "Papad Counter",
+          "pick": 3,
+          "_split": "Printed as one slash-separated cell against \"(ANY THREE)\"; split into 8 items so the pick is satisfiable. Marked NEW COUNTER.",
+          "freeIncreaseEligible": false,
+          "items": [
+            "Moong",
+            "Chana Masala",
+            "Punjabi",
+            "Rice Jeera",
+            "Aloo",
+            "Urad",
+            "Sabudana",
+            "Fryums"
+          ]
+        },
+        {
+          "name": "Accompaniments",
+          "printedAs": "GREEN CHILLY FRIED WITH LEMON",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": ["Green Chilly Fried with Lemon"]
+        },
+        {
+          "name": "Dessert",
+          "printedAs": "DESERT",
+          "pick": 5,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Jalebi with Rabdi",
+            "Shahi Tukda / Chhena Pie",
+            "Ice-Cream",
+            "Rasmalai / Barfi / Mawa Malai",
+            "Seasonal Halwa (Gajar/Lauki)",
+            "Moong Dal Ka Halwa",
+            "Gulab Jamun",
+            "Mawa Bati / Imarti"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Breakfast Gold",
+      "printedAs": "GOLD @400/-",
+      "baseRatePaise": 40000,
+      "weddingRatePaise": 45000,
+      "categories": [
+        {
+          "name": "Breakfast",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tea",
+            "Coffee",
+            "Hot Milk",
+            "Corn Flakes",
+            "Bread Toast",
+            "Veg Poha",
+            "Idli",
+            "Sambar",
+            "Assorted Paratha",
+            "Plain Curd",
+            "Assorted Pastries",
+            "Cut Fruits"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Breakfast Platinum",
+      "printedAs": "PLATINUM @500/-",
+      "baseRatePaise": 50000,
+      "weddingRatePaise": 55000,
+      "categories": [
+        {
+          "name": "Breakfast",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tea",
+            "Coffee",
+            "Hot Milk",
+            "Corn Flakes",
+            "Canned Juice",
+            "Cut Fresh Fruits",
+            "Idli",
+            "Sambar",
+            "Dosa (Live)",
+            "Poha",
+            "Puri and Bhaji",
+            "Jalebi",
+            "Assorted Pastries"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "High Tea Silver",
+      "printedAs": "SILVER @300/-",
+      "baseRatePaise": 30000,
+      "weddingRatePaise": 35000,
+      "categories": [
+        {
+          "name": "High Tea",
+          "pick": null,
+          "freeIncreaseEligible": false,
+          "items": [
+            "Tea",
+            "Coffee",
+            "Veg Sanwich",
+            "Assorted Pakoda",
+            "Cookies",
+            "Any One Sweet (Chef Choice)"
+          ]
+        }
+      ]
+    }
+  ]
+}
