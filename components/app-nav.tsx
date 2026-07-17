@@ -10,6 +10,7 @@ type Perm = { module: string; action: string }
 
 const NAV: { href: string; label: string; module?: string }[] = [
   { href: '/', label: 'Dashboard' },
+  { href: '/bookings', label: 'Bookings', module: 'bookings' },
   { href: '/calendar', label: 'Calendar', module: 'calendar' },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users' },
   { href: '/admin/users', label: 'Users', module: 'roles_users' },
@@ -42,7 +43,8 @@ export function AppNav({
       </div>
       <nav className="flex-1 space-y-1 p-2">
         {NAV.filter((item) => canView(item.module)).map((item) => {
-          const active = pathname === item.href
+          const active =
+            pathname === item.href || (item.href !== '/' && pathname.startsWith(`${item.href}/`))
           return (
             <Link
               key={item.href}

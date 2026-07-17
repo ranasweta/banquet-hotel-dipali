@@ -144,6 +144,10 @@ CREATE TABLE menu_items (
 -- ============================================================
 -- 4. Events and sub-events
 -- ============================================================
+-- Human-readable event references: 'E-1000', 'E-1001', … The booking service inserts
+-- code = 'E-' || nextval('event_code_seq'), so codes are unique without a max()+1 race.
+CREATE SEQUENCE IF NOT EXISTS event_code_seq START 1000;
+
 CREATE TABLE events (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   code          text NOT NULL UNIQUE,           -- human ref: 'E-1042'
