@@ -284,6 +284,10 @@ export async function seed(
     counts.role_permissions = perms.length
 
     // --- Users ------------------------------------------------------------
+    // ON CONFLICT deliberately does NOT touch password_hash: re-seeding an existing DB
+    // must not silently reset a password someone changed. The upshot for dev is that
+    // changing SEED_PASSWORD only takes effect via `pnpm seed --reset` (which truncates
+    // and re-inserts), not a plain re-seed.
     await tx`
       INSERT INTO users ${tx(
         USERS.map((u) => ({

@@ -1,5 +1,8 @@
-import 'dotenv/config'
+import { config } from 'dotenv'
 import { defineConfig } from 'drizzle-kit'
+
+// Match db/client.ts: load .env.local (the project convention) as well as .env.
+config({ path: ['.env.local', '.env'], quiet: true })
 
 /**
  * Introspection only. db/schema.sql is the source of truth (CLAUDE.md) and is applied
