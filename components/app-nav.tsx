@@ -10,6 +10,7 @@ type Perm = { module: string; action: string }
 
 const NAV: { href: string; label: string; module?: string }[] = [
   { href: '/', label: 'Dashboard' },
+  { href: '/calendar', label: 'Calendar', module: 'calendar' },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users' },
   { href: '/admin/users', label: 'Users', module: 'roles_users' },
 ]

@@ -1,13 +1,18 @@
-import { pgTable, foreignKey, unique, uuid, text, boolean, date, bigint, timestamp, uniqueIndex, check, time, integer, index, jsonb, numeric, primaryKey, pgEnum, customType } from "drizzle-orm/pg-core"
+import { pgTable, text, timestamp, unique, uuid, boolean, foreignKey, check, integer, bigint, date, uniqueIndex, time, index, jsonb, numeric, primaryKey, pgEnum, customType } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
-// Drizzle introspection cannot parse PostgreSQL's `daterange`, so `pnpm db:pull` emits
-// an invalid `unknown("stay")` for room_allocations.stay. This custom type restores it.
-// REAPPLY THIS after any future `db:pull` (the room-overlap exclusion lives in the SQL,
-// db/schema.sql, which remains the source of truth — see CLAUDE.md).
+// Drizzle introspection cannot parse PostgreSQL range types, so `pnpm db:pull` emits an
+// invalid `unknown(...)` for room_allocations.stay (daterange) and venue_bookings.occupancy
+// (tsrange). These custom types restore them. REAPPLY after any future `db:pull` — the
+// range semantics live in the SQL (db/schema.sql), which remains the source of truth.
 const daterange = customType<{ data: string }>({
 	dataType() {
 		return "daterange"
+	},
+})
+const tsrange = customType<{ data: string }>({
+	dataType() {
+		return "tsrange"
 	},
 })
 
@@ -19,8 +24,138 @@ export const exceptionStatus = pgEnum("exception_status", ['pending', 'approved'
 export const paymentKind = pgEnum("payment_kind", ['advance_block', 'part_payment', 'settlement', 'refund'])
 export const permAction = pgEnum("perm_action", ['view', 'create_edit', 'delete'])
 export const signoffRole = pgEnum("signoff_role", ['banquet_manager', 'lodge_manager', 'maintenance', 'booking_manager'])
-export const slotKind = pgEnum("slot_kind", ['main', 'carryover'])
 
+
+export const schemaMigrations = pgTable("schema_migrations", {
+	id: text().primaryKey().notNull(),
+	appliedAt: timestamp("applied_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const roles = pgTable("roles", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+	isSystem: boolean("is_system").default(false).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("roles_name_key").on(table.name),
+]);
+
+export const modules = pgTable("modules", {
+	code: text().primaryKey().notNull(),
+});
+
+export const users = pgTable("users", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	fullName: text("full_name").notNull(),
+	mobile: text().notNull(),
+	email: text(),
+	passwordHash: text("password_hash").notNull(),
+	roleId: uuid("role_id").notNull(),
+	isActive: boolean("is_active").default(true).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.roleId],
+			foreignColumns: [roles.id],
+			name: "users_role_id_fkey"
+		}),
+	unique("users_mobile_key").on(table.mobile),
+	unique("users_email_key").on(table.email),
+]);
+
+export const properties = pgTable("properties", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+}, (table) => [
+	unique("properties_name_key").on(table.name),
+]);
+
+export const venues = pgTable("venues", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	propertyId: uuid("property_id").notNull(),
+	name: text().notNull(),
+	kind: text().notNull(),
+	capacityMin: integer("capacity_min").notNull(),
+	capacityMax: integer("capacity_max").notNull(),
+	isActive: boolean("is_active").default(true).notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.propertyId],
+			foreignColumns: [properties.id],
+			name: "venues_property_id_fkey"
+		}),
+	unique("venues_property_id_name_key").on(table.propertyId, table.name),
+	check("venues_kind_check", sql`kind = ANY (ARRAY['hall'::text, 'lawn'::text])`),
+	check("venues_capacity_min_check", sql`capacity_min >= 0`),
+	check("venues_check", sql`capacity_max >= capacity_min`),
+]);
+
+export const venueBundles = pgTable("venue_bundles", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+}, (table) => [
+	unique("venue_bundles_name_key").on(table.name),
+]);
+
+export const venueRateCards = pgTable("venue_rate_cards", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	venueId: uuid("venue_id"),
+	bundleId: uuid("bundle_id"),
+	eventType: text("event_type").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	ratePaise: bigint("rate_paise", { mode: "number" }).notNull(),
+	effectiveFrom: date("effective_from").notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.venueId],
+			foreignColumns: [venues.id],
+			name: "venue_rate_cards_venue_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.bundleId],
+			foreignColumns: [venueBundles.id],
+			name: "venue_rate_cards_bundle_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.eventType],
+			foreignColumns: [eventTypes.code],
+			name: "venue_rate_cards_event_type_fkey"
+		}),
+	check("venue_rate_cards_rate_paise_check", sql`rate_paise >= 0`),
+	check("venue_rate_cards_check", sql`num_nonnulls(venue_id, bundle_id) = 1`),
+]);
+
+export const eventTypes = pgTable("event_types", {
+	code: text().primaryKey().notNull(),
+	displayName: text("display_name").notNull(),
+	contactNumbers: integer("contact_numbers").default(1).notNull(),
+	isWedding: boolean("is_wedding").default(false).notNull(),
+});
+
+export const menuTiers = pgTable("menu_tiers", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+}, (table) => [
+	unique("menu_tiers_name_key").on(table.name),
+]);
+
+export const menuCategories = pgTable("menu_categories", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	tierId: uuid("tier_id").notNull(),
+	name: text().notNull(),
+	pickCount: integer("pick_count"),
+	freeIncreaseEligible: boolean("free_increase_eligible").default(false).notNull(),
+	sortOrder: integer("sort_order").default(0).notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.tierId],
+			foreignColumns: [menuTiers.id],
+			name: "menu_categories_tier_id_fkey"
+		}).onDelete("cascade"),
+	unique("menu_categories_tier_id_name_key").on(table.tierId, table.name),
+	check("menu_categories_pick_count_check", sql`(pick_count IS NULL) OR (pick_count > 0)`),
+	check("menu_categories_check", sql`NOT ((pick_count IS NULL) AND free_increase_eligible)`),
+]);
 
 export const menuItems = pgTable("menu_items", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
@@ -125,6 +260,33 @@ export const subEvents = pgTable("sub_events", {
 		}),
 	check("sub_events_pax_check", sql`pax > 0`),
 	check("sub_events_check", sql`num_nonnulls(venue_id, bundle_id) = 1`),
+	check("sub_events_check1", sql`start_time <> end_time`),
+]);
+
+export const venueBookings = pgTable("venue_bookings", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	venueId: uuid("venue_id").notNull(),
+	subEventId: uuid("sub_event_id").notNull(),
+	eventId: uuid("event_id").notNull(),
+	occupancy: tsrange("occupancy").notNull(),
+}, (table) => [
+	index("vb_by_event").using("btree", table.eventId.asc().nullsLast().op("uuid_ops")),
+	index("vb_by_occupancy").using("gist", table.occupancy.asc().nullsLast().op("range_ops")),
+	foreignKey({
+			columns: [table.venueId],
+			foreignColumns: [venues.id],
+			name: "venue_bookings_venue_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.subEventId],
+			foreignColumns: [subEvents.id],
+			name: "venue_bookings_sub_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.eventId],
+			foreignColumns: [events.id],
+			name: "venue_bookings_event_id_fkey"
+		}),
 ]);
 
 export const subEventMenus = pgTable("sub_event_menus", {
@@ -278,6 +440,22 @@ export const roomAllocations = pgTable("room_allocations", {
 		}),
 ]);
 
+export const paymentReminders = pgTable("payment_reminders", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	eventId: uuid("event_id").notNull(),
+	remindOn: date("remind_on").notNull(),
+	audience: text().notNull(),
+	sentAt: timestamp("sent_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	foreignKey({
+			columns: [table.eventId],
+			foreignColumns: [events.id],
+			name: "payment_reminders_event_id_fkey"
+		}).onDelete("cascade"),
+	unique("payment_reminders_event_id_remind_on_audience_key").on(table.eventId, table.remindOn, table.audience),
+	check("payment_reminders_audience_check", sql`audience = ANY (ARRAY['booking_manager'::text, 'higher_authority'::text])`),
+]);
+
 export const discounts = pgTable("discounts", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	eventId: uuid("event_id").notNull(),
@@ -334,22 +512,6 @@ export const payments = pgTable("payments", {
 		}),
 	unique("payments_receipt_no_key").on(table.receiptNo),
 	check("payments_amount_paise_check", sql`amount_paise > 0`),
-]);
-
-export const paymentReminders = pgTable("payment_reminders", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	eventId: uuid("event_id").notNull(),
-	remindOn: date("remind_on").notNull(),
-	audience: text().notNull(),
-	sentAt: timestamp("sent_at", { withTimezone: true, mode: 'string' }),
-}, (table) => [
-	foreignKey({
-			columns: [table.eventId],
-			foreignColumns: [events.id],
-			name: "payment_reminders_event_id_fkey"
-		}).onDelete("cascade"),
-	unique("payment_reminders_event_id_remind_on_audience_key").on(table.eventId, table.remindOn, table.audience),
-	check("payment_reminders_audience_check", sql`audience = ANY (ARRAY['booking_manager'::text, 'higher_authority'::text])`),
 ]);
 
 export const maintenanceEntries = pgTable("maintenance_entries", {
@@ -475,137 +637,6 @@ export const auditLog = pgTable("audit_log", {
 	check("audit_log_action_check", sql`action = ANY (ARRAY['insert'::text, 'update'::text, 'delete'::text, 'status'::text, 'approval'::text, 'lock'::text])`),
 ]);
 
-export const users = pgTable("users", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	fullName: text("full_name").notNull(),
-	mobile: text().notNull(),
-	email: text(),
-	passwordHash: text("password_hash").notNull(),
-	roleId: uuid("role_id").notNull(),
-	isActive: boolean("is_active").default(true).notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table) => [
-	foreignKey({
-			columns: [table.roleId],
-			foreignColumns: [roles.id],
-			name: "users_role_id_fkey"
-		}),
-	unique("users_mobile_key").on(table.mobile),
-	unique("users_email_key").on(table.email),
-]);
-
-export const schemaMigrations = pgTable("schema_migrations", {
-	id: text().primaryKey().notNull(),
-	appliedAt: timestamp("applied_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-});
-
-export const roles = pgTable("roles", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	name: text().notNull(),
-	isSystem: boolean("is_system").default(false).notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table) => [
-	unique("roles_name_key").on(table.name),
-]);
-
-export const modules = pgTable("modules", {
-	code: text().primaryKey().notNull(),
-});
-
-export const properties = pgTable("properties", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	name: text().notNull(),
-}, (table) => [
-	unique("properties_name_key").on(table.name),
-]);
-
-export const venues = pgTable("venues", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	propertyId: uuid("property_id").notNull(),
-	name: text().notNull(),
-	kind: text().notNull(),
-	capacityMin: integer("capacity_min").notNull(),
-	capacityMax: integer("capacity_max").notNull(),
-	isActive: boolean("is_active").default(true).notNull(),
-}, (table) => [
-	foreignKey({
-			columns: [table.propertyId],
-			foreignColumns: [properties.id],
-			name: "venues_property_id_fkey"
-		}),
-	unique("venues_property_id_name_key").on(table.propertyId, table.name),
-	check("venues_kind_check", sql`kind = ANY (ARRAY['hall'::text, 'lawn'::text])`),
-	check("venues_capacity_min_check", sql`capacity_min >= 0`),
-	check("venues_check", sql`capacity_max >= capacity_min`),
-]);
-
-export const venueBundles = pgTable("venue_bundles", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	name: text().notNull(),
-}, (table) => [
-	unique("venue_bundles_name_key").on(table.name),
-]);
-
-export const venueRateCards = pgTable("venue_rate_cards", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	venueId: uuid("venue_id"),
-	bundleId: uuid("bundle_id"),
-	eventType: text("event_type").notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	ratePaise: bigint("rate_paise", { mode: "number" }).notNull(),
-	effectiveFrom: date("effective_from").notNull(),
-}, (table) => [
-	foreignKey({
-			columns: [table.venueId],
-			foreignColumns: [venues.id],
-			name: "venue_rate_cards_venue_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.bundleId],
-			foreignColumns: [venueBundles.id],
-			name: "venue_rate_cards_bundle_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.eventType],
-			foreignColumns: [eventTypes.code],
-			name: "venue_rate_cards_event_type_fkey"
-		}),
-	check("venue_rate_cards_rate_paise_check", sql`rate_paise >= 0`),
-	check("venue_rate_cards_check", sql`num_nonnulls(venue_id, bundle_id) = 1`),
-]);
-
-export const eventTypes = pgTable("event_types", {
-	code: text().primaryKey().notNull(),
-	displayName: text("display_name").notNull(),
-	contactNumbers: integer("contact_numbers").default(1).notNull(),
-	isWedding: boolean("is_wedding").default(false).notNull(),
-});
-
-export const menuTiers = pgTable("menu_tiers", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	name: text().notNull(),
-}, (table) => [
-	unique("menu_tiers_name_key").on(table.name),
-]);
-
-export const menuCategories = pgTable("menu_categories", {
-	id: uuid().defaultRandom().primaryKey().notNull(),
-	tierId: uuid("tier_id").notNull(),
-	name: text().notNull(),
-	pickCount: integer("pick_count"),
-	freeIncreaseEligible: boolean("free_increase_eligible").default(false).notNull(),
-	sortOrder: integer("sort_order").default(0).notNull(),
-}, (table) => [
-	foreignKey({
-			columns: [table.tierId],
-			foreignColumns: [menuTiers.id],
-			name: "menu_categories_tier_id_fkey"
-		}).onDelete("cascade"),
-	unique("menu_categories_tier_id_name_key").on(table.tierId, table.name),
-	check("menu_categories_pick_count_check", sql`(pick_count IS NULL) OR (pick_count > 0)`),
-	check("menu_categories_check", sql`NOT ((pick_count IS NULL) AND free_increase_eligible)`),
-]);
-
 export const venueBundleMembers = pgTable("venue_bundle_members", {
 	bundleId: uuid("bundle_id").notNull(),
 	venueId: uuid("venue_id").notNull(),
@@ -621,6 +652,24 @@ export const venueBundleMembers = pgTable("venue_bundle_members", {
 			name: "venue_bundle_members_venue_id_fkey"
 		}),
 	primaryKey({ columns: [table.bundleId, table.venueId], name: "venue_bundle_members_pkey"}),
+]);
+
+export const rolePermissions = pgTable("role_permissions", {
+	roleId: uuid("role_id").notNull(),
+	moduleCode: text("module_code").notNull(),
+	action: permAction().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.roleId],
+			foreignColumns: [roles.id],
+			name: "role_permissions_role_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.moduleCode],
+			foreignColumns: [modules.code],
+			name: "role_permissions_module_code_fkey"
+		}),
+	primaryKey({ columns: [table.roleId, table.moduleCode, table.action], name: "role_permissions_pkey"}),
 ]);
 
 export const eventContacts = pgTable("event_contacts", {
@@ -649,22 +698,21 @@ export const subEventMenuSelections = pgTable("sub_event_menu_selections", {
 	primaryKey({ columns: [table.menuId, table.categoryName, table.itemName], name: "sub_event_menu_selections_pkey"}),
 ]);
 
-export const rolePermissions = pgTable("role_permissions", {
-	roleId: uuid("role_id").notNull(),
-	moduleCode: text("module_code").notNull(),
-	action: permAction().notNull(),
+export const menuTierPrices = pgTable("menu_tier_prices", {
+	tierId: uuid("tier_id").notNull(),
+	effectiveFrom: date("effective_from").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	baseRatePaise: bigint("base_rate_paise", { mode: "number" }).notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	weddingSurchargePaise: bigint("wedding_surcharge_paise", { mode: "number" }).default(5000).notNull(),
 }, (table) => [
 	foreignKey({
-			columns: [table.roleId],
-			foreignColumns: [roles.id],
-			name: "role_permissions_role_id_fkey"
+			columns: [table.tierId],
+			foreignColumns: [menuTiers.id],
+			name: "menu_tier_prices_tier_id_fkey"
 		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.moduleCode],
-			foreignColumns: [modules.code],
-			name: "role_permissions_module_code_fkey"
-		}),
-	primaryKey({ columns: [table.roleId, table.moduleCode, table.action], name: "role_permissions_pkey"}),
+	primaryKey({ columns: [table.tierId, table.effectiveFrom], name: "menu_tier_prices_pkey"}),
+	check("menu_tier_prices_base_rate_paise_check", sql`base_rate_paise > 0`),
 ]);
 
 export const lockSignoffs = pgTable("lock_signoffs", {
@@ -684,50 +732,6 @@ export const lockSignoffs = pgTable("lock_signoffs", {
 			name: "lock_signoffs_signed_by_fkey"
 		}),
 	primaryKey({ columns: [table.eventId, table.designation], name: "lock_signoffs_pkey"}),
-]);
-
-export const menuTierPrices = pgTable("menu_tier_prices", {
-	tierId: uuid("tier_id").notNull(),
-	effectiveFrom: date("effective_from").notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	baseRatePaise: bigint("base_rate_paise", { mode: "number" }).notNull(),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	weddingSurchargePaise: bigint("wedding_surcharge_paise", { mode: "number" }).default(5000).notNull(),
-}, (table) => [
-	foreignKey({
-			columns: [table.tierId],
-			foreignColumns: [menuTiers.id],
-			name: "menu_tier_prices_tier_id_fkey"
-		}).onDelete("cascade"),
-	primaryKey({ columns: [table.tierId, table.effectiveFrom], name: "menu_tier_prices_pkey"}),
-	check("menu_tier_prices_base_rate_paise_check", sql`base_rate_paise > 0`),
-]);
-
-export const venueSlotBookings = pgTable("venue_slot_bookings", {
-	venueId: uuid("venue_id").notNull(),
-	slotDate: date("slot_date").notNull(),
-	slot: slotKind().notNull(),
-	subEventId: uuid("sub_event_id").notNull(),
-	eventId: uuid("event_id").notNull(),
-}, (table) => [
-	index("vsb_by_date").using("btree", table.slotDate.asc().nullsLast().op("date_ops")),
-	index("vsb_by_event").using("btree", table.eventId.asc().nullsLast().op("uuid_ops")),
-	foreignKey({
-			columns: [table.venueId],
-			foreignColumns: [venues.id],
-			name: "venue_slot_bookings_venue_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.subEventId],
-			foreignColumns: [subEvents.id],
-			name: "venue_slot_bookings_sub_event_id_fkey"
-		}).onDelete("cascade"),
-	foreignKey({
-			columns: [table.eventId],
-			foreignColumns: [events.id],
-			name: "venue_slot_bookings_event_id_fkey"
-		}),
-	primaryKey({ columns: [table.venueId, table.slotDate, table.slot], name: "venue_slot_bookings_pkey"}),
 ]);
 
 export const subEventMenuCategories = pgTable("sub_event_menu_categories", {

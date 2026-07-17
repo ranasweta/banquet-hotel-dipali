@@ -43,7 +43,7 @@ d('migration 0001', () => {
       'roles', 'modules', 'role_permissions', 'users', 'properties', 'venues',
       'venue_bundles', 'venue_bundle_members', 'event_types', 'venue_rate_cards',
       'menu_tiers', 'menu_tier_prices', 'menu_categories', 'menu_items', 'events',
-      'event_contacts', 'guest_documents', 'sub_events', 'venue_slot_bookings',
+      'event_contacts', 'guest_documents', 'sub_events', 'venue_bookings',
       'sub_event_menus', 'sub_event_menu_categories', 'sub_event_menu_selections',
       'sub_event_addons', 'exceptions', 'lodging_units', 'rooms', 'room_requirements',
       'room_allocations', 'discounts', 'payments', 'payment_reminders',
@@ -94,20 +94,14 @@ beforeAll(async () => {
 })
 
 d('the database enforces the clash guarantee', () => {
-  it('rejects a second booking of the same venue-date-slot', async () => {
-    // The PK on (venue_id, slot_date, slot) is what makes double-booking physically
-    // impossible under concurrent confirms (NFR-2).
-    const [{ constraint_type }] = await sql<{ constraint_type: string }[]>`
-      SELECT constraint_type FROM information_schema.table_constraints
-      WHERE table_name = 'venue_slot_bookings' AND constraint_type = 'PRIMARY KEY'`
-    expect(constraint_type).toBe('PRIMARY KEY')
-
-    const [{ cols }] = await sql<{ cols: string[] }[]>`
-      SELECT array_agg(a.attname ORDER BY a.attnum)::text[] AS cols
-      FROM pg_index i
-      JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-      WHERE i.indrelid = 'venue_slot_bookings'::regclass AND i.indisprimary`
-    expect(cols.sort()).toEqual(['slot', 'slot_date', 'venue_id'])
+  it('carries a GiST time-overlap exclusion on venue_bookings (BR-C1)', async () => {
+    // The exclusion on (venue_id WITH =, occupancy WITH &&) is what makes an overlapping
+    // booking on the same venue physically impossible under concurrent confirms (NFR-2).
+    // The behavioural cases live in tests/availability.integration.test.ts.
+    const [ex] = await sql<{ conname: string }[]>`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'venue_bookings'::regclass AND contype = 'x'`
+    expect(ex, 'venue_bookings must carry an EXCLUDE constraint').toBeDefined()
   })
 
   it('rejects overlapping allocations of the same room (FR-4.3)', async () => {

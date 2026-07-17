@@ -31,10 +31,13 @@ below before implementing any feature.
    `requirePermission(module, action)` helper reading `role_permissions`.
    UI hiding is cosmetic, never the control.
 3. **Three rules live in service-layer transactions** (marked in schema.sql):
-   - 11 AM handover: carryover sub-event ends ≤ 11:00; a main-slot sub-event
-     sharing a date with a carryover starts ≥ 11:00 (BR-C1).
+   - Venue time-overlap (BR-C1, amended 17 Jul 2026): a venue may hold any number of
+     sub-events on a day as long as their time windows don't overlap; back-to-back is
+     allowed. A window with end_time ≤ start_time runs past midnight into the next day.
+     Rely on the `venue_bookings` GiST exclusion to win races; no fixed slots, no 11 AM
+     rule. Booking a bundle inserts one `venue_bookings` row per member venue.
    - Confirm requires recorded advance ≥ 25% of `proposal_total_paise`
-     BEFORE inserting `venue_slot_bookings` rows (BR-P1).
+     BEFORE inserting `venue_bookings` rows (BR-P1).
    - Combined discounts ≤ 10% of proposal total unless an approved exception
      exists (BR-D2); per-room caps Rs. 500 / Rs. 1,000 for suites (BR-D1).
    Each runs in ONE db transaction; rely on the PK/exclusion constraints to

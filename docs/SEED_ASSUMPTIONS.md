@@ -241,18 +241,40 @@ and the invoice number series (FR-8.3 calls both Admin-editable masters, but
 occupancy (FR-4.5 wants promised vs allocated vs **occupied**, and nothing records
 occupancy — **M5**); OTP/password-reset state (FR-8.2 — **M1**).
 
-### C8. Can one venue host two sub-events on the same day?
-`venue_slot_bookings`'s PK `(venue_id, slot_date, slot)` allows exactly **one** main-slot
-booking per venue-day. Haldi 11:00-15:00 and Sangeet 19:00-23:00 in the same hall on the
-same date collide — **even within one event**. Intended house rule, or does the slot
-model need a third portion? **Blocks M2.**
+### C8. Can one venue host two sub-events on the same day? — ✅ RESOLVED (client)
+**Yes**, as long as their time windows don't overlap. The client chose "simple logic —
+if time doesn't overlap, booking accepted", with start and end time captured on the form.
+The old fixed-slot model (one main booking per venue-day) is withdrawn. Implemented in M2
+as `venue_bookings` with a GiST time-range exclusion. See D3.
 
-### C9. How is an overnight function represented?
-`sub_events.start_time`/`end_time` are `time` with no date and no CHECK. For a reception
-running 20:00-01:00, is the midnight crossing detected by `end_time < start_time` (and
-the next day's carryover row auto-inserted), or is the carryover a **separate** sub-event
-row? CLAUDE.md's phrase "carryover sub-event ends ≤ 11:00" reads like the latter.
-**Blocks M2.**
+### C9. How is an overnight function represented? — ✅ RESOLVED (client)
+A single sub-event whose `end_time` is at or before its `start_time` runs past midnight;
+the service builds its occupancy range as `[event_date + start_time,
+event_date + 1 day + end_time)`. No separate carryover row. Implemented in M2. See D3.
+
+---
+
+## D3. Venue clash model changed in M2 (client-directed schema change)
+
+The core clash table was redesigned from a fixed-slot model to a time-overlap model, on
+the client's instruction ("simple logic — if time doesn't overlap, booking accepted").
+Per CLAUDE.md this schema change was flagged and approved before implementation.
+
+| Before (M0) | After (M2) |
+|---|---|
+| `venue_slot_bookings (venue_id, slot_date, slot)` PK; `slot_kind` enum (main/carryover) | `venue_bookings (venue_id, sub_event_id, event_id, occupancy tsrange)` with `EXCLUDE USING gist (venue_id WITH =, occupancy WITH &&)` |
+| One main booking per venue-day; outgoing event must clear by 11:00 | Any number of non-overlapping windows per venue-day; **back-to-back allowed** (half-open ranges) |
+| Overnight = separate carryover row | Overnight = one row; `end_time ≤ start_time` ⇒ window ends next day |
+
+Pre-launch, this was folded into `db/schema.sql` (migration 0001) and the databases were
+rebuilt, following the M0 precedent for the `pick_count` amendment rather than layering a
+migration 0002. Documents updated to match: `CLAUDE.md` rule 3, PRD FR-2.2 / FR-2.5 /
+BR-C1, `API_CONTRACT.md` (`/availability`, `/confirm`), `BUILD_PLAN.md` M2.
+
+**Open sub-question (defaulted):** no turnaround/buffer between back-to-back events — the
+client chose pure overlap, so a hall can be handed straight from one event to the next
+with no gap. If the hotel later needs cleanup/setup time, add a buffer to the occupancy
+range in the booking service.
 
 ---
 
@@ -318,16 +340,17 @@ Ranked by what they block.
 | # | Question | Blocks |
 |---|---|---|
 | 1 | Lock sign-off roles — which of the three conflicting lists? (C4) | M9 |
-| 2 | Can one venue host two sub-events on the same day? (C8) | **M2** |
-| 3 | Overnight sub-events: one row or two? (C9) | **M2** |
-| 4 | Diamond Live Counter — 5 items, or a pick of 4? (B4) | M4 |
-| 5 | Regency's real room breakdown (A1) | M5 |
-| 6 | Grand / Regency A-block inventory (B12) | M5 |
-| 7 | Dormitory rate — per block or per bed? (B8) | M5, M9 |
-| 8 | Standalone Imperial/Kohinoor wedding rate? (C1) | M3 |
-| 9 | Golden Hall capacity; 25,000 for the pair or each? (A3) | M3 |
-| 10 | Is "Residency" real? (C5) | cosmetic |
-| 11 | GST rates per charge head (PRD open question 5) | M9 |
-| 12 | Payment reminder schedule (PRD open question 1) | M7 |
-| 13 | 11 AM handover exceptions and who grants them (PRD open question 3) | M2 |
-| 14 | Correct the menu item typos? (B2) | cosmetic |
+| 2 | Diamond Live Counter — 5 items, or a pick of 4? (B4) | M4 |
+| 3 | Regency's real room breakdown (A1) | M5 |
+| 4 | Grand / Regency A-block inventory (B12) | M5 |
+| 5 | Dormitory rate — per block or per bed? (B8) | M5, M9 |
+| 6 | Standalone Imperial/Kohinoor wedding rate? (C1) | M3 |
+| 7 | Golden Hall capacity; 25,000 for the pair or each? (A3) | M3 |
+| 8 | Is "Residency" real? (C5) | cosmetic |
+| 9 | GST rates per charge head (PRD open question 5) | M9 |
+| 10 | Payment reminder schedule (PRD open question 1) | M7 |
+| 11 | Correct the menu item typos? (B2) | cosmetic |
+| 12 | Turnaround/buffer between back-to-back venue bookings? (D3) — defaulted to none | future |
+
+*Resolved since M0: C8/C9 (venue clash model — client chose time-overlap, see D3);
+the 11 AM handover exceptions question is moot (the 11 AM rule itself was withdrawn).*

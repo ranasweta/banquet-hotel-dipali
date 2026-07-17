@@ -10,7 +10,6 @@ CREATE EXTENSION IF NOT EXISTS "btree_gist";  -- room overlap exclusion
 -- ---------- Enumerated types ----------
 CREATE TYPE event_status AS ENUM
   ('enquiry','confirmed','in_progress','completed','locked','billed','closed','cancelled');
-CREATE TYPE slot_kind      AS ENUM ('main','carryover');           -- carryover = midnight-11:00
 CREATE TYPE perm_action    AS ENUM ('view','create_edit','delete');
 CREATE TYPE exception_kind AS ENUM
   ('menu_increase','room_allocation_35plus','discount_over_cap','overdue_wedding_balance','other');
@@ -196,30 +195,42 @@ CREATE TABLE sub_events (
   pax         int NOT NULL CHECK (pax > 0),
   pax_override_note text,                       -- FR-2.6 soft capacity override
   venue_rate_paise bigint NOT NULL DEFAULT 0,   -- snapshot from rate card at confirm
-  CHECK (num_nonnulls(venue_id, bundle_id) = 1)
+  CHECK (num_nonnulls(venue_id, bundle_id) = 1),
+  -- A zero-length window would occupy nothing and clash with nothing. end_time < start_time
+  -- is legal and means the window runs past midnight into the next day (see venue_bookings).
+  CHECK (start_time <> end_time)
 );
 
 -- ============================================================
--- 5. Venue slot bookings — THE clash guarantee
+-- 5. Venue bookings — THE clash guarantee (time-overlap model, BR-C1)
 -- ============================================================
--- One row per (venue, date, slot). The UNIQUE constraint makes double
--- booking physically impossible, even under concurrent confirms.
--- Booking a bundle inserts one row per member venue.
--- 11 AM rule (BR-C1):
---   * an event ending after midnight also inserts (venue, next_day, 'carryover')
---   * carryover sub-events must have end_time <= 11:00
---   * a 'main' slot sub-event sharing a date with a carryover must start >= 11:00
--- The time checks run in the booking service inside the same transaction.
-CREATE TABLE venue_slot_bookings (
+-- One row per (venue, occupied time window). The GiST exclusion constraint makes an
+-- overlapping booking on the same venue physically impossible, even under concurrent
+-- confirms (NFR-2) — the same mechanism room_allocations uses for rooms.
+--
+-- House rule (BR-C1, amended 17 Jul 2026): a venue may host any number of sub-events on
+-- a day so long as their time windows do not overlap. There are no fixed slots and no
+-- 11 AM handover. Back-to-back is allowed: occupancy is a half-open range '[)', so a
+-- sub-event ending 15:00 and another starting 15:00 do NOT conflict.
+--
+-- Bundles (FR-2.3): booking a bundle inserts one row per member venue, so it blocks each
+-- member individually, and booking a member blocks the bundle — both fall out of the
+-- per-venue exclusion for free.
+--
+-- Past midnight: a sub-event with end_time <= start_time runs into the next day. The
+-- booking service builds occupancy = [event_date + start_time,
+-- event_date + 1 day + end_time), so the exclusion catches next-morning clashes too.
+CREATE TABLE venue_bookings (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   venue_id     uuid NOT NULL REFERENCES venues(id),
-  slot_date    date NOT NULL,
-  slot         slot_kind NOT NULL,
   sub_event_id uuid NOT NULL REFERENCES sub_events(id) ON DELETE CASCADE,
   event_id     uuid NOT NULL REFERENCES events(id),
-  PRIMARY KEY (venue_id, slot_date, slot)
+  occupancy    tsrange NOT NULL,
+  -- FR-4.3-style guarantee for venues: no two overlapping windows on one venue.
+  EXCLUDE USING gist (venue_id WITH =, occupancy WITH &&)
 );
-CREATE INDEX vsb_by_event ON venue_slot_bookings(event_id);
-CREATE INDEX vsb_by_date  ON venue_slot_bookings(slot_date);
+CREATE INDEX vb_by_event ON venue_bookings(event_id);
+CREATE INDEX vb_by_occupancy ON venue_bookings USING gist (occupancy);
 
 -- ============================================================
 -- 6. Menu snapshots (BR-M1..M5)
@@ -366,7 +377,7 @@ CREATE TABLE payments (
 );
 CREATE INDEX payments_by_event ON payments(event_id);
 -- BR-P1: the confirm transaction verifies SUM(payments where kind='advance_block')
--- >= 25% of proposal_total_paise BEFORE inserting venue_slot_bookings rows.
+-- >= 25% of proposal_total_paise BEFORE inserting venue_bookings rows.
 
 CREATE TABLE payment_reminders (                 -- BR-P2 schedule state
   id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -491,7 +502,7 @@ DO $$
 DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY[
-    'sub_events','event_contacts','guest_documents','venue_slot_bookings',
+    'sub_events','event_contacts','guest_documents','venue_bookings',
     'room_allocations','room_requirements','discounts','maintenance_entries',
     'exceptions','payment_reminders']
   LOOP

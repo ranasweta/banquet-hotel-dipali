@@ -16,11 +16,14 @@ Login/logout/me; `requirePermission` helper; role matrix admin screen
 and take effect without re-login.
 
 ## M2 — Availability engine + calendar board
-`/availability` implementing slot model + 11 AM rule + bundle expansion;
-calendar board UI (venues × dates; confirmed / carryover / enquiry-count
-states); banquet manager capped to rolling 15 days server-side.
-✓ Accept: unit tests for all BR-C1 cases (carryover end ≤ 11:00, main start
-≥ 11:00, bundle blocks members and vice versa); board renders states.
+`/availability` implementing the time-overlap model (BR-C1, amended) + bundle
+expansion + past-midnight windows; calendar board UI (venues × dates;
+confirmed / in-progress / carryover states — confirmed-and-beyond only, no
+enquiries per amended FR-2.5); banquet manager capped to rolling 15 days server-side.
+✓ Accept: unit/integration tests for all BR-C1 cases (non-overlapping same-day
+windows accepted, overlapping rejected, back-to-back accepted, past-midnight
+window blocks next morning, bundle blocks members and vice versa); board renders
+states.
 
 ## M3 — Booking wizard (enquiry → confirm)
 5 steps per PRD 5.1: dates, event type (contact count rule), sub-events with

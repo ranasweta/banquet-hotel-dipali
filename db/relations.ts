@@ -1,58 +1,11 @@
 import { relations } from "drizzle-orm/relations";
-import { menuCategories, menuItems, eventTypes, events, users, guestDocuments, subEvents, venues, venueBundles, subEventMenus, menuTiers, subEventAddons, exceptions, lodgingUnits, rooms, roomRequirements, roomAllocations, discounts, payments, paymentReminders, maintenanceEntries, settings, invoices, invoiceLines, auditLog, roles, properties, venueRateCards, venueBundleMembers, eventContacts, subEventMenuSelections, rolePermissions, modules, lockSignoffs, menuTierPrices, venueSlotBookings, subEventMenuCategories } from "./schema";
-
-export const menuItemsRelations = relations(menuItems, ({one}) => ({
-	menuCategory: one(menuCategories, {
-		fields: [menuItems.categoryId],
-		references: [menuCategories.id]
-	}),
-}));
-
-export const menuCategoriesRelations = relations(menuCategories, ({one, many}) => ({
-	menuItems: many(menuItems),
-	subEventMenus: many(subEventMenus),
-	menuTier: one(menuTiers, {
-		fields: [menuCategories.tierId],
-		references: [menuTiers.id]
-	}),
-}));
-
-export const eventsRelations = relations(events, ({one, many}) => ({
-	eventType: one(eventTypes, {
-		fields: [events.eventType],
-		references: [eventTypes.code]
-	}),
-	user_createdBy: one(users, {
-		fields: [events.createdBy],
-		references: [users.id],
-		relationName: "events_createdBy_users_id"
-	}),
-	user_lockedBy: one(users, {
-		fields: [events.lockedBy],
-		references: [users.id],
-		relationName: "events_lockedBy_users_id"
-	}),
-	guestDocuments: many(guestDocuments),
-	subEvents: many(subEvents),
-	exceptions: many(exceptions),
-	roomRequirements: many(roomRequirements),
-	roomAllocations: many(roomAllocations),
-	discounts: many(discounts),
-	payments: many(payments),
-	paymentReminders: many(paymentReminders),
-	maintenanceEntries: many(maintenanceEntries),
-	invoices: many(invoices),
-	eventContacts: many(eventContacts),
-	lockSignoffs: many(lockSignoffs),
-	venueSlotBookings: many(venueSlotBookings),
-}));
-
-export const eventTypesRelations = relations(eventTypes, ({many}) => ({
-	events: many(events),
-	venueRateCards: many(venueRateCards),
-}));
+import { roles, users, properties, venues, venueRateCards, venueBundles, eventTypes, menuTiers, menuCategories, menuItems, events, guestDocuments, subEvents, venueBookings, subEventMenus, subEventAddons, exceptions, lodgingUnits, rooms, roomRequirements, roomAllocations, paymentReminders, discounts, payments, maintenanceEntries, settings, invoices, invoiceLines, auditLog, venueBundleMembers, rolePermissions, modules, eventContacts, subEventMenuSelections, menuTierPrices, lockSignoffs, subEventMenuCategories } from "./schema";
 
 export const usersRelations = relations(users, ({one, many}) => ({
+	role: one(roles, {
+		fields: [users.roleId],
+		references: [roles.id]
+	}),
 	events_createdBy: many(events, {
 		relationName: "events_createdBy_users_id"
 	}),
@@ -73,10 +26,104 @@ export const usersRelations = relations(users, ({one, many}) => ({
 	settings: many(settings),
 	invoices: many(invoices),
 	auditLogs: many(auditLog),
-	role: one(roles, {
-		fields: [users.roleId],
-		references: [roles.id]
+	lockSignoffs: many(lockSignoffs),
+}));
+
+export const rolesRelations = relations(roles, ({many}) => ({
+	users: many(users),
+	rolePermissions: many(rolePermissions),
+}));
+
+export const venuesRelations = relations(venues, ({one, many}) => ({
+	property: one(properties, {
+		fields: [venues.propertyId],
+		references: [properties.id]
 	}),
+	venueRateCards: many(venueRateCards),
+	subEvents: many(subEvents),
+	venueBookings: many(venueBookings),
+	venueBundleMembers: many(venueBundleMembers),
+}));
+
+export const propertiesRelations = relations(properties, ({many}) => ({
+	venues: many(venues),
+}));
+
+export const venueRateCardsRelations = relations(venueRateCards, ({one}) => ({
+	venue: one(venues, {
+		fields: [venueRateCards.venueId],
+		references: [venues.id]
+	}),
+	venueBundle: one(venueBundles, {
+		fields: [venueRateCards.bundleId],
+		references: [venueBundles.id]
+	}),
+	eventType: one(eventTypes, {
+		fields: [venueRateCards.eventType],
+		references: [eventTypes.code]
+	}),
+}));
+
+export const venueBundlesRelations = relations(venueBundles, ({many}) => ({
+	venueRateCards: many(venueRateCards),
+	subEvents: many(subEvents),
+	venueBundleMembers: many(venueBundleMembers),
+}));
+
+export const eventTypesRelations = relations(eventTypes, ({many}) => ({
+	venueRateCards: many(venueRateCards),
+	events: many(events),
+}));
+
+export const menuCategoriesRelations = relations(menuCategories, ({one, many}) => ({
+	menuTier: one(menuTiers, {
+		fields: [menuCategories.tierId],
+		references: [menuTiers.id]
+	}),
+	menuItems: many(menuItems),
+	subEventMenus: many(subEventMenus),
+}));
+
+export const menuTiersRelations = relations(menuTiers, ({many}) => ({
+	menuCategories: many(menuCategories),
+	subEventMenus: many(subEventMenus),
+	menuTierPrices: many(menuTierPrices),
+}));
+
+export const menuItemsRelations = relations(menuItems, ({one}) => ({
+	menuCategory: one(menuCategories, {
+		fields: [menuItems.categoryId],
+		references: [menuCategories.id]
+	}),
+}));
+
+export const eventsRelations = relations(events, ({one, many}) => ({
+	eventType: one(eventTypes, {
+		fields: [events.eventType],
+		references: [eventTypes.code]
+	}),
+	user_createdBy: one(users, {
+		fields: [events.createdBy],
+		references: [users.id],
+		relationName: "events_createdBy_users_id"
+	}),
+	user_lockedBy: one(users, {
+		fields: [events.lockedBy],
+		references: [users.id],
+		relationName: "events_lockedBy_users_id"
+	}),
+	guestDocuments: many(guestDocuments),
+	subEvents: many(subEvents),
+	venueBookings: many(venueBookings),
+	exceptions: many(exceptions),
+	roomRequirements: many(roomRequirements),
+	roomAllocations: many(roomAllocations),
+	paymentReminders: many(paymentReminders),
+	discounts: many(discounts),
+	payments: many(payments),
+	maintenanceEntries: many(maintenanceEntries),
+	invoices: many(invoices),
+	eventContacts: many(eventContacts),
 	lockSignoffs: many(lockSignoffs),
 }));
 
@@ -104,26 +151,24 @@ export const subEventsRelations = relations(subEvents, ({one, many}) => ({
 		fields: [subEvents.bundleId],
 		references: [venueBundles.id]
 	}),
+	venueBookings: many(venueBookings),
 	subEventMenus: many(subEventMenus),
 	subEventAddons: many(subEventAddons),
-	venueSlotBookings: many(venueSlotBookings),
 }));
 
-export const venuesRelations = relations(venues, ({one, many}) => ({
-	subEvents: many(subEvents),
-	property: one(properties, {
-		fields: [venues.propertyId],
-		references: [properties.id]
+export const venueBookingsRelations = relations(venueBookings, ({one}) => ({
+	venue: one(venues, {
+		fields: [venueBookings.venueId],
+		references: [venues.id]
 	}),
-	venueRateCards: many(venueRateCards),
-	venueBundleMembers: many(venueBundleMembers),
-	venueSlotBookings: many(venueSlotBookings),
-}));
-
-export const venueBundlesRelations = relations(venueBundles, ({many}) => ({
-	subEvents: many(subEvents),
-	venueRateCards: many(venueRateCards),
-	venueBundleMembers: many(venueBundleMembers),
+	subEvent: one(subEvents, {
+		fields: [venueBookings.subEventId],
+		references: [subEvents.id]
+	}),
+	event: one(events, {
+		fields: [venueBookings.eventId],
+		references: [events.id]
+	}),
 }));
 
 export const subEventMenusRelations = relations(subEventMenus, ({one, many}) => ({
@@ -141,12 +186,6 @@ export const subEventMenusRelations = relations(subEventMenus, ({one, many}) => 
 	}),
 	subEventMenuSelections: many(subEventMenuSelections),
 	subEventMenuCategories: many(subEventMenuCategories),
-}));
-
-export const menuTiersRelations = relations(menuTiers, ({many}) => ({
-	subEventMenus: many(subEventMenus),
-	menuCategories: many(menuCategories),
-	menuTierPrices: many(menuTierPrices),
 }));
 
 export const subEventAddonsRelations = relations(subEventAddons, ({one}) => ({
@@ -209,6 +248,13 @@ export const roomAllocationsRelations = relations(roomAllocations, ({one}) => ({
 	}),
 }));
 
+export const paymentRemindersRelations = relations(paymentReminders, ({one}) => ({
+	event: one(events, {
+		fields: [paymentReminders.eventId],
+		references: [events.id]
+	}),
+}));
+
 export const discountsRelations = relations(discounts, ({one}) => ({
 	event: one(events, {
 		fields: [discounts.eventId],
@@ -232,13 +278,6 @@ export const paymentsRelations = relations(payments, ({one}) => ({
 	user: one(users, {
 		fields: [payments.recordedBy],
 		references: [users.id]
-	}),
-}));
-
-export const paymentRemindersRelations = relations(paymentReminders, ({one}) => ({
-	event: one(events, {
-		fields: [paymentReminders.eventId],
-		references: [events.id]
 	}),
 }));
 
@@ -286,30 +325,6 @@ export const auditLogRelations = relations(auditLog, ({one}) => ({
 	}),
 }));
 
-export const rolesRelations = relations(roles, ({many}) => ({
-	users: many(users),
-	rolePermissions: many(rolePermissions),
-}));
-
-export const propertiesRelations = relations(properties, ({many}) => ({
-	venues: many(venues),
-}));
-
-export const venueRateCardsRelations = relations(venueRateCards, ({one}) => ({
-	venue: one(venues, {
-		fields: [venueRateCards.venueId],
-		references: [venues.id]
-	}),
-	venueBundle: one(venueBundles, {
-		fields: [venueRateCards.bundleId],
-		references: [venueBundles.id]
-	}),
-	eventType: one(eventTypes, {
-		fields: [venueRateCards.eventType],
-		references: [eventTypes.code]
-	}),
-}));
-
 export const venueBundleMembersRelations = relations(venueBundleMembers, ({one}) => ({
 	venueBundle: one(venueBundles, {
 		fields: [venueBundleMembers.bundleId],
@@ -318,20 +333,6 @@ export const venueBundleMembersRelations = relations(venueBundleMembers, ({one})
 	venue: one(venues, {
 		fields: [venueBundleMembers.venueId],
 		references: [venues.id]
-	}),
-}));
-
-export const eventContactsRelations = relations(eventContacts, ({one}) => ({
-	event: one(events, {
-		fields: [eventContacts.eventId],
-		references: [events.id]
-	}),
-}));
-
-export const subEventMenuSelectionsRelations = relations(subEventMenuSelections, ({one}) => ({
-	subEventMenu: one(subEventMenus, {
-		fields: [subEventMenuSelections.menuId],
-		references: [subEventMenus.id]
 	}),
 }));
 
@@ -350,14 +351,17 @@ export const modulesRelations = relations(modules, ({many}) => ({
 	rolePermissions: many(rolePermissions),
 }));
 
-export const lockSignoffsRelations = relations(lockSignoffs, ({one}) => ({
+export const eventContactsRelations = relations(eventContacts, ({one}) => ({
 	event: one(events, {
-		fields: [lockSignoffs.eventId],
+		fields: [eventContacts.eventId],
 		references: [events.id]
 	}),
-	user: one(users, {
-		fields: [lockSignoffs.signedBy],
-		references: [users.id]
+}));
+
+export const subEventMenuSelectionsRelations = relations(subEventMenuSelections, ({one}) => ({
+	subEventMenu: one(subEventMenus, {
+		fields: [subEventMenuSelections.menuId],
+		references: [subEventMenus.id]
 	}),
 }));
 
@@ -368,18 +372,14 @@ export const menuTierPricesRelations = relations(menuTierPrices, ({one}) => ({
 	}),
 }));
 
-export const venueSlotBookingsRelations = relations(venueSlotBookings, ({one}) => ({
-	venue: one(venues, {
-		fields: [venueSlotBookings.venueId],
-		references: [venues.id]
-	}),
-	subEvent: one(subEvents, {
-		fields: [venueSlotBookings.subEventId],
-		references: [subEvents.id]
-	}),
+export const lockSignoffsRelations = relations(lockSignoffs, ({one}) => ({
 	event: one(events, {
-		fields: [venueSlotBookings.eventId],
+		fields: [lockSignoffs.eventId],
 		references: [events.id]
+	}),
+	user: one(users, {
+		fields: [lockSignoffs.signedBy],
+		references: [users.id]
 	}),
 }));
 

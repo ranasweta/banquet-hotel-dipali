@@ -26,10 +26,10 @@ races return 409 with a human-readable message.
 - `PUT  /events/:id` — pre-confirm edits; post-confirm → creates change request
 - `POST /events/:id/documents` — multipart Aadhaar front/back upload
 - `POST /events/:id/sub-events` | `PUT /sub-events/:id` | `DELETE /sub-events/:id`
-- `GET  /availability?venue_id=&date=&start=&end=` — slot check incl. 11 AM rule,
-  returns { available, reason?, open_enquiries }
-- `POST /events/:id/confirm` — THE transaction: re-validates all slots, checks
-  advance ≥ 25%, inserts venue_slot_bookings atomically → 409 on any race
+- `GET  /availability?venue_id=&date=&start=&end=` — time-overlap check (bundle-aware),
+  returns { available, conflicts[], open_enquiries }
+- `POST /events/:id/confirm` — THE transaction: re-validates all windows, checks
+  advance ≥ 25%, inserts venue_bookings atomically → 409 on any race
 - `POST /events/:id/cancel` { reason }
 
 ## Calendar (module: calendar)

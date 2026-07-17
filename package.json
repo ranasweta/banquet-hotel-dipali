@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "migrate": "tsx db/migrate.ts",
     "seed": "tsx db/seed.ts",
+    "demo": "tsx db/demo.ts",
     "db:pull": "drizzle-kit pull",
     "test": "vitest run",
     "test:watch": "vitest"
