@@ -12,6 +12,7 @@ const NAV: { href: string; label: string; module?: string }[] = [
   { href: '/', label: 'Dashboard' },
   { href: '/bookings', label: 'Bookings', module: 'bookings' },
   { href: '/calendar', label: 'Calendar', module: 'calendar' },
+  { href: '/rooms', label: 'Rooms', module: 'rooms' },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users' },
   { href: '/admin/users', label: 'Users', module: 'roles_users' },
 ]

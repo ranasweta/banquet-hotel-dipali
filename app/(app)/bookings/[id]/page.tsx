@@ -30,6 +30,8 @@ export default async function BookingDetailPage({
         initial={detail as unknown as EventDetail}
         canViewMenus={can('menus', 'view')}
         canEditMenus={can('menus', 'create_edit')}
+        canViewRooms={can('rooms', 'view')}
+        canEditRooms={can('rooms', 'create_edit')}
       />
     </div>
   )

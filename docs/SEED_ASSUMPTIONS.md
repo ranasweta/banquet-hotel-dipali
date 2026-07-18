@@ -315,6 +315,35 @@ Interpretations made while building the menu module, recorded so they can be cha
 
 ---
 
+## D5. Rooms module design decisions (M5)
+
+- **Per-room discount over the cap is a hard reject, not an exception** ⚠️ *(spec tension)*.
+  BUILD_PLAN's M5 acceptance says a Rs.600 discount on a deluxe room is *rejected* and
+  Rs.900 on a suite *accepted* — so BR-D1 is implemented as a firm ceiling (Rs.500 / Rs.1,000
+  for suites, from the `*_discount_cap_paise` settings). **This is in tension with FR-11.3**,
+  which reads "exceeding … any per-room cap auto-raises a Higher Authority exception." The
+  milestone's explicit acceptance wins for M5; the combined-10% escalation (BR-D2) and, if the
+  client prefers it, an "escalate over-cap room discounts to an exception" path can be layered
+  in the M7 discount service. **Open question for the client: is a per-room cap a firm limit
+  (reject) or an escalation trigger (exception)?** Recorded, not silently chosen.
+- **35+ rooms defers the whole batch** (BR-L2/FR-4.7): reaching the `large_allocation_rooms`
+  threshold (existing + requested) raises a `room_allocation_35plus` exception carrying the
+  requested allocations in its payload and inserts **nothing** until an Authority approves it
+  (application happens in M6). This mirrors the menu-increase deferral (D4).
+- **Lawn-wedding Palace preference (BR-L1)** is enforced server-side: an event is a "lawn
+  wedding" when its type `is_wedding` and it has a sub-event on a `kind = 'lawn'` venue; a
+  non-Palace room then requires an `override_note`. It is not merely a UI hint.
+- **Room charges do NOT fold into `proposal_total_paise`.** The proposal stays venue + food +
+  add-ons (M4); rooms (count × nights × rate, less per-room discount) flow to the **bill** in
+  M9 per FR-4.6. Allocation happens post-confirm, so it never affects the 25% advance gate.
+- **The room discount lives on the allocation** (`room_allocations.discount_paise`), not (yet)
+  as a `discounts` ledger row. The M7 discount service will sum allocation discounts into the
+  combined-10% computation (BR-D2).
+- **Allocation requires a confirmed (or later, pre-lock) event.** The Lodge Manager works the
+  queue of confirmed events (FR-4.2); allocating against a bare enquiry is refused.
+
+---
+
 ## D. Amendments made to the specs during M0
 
 | Document | Change | Why |
@@ -388,6 +417,7 @@ Ranked by what they block.
 | 10 | Payment reminder schedule (PRD open question 1) | M7 |
 | 11 | Correct the menu item typos? (B2) | cosmetic |
 | 12 | Turnaround/buffer between back-to-back venue bookings? (D3) — defaulted to none | future |
+| 13 | Per-room discount over cap — firm reject or escalate to exception? (D5) — defaulted to reject per M5 acceptance | M7 |
 
 *Resolved since M0: C8/C9 (venue clash model — client chose time-overlap, see D3);
 the 11 AM handover exceptions question is moot (the 11 AM rule itself was withdrawn).*

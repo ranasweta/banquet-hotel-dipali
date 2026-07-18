@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { MenuPicker, type CatalogTier } from '@/components/menu-picker'
+import { EventRooms } from '@/components/event-rooms'
 
 type SubEvent = {
   id: string
@@ -46,10 +47,14 @@ export function EventDetailView({
   initial,
   canViewMenus,
   canEditMenus,
+  canViewRooms,
+  canEditRooms,
 }: {
   initial: EventDetail
   canViewMenus: boolean
   canEditMenus: boolean
+  canViewRooms: boolean
+  canEditRooms: boolean
 }) {
   const [event, setEvent] = useState(initial)
   const [tiers, setTiers] = useState<CatalogTier[] | null>(null)
@@ -194,6 +199,28 @@ export function EventDetailView({
           ))
         )}
       </div>
+
+      {canViewRooms && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Rooms &amp; lodging</h2>
+            {event.status === 'enquiry' ? (
+              <p className="text-sm text-muted-foreground">
+                Rooms can be allocated once the booking is confirmed.
+              </p>
+            ) : (
+              <EventRooms
+                eventId={event.id}
+                editable={
+                  canEditRooms &&
+                  ['confirmed', 'in_progress', 'completed'].includes(event.status)
+                }
+              />
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

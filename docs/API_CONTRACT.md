@@ -53,7 +53,9 @@ races return 409 with a human-readable message.
 
 ## Rooms (module: rooms)
 - `GET  /events/:id/room-requirements` | `POST` (from wizard step 4)
+- `GET  /rooms/units` — lodging units + room counts, for the board's unit selector
 - `GET  /rooms/board?unit_id=&from=&to=` — availability grid
+- `DELETE /room-allocations/:id` — un-assign a room
 - `POST /events/:id/room-allocations` — bulk allocate; ≥35 rooms auto-raises
   exception (202); overlap → 409; non-Palace for lawn wedding needs override_note
 - `GET  /events/:id/rooms/reconciliation` — promised vs allocated vs occupied
