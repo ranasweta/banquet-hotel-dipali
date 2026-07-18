@@ -68,9 +68,11 @@ races return 409 with a human-readable message.
 - `GET  /reminders/pending` — due payment reminders for current role
 
 ## Approvals (module: approvals)
-- `GET  /exceptions?status=pending` — Authority queue
-- `POST /exceptions/:id/decide` { action: approve|reject|approve_modified, remark }
-  → applies the deferred change on approval, notifies requester
+- `GET  /exceptions?status=pending&mine=1` — Authority queue (`mine=1` = raised by caller)
+- `GET  /approvals/dashboard` — pending load + biggest upcoming events (FR-6.3)
+- `POST /exceptions/:id/decide` { action: approve|reject|approve_modified, remark, modified? }
+  → applies the deferred change on approval, notifies requester. Deciding is
+  Authority/Auditor-only (behavioural rule); remark mandatory on reject.
 
 ## Maintenance (module: maintenance)
 - `GET  /maintenance/events` — in-progress/completed events

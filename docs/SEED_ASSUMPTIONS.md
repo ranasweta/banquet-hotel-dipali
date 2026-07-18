@@ -344,6 +344,33 @@ Interpretations made while building the menu module, recorded so they can be cha
 
 ---
 
+## D6. Approvals queue design decisions (M6)
+
+- **"Notify the requester" is the audit log + the approvals list, not a notifications
+  table.** FR-6.2 says every decision notifies the requester, but the `notifications` table
+  is deferred to M7/M10 (C7). For M6, each decision is audit-logged with the remark, the
+  requester can see their decided exceptions via `GET /exceptions?mine=1`, and a **rejected
+  menu increase surfaces its remark inline in the menu picker** (the snapshot category keeps
+  its `exception_id` link, and `getSubEventMenu` returns the rejected exception's remark).
+  In-app/push notification delivery arrives with the notifications table.
+- **Deciding is Authority/Auditor-only** — enforced by a role check in the service, not by
+  the permission matrix. The `approvals` module grants `create_edit` to booking/banquet/lodge
+  managers too (they *raise* exceptions), so "who may raise vs decide" is a behavioural rule
+  (already noted in `db/masters.ts`), re-checked here.
+- **Reject reverts nothing because nothing was ever committed.** Both deferred flows hold
+  their change until approval — a menu increase never bumped `extra_picks`, a 35+ allocation
+  inserted no rows — so rejection only records the status + mandatory remark. The menu
+  category's link is kept (so the remark shows); a fresh increase request overwrites it.
+- **Approve applies atomically inside the decide transaction.** Menu increase → bump
+  `extra_picks` (and mark the menu incomplete until the item is picked). 35+ rooms → insert
+  the held allocations; if a room was taken while the request was pending, the exclusion
+  constraint 409s and the whole decision rolls back (the exception stays pending to retry or
+  reject).
+- **Approve-with-modification** (FR-6.2): menu → a modified pick delta (`modified.extraPicks`);
+  rooms → a chosen subset (`modified.roomIds`). Approve is the delta-of-1 / full-batch case.
+
+---
+
 ## D. Amendments made to the specs during M0
 
 | Document | Change | Why |

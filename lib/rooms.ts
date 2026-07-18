@@ -249,15 +249,19 @@ export async function allocateRooms(
         return { deferred: true, exceptionId: exc!.id, count: prepared.length }
       }
 
-      // Under the threshold: insert now; the exclusion constraint decides overlaps.
-      for (const p of prepared) {
-        await tx.execute(sql`
-          INSERT INTO room_allocations (event_id, room_id, stay, rate_paise, discount_paise, override_note, allocated_by)
-          VALUES (${eventId}, ${p.roomId},
-                  daterange(${p.checkIn}::date, ${p.checkOut}::date, '[)'),
-                  ${p.ratePaise}, ${p.discountPaise}, ${p.overrideNote ?? null}, ${actor.id})
-        `)
-      }
+      // Under the threshold: insert now in one statement; the exclusion constraint decides
+      // overlaps for every row (against existing rows and each other).
+      await tx.execute(sql`
+        INSERT INTO room_allocations (event_id, room_id, stay, rate_paise, discount_paise, override_note, allocated_by)
+        VALUES ${sql.join(
+          prepared.map(
+            (p) => sql`(${eventId}, ${p.roomId},
+                        daterange(${p.checkIn}::date, ${p.checkOut}::date, '[)'),
+                        ${p.ratePaise}, ${p.discountPaise}, ${p.overrideNote ?? null}, ${actor.id})`,
+          ),
+          sql`, `,
+        )}
+      `)
       await audit(
         tx,
         actor,

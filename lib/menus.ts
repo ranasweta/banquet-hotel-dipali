@@ -127,6 +127,8 @@ export type MenuCategorySnapshot = {
   effectivePick: number | null
   exceptionId: string | null
   exceptionPending: boolean
+  exceptionStatus: string | null
+  exceptionRemark: string | null
   selected: string[]
   complete: boolean
 }
@@ -196,12 +198,13 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
       : Promise.resolve([] as { name: string }[]),
   ])
 
-  // Which linked exceptions are still pending (drives the "awaiting approval" badge).
+  // Status + remark of each linked exception (drives the "awaiting approval" badge and,
+  // once decided, surfaces the Authority's remark to the booking manager — FR-6.2).
   const excIds = cats.map((c) => c.exceptionId).filter((x): x is string => Boolean(x))
-  const pending = new Set<string>()
+  const excById = new Map<string, { status: string; remark: string | null }>()
   if (excIds.length > 0) {
     const rows = await db
-      .select({ id: schema.exceptions.id, status: schema.exceptions.status })
+      .select({ id: schema.exceptions.id, status: schema.exceptions.status, remark: schema.exceptions.remark })
       .from(schema.exceptions)
       .where(
         sql`${schema.exceptions.id} IN (${sql.join(
@@ -209,7 +212,7 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
           sql`, `,
         )})`,
       )
-    for (const r of rows) if (r.status === 'pending') pending.add(r.id)
+    for (const r of rows) excById.set(r.id, { status: r.status, remark: r.remark })
   }
 
   const selByCat = new Map<string, string[]>()
@@ -223,13 +226,16 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
     const selected = selByCat.get(c.categoryName) ?? []
     const effectivePick = c.basePick == null ? null : c.basePick + c.extraPicks
     const complete = effectivePick == null || selected.length >= effectivePick
+    const exc = c.exceptionId ? excById.get(c.exceptionId) : undefined
     return {
       categoryName: c.categoryName,
       basePick: c.basePick,
       extraPicks: c.extraPicks,
       effectivePick,
       exceptionId: c.exceptionId,
-      exceptionPending: c.exceptionId ? pending.has(c.exceptionId) : false,
+      exceptionPending: exc?.status === 'pending',
+      exceptionStatus: exc?.status ?? null,
+      exceptionRemark: exc?.status === 'rejected' ? exc.remark : null,
       selected,
       complete,
     }

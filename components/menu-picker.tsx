@@ -34,6 +34,8 @@ type MenuCategorySnapshot = {
   effectivePick: number | null
   exceptionId: string | null
   exceptionPending: boolean
+  exceptionStatus: string | null
+  exceptionRemark: string | null
   selected: string[]
   complete: boolean
 }
@@ -246,6 +248,15 @@ export function MenuPicker({
                     )}
                     {snap?.exceptionPending && (
                       <Badge variant="outline" className="text-amber-600">awaiting approval</Badge>
+                    )}
+                    {snap?.exceptionStatus === 'rejected' && (
+                      <Badge
+                        variant="outline"
+                        className="text-red-600"
+                        title={snap.exceptionRemark ?? undefined}
+                      >
+                        increase rejected{snap.exceptionRemark ? `: ${snap.exceptionRemark}` : ''}
+                      </Badge>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
