@@ -25,14 +25,16 @@ const LABEL: Record<Kind, string> = {
 
 export function ReportsView() {
   const [kind, setKind] = useState<Kind>('pipeline')
-  const [data, setData] = useState<Record<string, unknown> | null>(null)
+  // Track which kind the loaded data belongs to, so a tab switch never renders the previous
+  // report's shape against the new kind (and a slow response can't overwrite a newer one).
+  const [result, setResult] = useState<{ kind: Kind; data: Record<string, unknown> } | null>(null)
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async (k: Kind) => {
     setBusy(true)
     try {
       const r = await api<{ data: Record<string, unknown> }>(`/reports/${k}`)
-      setData(r.data)
+      setResult({ kind: k, data: r.data })
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load report')
     } finally {
@@ -45,6 +47,8 @@ export function ReportsView() {
     load(kind)
   }, [kind, load])
 
+  const shown = result && result.kind === kind ? result.data : null
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-1.5">
@@ -52,10 +56,10 @@ export function ReportsView() {
           <Button key={k} size="sm" variant={k === kind ? 'default' : 'outline'} onClick={() => setKind(k)}>{LABEL[k]}</Button>
         ))}
       </div>
-      {busy && !data ? (
+      {!shown ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
       ) : (
-        <div className={cn(busy && 'opacity-60')}>{data && renderReport(kind, data)}</div>
+        <div className={cn(busy && 'opacity-60')}>{renderReport(kind, shown)}</div>
       )}
     </div>
   )
