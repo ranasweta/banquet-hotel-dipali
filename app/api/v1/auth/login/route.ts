@@ -4,13 +4,18 @@ import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { db, schema } from '@/db/drizzle'
 import { getPermissionMatrix } from '@/lib/auth'
-import { ok, route, unauthorized } from '@/lib/api'
+import { ApiError, ok, route, unauthorized } from '@/lib/api'
 import { getSession } from '@/lib/session'
+import { rateLimit } from '@/lib/rate-limit'
 
 const loginSchema = z.object({
   mobile: z.string().trim().min(1),
   password: z.string().min(1),
 })
+
+// Login rate limit (M10 hardening): cap attempts per mobile+IP window to blunt stuffing.
+const MAX_ATTEMPTS = 10
+const WINDOW_MS = 5 * 60 * 1000
 
 // A valid bcrypt hash to compare against when the mobile is unknown, so a missing user
 // and a wrong password take about the same time (no user-enumeration via timing).
@@ -18,6 +23,12 @@ const DUMMY_HASH = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8DvKqkSV6bJ8m3jK7uJ8m3jK7uJ8m'
 
 export const POST = route(async (req: NextRequest) => {
   const { mobile, password } = loginSchema.parse(await req.json())
+
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local'
+  const limit = rateLimit(`login:${ip}:${mobile}`, MAX_ATTEMPTS, WINDOW_MS)
+  if (!limit.allowed) {
+    throw new ApiError(429, 'rate_limited', `Too many attempts. Try again in ${limit.retryAfterSec}s.`)
+  }
 
   const [user] = await db
     .select({

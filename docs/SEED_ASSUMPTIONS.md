@@ -460,6 +460,36 @@ Interpretations made while building the menu module, recorded so they can be cha
 
 ---
 
+## D10. Reports, notifications & hardening design decisions (M10)
+
+- **The six reports (PRD §7)** are read-only aggregations gated on the `audit` module
+  (management view — Higher Authority + Auditor). Two are intentionally partial and can be
+  deepened once the data supports it: **revenue** attributes venue revenue by property via
+  `sub_events.venue_rate_paise` but does not yet break food/rooms revenue down by venue or
+  menu tier (the invoice lines don't carry that attribution); **pipeline** reports status
+  counts + conversion rate but not "lost-slot analysis" (losing enquiries aren't distinctly
+  tracked — a cancelled enquiry is the closest proxy).
+- **Notifications are a derived, role-aware feed, not a stored table.** `GET /notifications`
+  computes what needs the signed-in user's attention right now — approvals to decide, change
+  requests to decide, payment reminders due, stale enquiries — from live data. This satisfies
+  FR-9.1 for v1 without a schema change or retrofitting notify() calls into every M4–M9
+  service (which would have risked regressions in the final milestone). **Trade-off:** there
+  is no per-item read state (an item clears when the underlying thing resolves), and passive
+  events (lock executed, bill finalised, slot lost) aren't pushed — they're visible on the
+  relevant screen. A persistent `notifications` table with read state and those push events
+  (C7's deferral) is the natural follow-up; the derived feed is the honest v1.
+- **Login rate limiting** is an in-process fixed-window limiter (10 attempts / 5 min per
+  mobile+IP). Multi-instance deployments should move it to Redis (`lib/rate-limit.ts` keeps
+  the same interface). Documented in `docs/OPERATIONS.md`.
+- **Lighthouse ≥ 90 (acceptance)** could not be run in this environment (no headless Chrome
+  audit available here). The screens are built to score well — semantic HTML, explicit
+  loading/empty/error states, wide content in `overflow-x-auto` so the page body never scrolls
+  horizontally — and the target is tablet-first per NFR-1 (the fixed sidebar suits a 10-inch
+  screen; a collapsing sidebar for phones is a later enhancement). **Run Lighthouse manually
+  against the deployed build to confirm the ≥ 90 target.**
+
+---
+
 ## D. Amendments made to the specs during M0
 
 | Document | Change | Why |

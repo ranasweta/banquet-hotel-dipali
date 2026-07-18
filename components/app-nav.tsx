@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
+import { NotificationBell } from '@/components/notification-bell'
 import { cn } from '@/lib/utils'
 
 type Perm = { module: string; action: string }
@@ -16,6 +17,7 @@ const NAV: { href: string; label: string; module?: string }[] = [
   { href: '/rooms', label: 'Rooms', module: 'rooms' },
   { href: '/approvals', label: 'Approvals', module: 'approvals' },
   { href: '/change-requests', label: 'Change requests', module: 'calendar' },
+  { href: '/reports', label: 'Reports', module: 'audit' },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users' },
   { href: '/admin/users', label: 'Users', module: 'roles_users' },
 ]
@@ -41,9 +43,12 @@ export function AppNav({
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r bg-muted/30">
-      <div className="border-b p-4">
-        <div className="font-semibold">Hotel Dipali</div>
-        <div className="text-xs text-muted-foreground">Banquet Management</div>
+      <div className="flex items-start justify-between border-b p-4">
+        <div>
+          <div className="font-semibold">Hotel Dipali</div>
+          <div className="text-xs text-muted-foreground">Banquet Management</div>
+        </div>
+        <NotificationBell />
       </div>
       <nav className="flex-1 space-y-1 p-2">
         {NAV.filter((item) => canView(item.module)).map((item) => {

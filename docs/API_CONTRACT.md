@@ -105,6 +105,11 @@ races return 409 with a human-readable message.
 - `GET /reports/occupancy|revenue|pipeline|exceptions|maintenance|outstanding`
 
 ## Notifications
-- `GET /notifications` | `POST /notifications/:id/read`
-- Server cron: stale enquiries (7d), wedding D-30 balance due, reminders to
-  D-21, Authority escalation D-20 onward, lock-pending nudges.
+- `GET /notifications` — derived, role-aware actionable feed (v1: approvals/change requests to
+  decide, reminders due, stale enquiries). No stored read-state yet, so `POST
+  /notifications/:id/read` is deferred with the persistent notifications table (SEED_ASSUMPTIONS D10).
+- Server cron (`POST /cron/run`, M7): stale enquiries (7d), wedding D-30 balance due,
+  reminders to D-21, Authority escalation D-20 onward.
+
+## Reports (module: audit)
+- `GET /reports/occupancy|revenue|pipeline|exceptions|maintenance|outstanding` (PRD §7)
