@@ -544,6 +544,44 @@ export const maintenanceEntries = pgTable("maintenance_entries", {
 	check("maintenance_entries_rate_paise_check", sql`rate_paise >= 0`),
 ]);
 
+export const changeRequests = pgTable("change_requests", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	eventId: uuid("event_id").notNull(),
+	subEventId: uuid("sub_event_id").notNull(),
+	payload: jsonb().notNull(),
+	summary: text().notNull(),
+	status: text().default('pending').notNull(),
+	reason: text(),
+	requestedBy: uuid("requested_by").notNull(),
+	requestedAt: timestamp("requested_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	decidedBy: uuid("decided_by"),
+	decidedAt: timestamp("decided_at", { withTimezone: true, mode: 'string' }),
+	remark: text(),
+}, (table) => [
+	index("change_requests_pending").using("btree", table.status.asc().nullsLast().op("text_ops")).where(sql`(status = 'pending'::text)`),
+	foreignKey({
+			columns: [table.eventId],
+			foreignColumns: [events.id],
+			name: "change_requests_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.subEventId],
+			foreignColumns: [subEvents.id],
+			name: "change_requests_sub_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.requestedBy],
+			foreignColumns: [users.id],
+			name: "change_requests_requested_by_fkey"
+		}),
+	foreignKey({
+			columns: [table.decidedBy],
+			foreignColumns: [users.id],
+			name: "change_requests_decided_by_fkey"
+		}),
+	check("change_requests_status_check", sql`status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])`),
+]);
+
 export const settings = pgTable("settings", {
 	key: text().primaryKey().notNull(),
 	value: text().notNull(),

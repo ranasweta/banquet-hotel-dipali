@@ -11,6 +11,8 @@ import { Separator } from '@/components/ui/separator'
 import { MenuPicker, type CatalogTier } from '@/components/menu-picker'
 import { EventRooms } from '@/components/event-rooms'
 import { EventBilling } from '@/components/event-billing'
+import { EventMaintenance } from '@/components/event-maintenance'
+import { RequestChange } from '@/components/request-change'
 
 type SubEvent = {
   id: string
@@ -52,6 +54,9 @@ export function EventDetailView({
   canEditRooms,
   canViewBilling,
   canEditBilling,
+  canViewMaintenance,
+  canEditMaintenance,
+  canEditBookings,
 }: {
   initial: EventDetail
   canViewMenus: boolean
@@ -60,6 +65,9 @@ export function EventDetailView({
   canEditRooms: boolean
   canViewBilling: boolean
   canEditBilling: boolean
+  canViewMaintenance: boolean
+  canEditMaintenance: boolean
+  canEditBookings: boolean
 }) {
   const [event, setEvent] = useState(initial)
   const [tiers, setTiers] = useState<CatalogTier[] | null>(null)
@@ -199,6 +207,11 @@ export function EventDetailView({
                     onChanged={refreshTotal}
                   />
                 )}
+                {canEditBookings && ['confirmed', 'in_progress'].includes(event.status) && (
+                  <div className="mt-3 border-t pt-3">
+                    <RequestChange sub={{ id: s.id, eventDate: s.eventDate, startTime: s.startTime, endTime: s.endTime, venueName: s.venueName }} />
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))
@@ -223,6 +236,19 @@ export function EventDetailView({
                 }
               />
             )}
+          </div>
+        </>
+      )}
+
+      {canViewMaintenance && ['in_progress', 'completed', 'locked', 'billed', 'closed'].includes(event.status) && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Maintenance</h2>
+            <EventMaintenance
+              eventId={event.id}
+              editable={canEditMaintenance && ['in_progress', 'completed'].includes(event.status)}
+            />
           </div>
         </>
       )}

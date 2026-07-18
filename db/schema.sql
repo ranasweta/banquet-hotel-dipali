@@ -415,6 +415,30 @@ CREATE TABLE maintenance_entries (
 );
 
 -- ============================================================
+-- 11b. Change requests (FR-1.9)
+-- ============================================================
+-- Post-confirmation edits to pax / menu / add-ons apply directly (with audit versioning);
+-- a change to a sub-event's date, time window or venue instead files a change request that
+-- the Banquet Manager decides. On approval the service re-books the venue slot, so the same
+-- GiST exclusion decides clashes — an approved move can still fail if the new slot was taken
+-- in the meantime.
+CREATE TABLE change_requests (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  event_id     uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  sub_event_id uuid NOT NULL REFERENCES sub_events(id) ON DELETE CASCADE,
+  payload      jsonb NOT NULL,                 -- requested new date/time/venue fields
+  summary      text NOT NULL,                  -- human-readable "what changes"
+  status       text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected')),
+  reason       text,                           -- why the change is wanted
+  requested_by uuid NOT NULL REFERENCES users(id),
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  decided_by   uuid REFERENCES users(id),
+  decided_at   timestamptz,
+  remark       text
+);
+CREATE INDEX change_requests_pending ON change_requests(status) WHERE status = 'pending';
+
+-- ============================================================
 -- 12. Lock, invoice, T&C (FR-7.x)
 -- ============================================================
 CREATE TABLE lock_signoffs (
@@ -512,7 +536,7 @@ BEGIN
   FOREACH t IN ARRAY ARRAY[
     'sub_events','event_contacts','guest_documents','venue_bookings',
     'room_allocations','room_requirements','discounts','maintenance_entries',
-    'exceptions','payment_reminders']
+    'exceptions','payment_reminders','change_requests']
   LOOP
     EXECUTE format(
       'CREATE TRIGGER %I_lock_guard BEFORE INSERT OR UPDATE OR DELETE ON %I

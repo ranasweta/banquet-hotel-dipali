@@ -403,6 +403,34 @@ Interpretations made while building the menu module, recorded so they can be cha
 
 ---
 
+## D8. Maintenance, day sheet & change requests design decisions (M8)
+
+- **New table `change_requests`** (flagged in C7, added now). Post-confirmation edits split
+  by FR-1.9: pax / menu / add-ons apply directly (versioned in the audit trail — pax via
+  `POST /sub-events/:id/pax`, menu/add-ons via the menu module); date / time / venue file a
+  `change_requests` row the Banquet Manager decides. On approval the service re-books the
+  venue slot inside one transaction, so the same GiST exclusion decides clashes — an approved
+  move 409s cleanly if the slot was taken in the meantime, and nothing changes. Folded into
+  migration 0001 and added to the lock-guard trigger list (DBs rebuilt — D3 precedent).
+- **Maintenance closure is a `lock_signoffs` row, not a new column.** Closing the section
+  (`POST /events/:id/maintenance/close`) sets `is_closed` on every entry AND inserts a
+  `lock_signoffs(designation='maintenance')` row — which is exactly the "Maintenance closure"
+  lock-checklist sign-off (FR-7.1), so M9's checklist reads it for free. "Is it closed?" =
+  that sign-off exists. No schema change needed.
+- **Maintenance write window (FR-5.1):** entries are writable only while the event is
+  `in_progress` or `completed`, and only before closure. The service refuses outside that
+  window (a clean 400/409); the DB lock-guard trigger is the backstop for locked+ states.
+  Entries are editable/deletable by their **author or the Auditor** (FR-5.2).
+- **Change-request permissions:** raising is `bookings` create_edit (the Booking Manager acts
+  for the guest); deciding is `calendar` create_edit — which only the Banquet Manager and
+  Auditor hold — matching "Banquet Manager approval" (FR-1.9). A behavioural split expressed
+  through two modules rather than a role check.
+- **Day sheet** (`GET /calendar/day-sheet/:date`) lists confirmed-and-beyond sub-events on the
+  date with their menu snapshot (tier + dishes) and add-ons — it reads snapshots, never the
+  master, and is print-styled. Cross-midnight tails are not folded in (kept to `event_date`).
+
+---
+
 ## D. Amendments made to the specs during M0
 
 | Document | Change | Why |

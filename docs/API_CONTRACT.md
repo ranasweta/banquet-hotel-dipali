@@ -79,8 +79,18 @@ races return 409 with a human-readable message.
   Authority/Auditor-only (behavioural rule); remark mandatory on reject.
 
 ## Maintenance (module: maintenance)
-- `GET  /maintenance/events` — in-progress/completed events
-- `POST /events/:id/maintenance` | `PUT /maintenance/:id` | `POST /events/:id/maintenance/close`
+- `GET  /maintenance/events` — in-progress/completed events (the team's work queue)
+- `GET  /events/:id/maintenance` — entries + running total + closed flag
+- `POST /events/:id/maintenance` (multipart, optional receipt/photo) | `PUT|DELETE /maintenance/:id`
+- `GET  /maintenance/:id/attachment` — decrypted receipt, permission-gated
+- `POST /events/:id/maintenance/close` — freeze entries + record the maintenance sign-off (FR-5.2)
+
+## Change requests (module: bookings to raise, calendar to decide)
+- `GET  /change-requests?status=&event_id=` — the queue (pending first)
+- `POST /change-requests` { sub_event_id, payload{event_date/start_time/end_time/venue_id/bundle_id}, reason } (FR-1.9)
+- `POST /change-requests/:id/decide` { action: approve|reject, remark } — Banquet Manager;
+  approval re-books the venue slot (409 if taken meanwhile)
+- `POST /sub-events/:id/pax` { pax, override_note } — a post-confirm pax change applies directly
 
 ## Lock & billing (module: billing — Auditor)
 - `GET  /events/:id/lock-checklist` — computed item states
