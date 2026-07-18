@@ -60,12 +60,16 @@ races return 409 with a human-readable message.
   exception (202); overlap → 409; non-Palace for lawn wedding needs override_note
 - `GET  /events/:id/rooms/reconciliation` — promised vs allocated vs occupied
 
-## Discounts & payments (module: billing; record by booking manager)
-- `POST /events/:id/discounts` — validates BR-D1 caps + live 10% total;
-  over cap → 202 { exception_id }
-- `GET  /events/:id/ledger` — payments trail + paid vs balance
-- `POST /events/:id/payments` { kind, amount_paise, mode, receipt_no, received_on }
-- `GET  /reminders/pending` — due payment reminders for current role
+## Discounts & payments (module: billing — booking_manager has none; the advance is
+## recorded on the bookings/confirm path instead)
+- `GET|POST /events/:id/discounts` — head menu/venue/overall (per-room discounts live on the
+  allocation, BR-D1); live 10% combined total; over cap → 202 { exception_id } (BR-D2)
+- `DELETE /discounts/:id` — remove a discount (and its pending exception)
+- `GET  /events/:id/ledger` — proposal − effective discounts, payments trail, paid vs balance
+- `POST /events/:id/payments` { kind, amount_paise, mode, receipt_no, received_on } — unique receipt
+- `GET  /reminders/pending?as_of=` — due payment reminders for the caller's role (any auth role)
+- `POST /cron/run` { as_of? } — daily job: generate wedding reminders + surface stale enquiries
+  (CRON_SECRET header, or Auditor/Admin session)
 
 ## Approvals (module: approvals)
 - `GET  /exceptions?status=pending&mine=1` — Authority queue (`mine=1` = raised by caller)

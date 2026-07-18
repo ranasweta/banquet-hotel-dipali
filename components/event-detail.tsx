@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { MenuPicker, type CatalogTier } from '@/components/menu-picker'
 import { EventRooms } from '@/components/event-rooms'
+import { EventBilling } from '@/components/event-billing'
 
 type SubEvent = {
   id: string
@@ -49,12 +50,16 @@ export function EventDetailView({
   canEditMenus,
   canViewRooms,
   canEditRooms,
+  canViewBilling,
+  canEditBilling,
 }: {
   initial: EventDetail
   canViewMenus: boolean
   canEditMenus: boolean
   canViewRooms: boolean
   canEditRooms: boolean
+  canViewBilling: boolean
+  canEditBilling: boolean
 }) {
   const [event, setEvent] = useState(initial)
   const [tiers, setTiers] = useState<CatalogTier[] | null>(null)
@@ -216,6 +221,25 @@ export function EventDetailView({
                   canEditRooms &&
                   ['confirmed', 'in_progress', 'completed'].includes(event.status)
                 }
+              />
+            )}
+          </div>
+        </>
+      )}
+
+      {canViewBilling && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Billing</h2>
+            {event.status === 'enquiry' ? (
+              <p className="text-sm text-muted-foreground">
+                Discounts and payments open once the booking is confirmed.
+              </p>
+            ) : (
+              <EventBilling
+                eventId={event.id}
+                editable={canEditBilling && !['locked', 'billed', 'closed'].includes(event.status)}
               />
             )}
           </div>

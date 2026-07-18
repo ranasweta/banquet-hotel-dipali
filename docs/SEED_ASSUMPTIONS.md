@@ -371,6 +371,38 @@ Interpretations made while building the menu module, recorded so they can be cha
 
 ---
 
+## D7. Discounts, payments & reminders design decisions (M7)
+
+- **The combined-10% cap (BR-D2) counts room-allocation discounts too.** The effective
+  discount total = Σ `room_allocations.discount_paise` (BR-D1-capped at allocation, M5) + Σ
+  ledger discounts whose exception is absent or approved. Adding a ledger discount that would
+  push the combined total over 10% of the proposal is recorded but held behind a pending
+  `discount_over_cap` exception; it does not count until approved. **Caveat:** the M5
+  allocation path checks only the per-room cap, not the combined 10% — so an allocation
+  discount can consume 10% headroom without escalating; the combined check fires when ledger
+  discounts are added. Acceptable for now; revisit if allocation discounts grow large.
+- **The discounts endpoint covers menu/venue/overall heads only.** Per-room discounts are the
+  allocation's `discount_paise` (M5) — routing them through the ledger too would double-count
+  a room. `head='room'` on the endpoint returns a redirect-to-allocation error.
+- **Over-cap discount apply/reject reuses the M6 decide path unchanged.** The discount row is
+  written immediately with its `exception_id`; approval flips the exception to approved (the
+  effective query then counts it — no M6 code needed), rejection leaves it uncounted. Deleting
+  a discount also deletes its still-pending exception.
+- **Wedding reminder schedule (BR-P2, open question 1 default):** BM reminded daily D-30→D-21,
+  HA added D-20→D-1. Rows are pre-generated into `payment_reminders` (idempotent on the unique
+  key) for every upcoming confirmed wedding with an outstanding balance; a paid-off wedding
+  generates none. `/reminders/pending` surfaces rows whose `remind_on ≤ today` and balance is
+  still due. The row generator series over integer day-offsets subtracted from `first_date`
+  (the date/interval `generate_series` signature does not exist in Postgres).
+- **Ledger balance = proposal − effective discounts − (payments − refunds).** GST and
+  line-level billing arrive with the invoice in M9; this is the running internal balance.
+- **Cron is a route, not a tsx script.** The lib modules import `server-only`, which a plain
+  `tsx` run can't load, so the daily job is `POST /cron/run` (scheduler with a `CRON_SECRET`
+  header, or a manual Auditor run). A general in-app **notifications table is still deferred to
+  M10** (C7); for now reminders surface via `/reminders/pending` and the dashboard widget.
+
+---
+
 ## D. Amendments made to the specs during M0
 
 | Document | Change | Why |

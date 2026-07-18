@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser, getPermissionMatrix } from '@/lib/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { DashboardReminders } from '@/components/dashboard-reminders'
 
 export default async function DashboardPage() {
   // Next renders the layout and this page in parallel, so the page cannot rely on the
@@ -22,6 +23,8 @@ export default async function DashboardPage() {
           Signed in as {formatRole(user.roleName)}.
         </p>
       </div>
+
+      <DashboardReminders />
 
       <Card>
         <CardHeader>
