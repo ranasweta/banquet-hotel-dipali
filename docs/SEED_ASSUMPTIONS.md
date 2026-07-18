@@ -278,6 +278,43 @@ range in the booking service.
 
 ---
 
+## D4. Menu module design decisions (M4)
+
+Interpretations made while building the menu module, recorded so they can be challenged.
+
+- **Snapshot price is taken effective on the sub-event's date.** `saveSubEventMenu` reads
+  `menu_tier_prices` with the latest `effective_from ≤ event_date` — the same rule venue
+  rate cards use. A tier with no price effective on that date blocks the save with a clear
+  message (never prices at 0), mirroring BR-R1 for venues.
+- **A re-save re-snapshots the base data (tier name, price, per-category `base_pick`) from
+  the master as of that save, but preserves the increase overlay** (`extra_picks`, the used
+  free increase, and any pending exception link) as long as the tier is unchanged. Changing
+  the tier resets the overlay. The BR-M1 immutability guarantee holds because a saved menu
+  only changes when a user deliberately re-saves — a master edit alone never touches it.
+- **`proposal_total_paise` now includes food and add-ons.** It is recomputed as priceable
+  venue charges + Σ(pax × per-plate) over saved menus + Σ(qty × rate) over add-ons, on
+  confirm and on every menu/add-on change (schema note: "recomputed on every relevant
+  change"; pricing.ts M4 note). The 25% advance at confirm therefore covers any menu the
+  guest picked before confirming; when menus are deferred (the common case) food is 0 and
+  the confirm behaviour is unchanged.
+- **An increase on an all-included category (`base_pick = NULL`) is refused outright** —
+  every item is already included, so there is nothing to increase (it can't even raise an
+  exception). Increases on ineligible pickable categories (paneer, dal, dessert, live
+  counter, …) still raise an exception per BR-M3.
+- **"Approved increases" do not change the per-plate price.** FR-7.3 lists food as
+  "pax × per-plate … plus approved increases and add-ons"; the schema carries no
+  incremental per-increase rate, so an increase changes menu *variety* (pick counts), not
+  the plate rate. Only add-ons (their own rate) and the tier rate move the food total.
+
+### Schema changes folded into migration 0001 (pre-launch, DBs rebuilt — D3 precedent)
+
+| Change | Why |
+|---|---|
+| `forbid_locked_menu_write()` trigger on `sub_event_menus`, `_menu_categories`, `_menu_selections`, `sub_event_addons` | The menu tables have no `event_id`, so the existing lock guard couldn't cover them; this companion resolves the event via `sub_event_id`/`menu_id` so "locked means locked" (rule 6) holds at the DB level, backing the service-layer 409. |
+| `semc_exception_fk` → `ON DELETE SET NULL` | Lets an exception (or a whole event) be deleted without the snapshot-category link blocking it; the pick is governed by `extra_picks`, not the FK. |
+
+---
+
 ## D. Amendments made to the specs during M0
 
 | Document | Change | Why |

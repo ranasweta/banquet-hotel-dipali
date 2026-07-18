@@ -1,9 +1,9 @@
 import 'server-only'
-import { and, desc, eq, lte } from 'drizzle-orm'
+import { and, desc, eq, lte, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 
 /** A db handle or a transaction handle — pricing reads must run inside the confirm tx. */
-type Exec = Pick<typeof db, 'select'>
+type Exec = Pick<typeof db, 'select' | 'execute'>
 const exec = (e?: Exec): Exec => e ?? db
 
 /**
@@ -85,6 +85,56 @@ export async function priceProposal(
   }
 
   return { totalPaise, rates, missing }
+}
+
+/**
+ * The food + add-on side of the proposal (M4). Food per sub-event is pax × per-plate rate,
+ * where the per-plate rate is the snapshotted (base + wedding surcharge) on the saved menu —
+ * never the master, so it survives menu-master edits (BR-M1). Add-ons are qty × rate.
+ * A sub-event with no saved menu contributes nothing (menus can be deferred; FR-3.2).
+ */
+export async function foodAndAddonTotal(
+  eventId: string,
+  e?: Exec,
+): Promise<{ foodPaise: number; addonPaise: number }> {
+  const [food] = (await exec(e).execute(sql`
+    SELECT COALESCE(sum(se.pax::bigint * (m.base_rate_paise + m.surcharge_paise)), 0)::bigint AS total
+    FROM sub_event_menus m
+    JOIN sub_events se ON se.id = m.sub_event_id
+    WHERE se.event_id = ${eventId}
+  `)) as unknown as { total: number }[]
+
+  const [addon] = (await exec(e).execute(sql`
+    SELECT COALESCE(sum(a.qty::bigint * a.rate_paise), 0)::bigint AS total
+    FROM sub_event_addons a
+    JOIN sub_events se ON se.id = a.sub_event_id
+    WHERE se.event_id = ${eventId}
+  `)) as unknown as { total: number }[]
+
+  return { foodPaise: food!.total, addonPaise: addon!.total }
+}
+
+/**
+ * Recomputes and persists an event's running proposal total: priceable venue charges
+ * (BR-R1 gaps are simply skipped from the running estimate — they become a hard gate only
+ * at confirm) + food + add-ons. Called whenever a menu or add-on changes so the proposal
+ * a booking manager sees stays current (schema note on proposal_total_paise). Returns the
+ * new total.
+ */
+export async function recomputeProposalTotal(
+  exec2: Exec & Pick<typeof db, 'update'>,
+  eventId: string,
+  eventType: string,
+): Promise<number> {
+  const subs = await loadSubEventsForPricing(eventId, exec2)
+  const venue = await priceProposal(eventType, subs, exec2)
+  const { foodPaise, addonPaise } = await foodAndAddonTotal(eventId, exec2)
+  const total = venue.totalPaise + foodPaise + addonPaise
+  await exec2
+    .update(schema.events)
+    .set({ proposalTotalPaise: total })
+    .where(eq(schema.events.id, eventId))
+  return total
 }
 
 /** Loads an event's sub-events in the shape priceProposal needs. */

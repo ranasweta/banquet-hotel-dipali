@@ -298,8 +298,12 @@ CREATE TABLE exceptions (
 );
 CREATE INDEX exceptions_pending ON exceptions(status) WHERE status = 'pending';
 
+-- ON DELETE SET NULL: an exception is normally decided, not deleted, but if it ever is
+-- (or an event is deleted, cascading its exceptions), the snapshot category simply loses
+-- its link rather than blocking the delete. The pick is governed by extra_picks, not this FK.
 ALTER TABLE sub_event_menu_categories
-  ADD CONSTRAINT semc_exception_fk FOREIGN KEY (exception_id) REFERENCES exceptions(id);
+  ADD CONSTRAINT semc_exception_fk FOREIGN KEY (exception_id) REFERENCES exceptions(id)
+  ON DELETE SET NULL;
 
 -- ============================================================
 -- 8. Lodging (FR-4.x)
@@ -517,3 +521,42 @@ BEGIN
 END $$;
 -- Note: payments are exempt (settlement arrives after lock) — recorded against
 -- the invoice balance; lock_signoffs precede the lock by definition.
+
+-- ============================================================
+-- 14b. Locked-event immutability guard for the menu tables
+-- ============================================================
+-- The menu snapshot tables carry no event_id of their own — they hang off a sub_event
+-- (sub_event_id) or a menu (menu_id -> sub_event_menus.sub_event_id). A companion guard
+-- resolves the owning event through those keys so "locked means locked" (CLAUDE.md rule 6)
+-- covers menus and add-ons too, not only the event_id-bearing children guarded above.
+CREATE OR REPLACE FUNCTION forbid_locked_menu_write() RETURNS trigger AS $$
+DECLARE eid uuid; st event_status; rec jsonb;
+BEGIN
+  rec := to_jsonb(COALESCE(NEW, OLD));
+  IF rec ? 'sub_event_id' THEN
+    SELECT se.event_id INTO eid FROM sub_events se
+      WHERE se.id = (rec->>'sub_event_id')::uuid;
+  ELSE
+    SELECT se.event_id INTO eid
+      FROM sub_event_menus m JOIN sub_events se ON se.id = m.sub_event_id
+      WHERE m.id = (rec->>'menu_id')::uuid;
+  END IF;
+  SELECT status INTO st FROM events WHERE id = eid;
+  IF st IN ('locked','billed','closed') THEN
+    RAISE EXCEPTION 'event % is locked — record is immutable', eid;
+  END IF;
+  RETURN COALESCE(NEW, OLD);
+END $$ LANGUAGE plpgsql;
+
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'sub_event_menus','sub_event_menu_categories',
+    'sub_event_menu_selections','sub_event_addons']
+  LOOP
+    EXECUTE format(
+      'CREATE TRIGGER %I_lock_guard BEFORE INSERT OR UPDATE OR DELETE ON %I
+         FOR EACH ROW EXECUTE FUNCTION forbid_locked_menu_write()', t, t);
+  END LOOP;
+END $$;

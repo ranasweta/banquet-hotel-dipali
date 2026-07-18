@@ -5,7 +5,7 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
 import { occupancyParts } from '@/lib/occupancy'
-import { loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
+import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
 import { transitionEvent } from '@/lib/events'
 
 export type AdvancePayment = {
@@ -107,7 +107,9 @@ export async function confirmEvent(
       const subs = await loadSubEventsForPricing(eventId, tx)
       if (subs.length === 0) throw badRequest('Add at least one sub-event before confirming')
 
-      // 3. Price the proposal; a venue with no rate card is a gate (BR-R1).
+      // 3. Price the proposal; a venue with no rate card is a gate (BR-R1). Food and
+      //    add-ons from any menu already saved this enquiry fold into the total, so the
+      //    25% advance covers them too (nil when menus were deferred — the common case).
       const pricing = await priceProposal(event.eventType, subs, tx)
       if (pricing.missing.length > 0) {
         const names = pricing.missing.map((m) => m.name).join(', ')
@@ -115,6 +117,8 @@ export async function confirmEvent(
           `No rate is defined for: ${names}. An Authority-approved manual rate is needed before confirming (BR-R1).`,
         )
       }
+      const extras = await foodAndAddonTotal(eventId, tx)
+      const proposalTotal = pricing.totalPaise + extras.foodPaise + extras.addonPaise
 
       // 4. Record the advance, then require recorded advance ≥ 25% of the proposal.
       if (advance) {
@@ -147,12 +151,12 @@ export async function confirmEvent(
         SELECT COALESCE(sum(amount_paise), 0)::bigint AS paid
         FROM payments WHERE event_id = ${eventId} AND kind = 'advance_block'
       `)) as unknown as { paid: number }[]
-      const required = percentOfPaise(pricing.totalPaise, 25)
+      const required = percentOfPaise(proposalTotal, 25)
       if (paid < required) {
         throw new ApiError(
           402,
           'advance_required',
-          `A 25% advance is required to block the dates: ₹${(required / 100).toLocaleString('en-IN')} on a proposal of ₹${(pricing.totalPaise / 100).toLocaleString('en-IN')}. Recorded so far: ₹${(paid / 100).toLocaleString('en-IN')}.`,
+          `A 25% advance is required to block the dates: ₹${(required / 100).toLocaleString('en-IN')} on a proposal of ₹${(proposalTotal / 100).toLocaleString('en-IN')}. Recorded so far: ₹${(paid / 100).toLocaleString('en-IN')}.`,
         )
       }
 
@@ -205,7 +209,7 @@ export async function confirmEvent(
       await tx
         .update(schema.events)
         .set({
-          proposalTotalPaise: pricing.totalPaise,
+          proposalTotalPaise: proposalTotal,
           firstDate: dates[0],
           lastDate: dates[dates.length - 1],
         })
@@ -213,7 +217,7 @@ export async function confirmEvent(
 
       await transitionEvent(tx, eventId, 'confirmed', actor)
 
-      return { id: event.id, code: event.code, proposalTotalPaise: pricing.totalPaise }
+      return { id: event.id, code: event.code, proposalTotalPaise: proposalTotal }
     })
   } catch (err) {
     if (err instanceof ApiError) throw err

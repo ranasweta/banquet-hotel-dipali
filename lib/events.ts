@@ -109,10 +109,14 @@ export async function loadEventDetail(eventId: string) {
         endTime: schema.subEvents.endTime,
         venueId: schema.subEvents.venueId,
         bundleId: schema.subEvents.bundleId,
+        venueName: schema.venues.name,
+        bundleName: schema.venueBundles.name,
         pax: schema.subEvents.pax,
         venueRatePaise: schema.subEvents.venueRatePaise,
       })
       .from(schema.subEvents)
+      .leftJoin(schema.venues, eq(schema.venues.id, schema.subEvents.venueId))
+      .leftJoin(schema.venueBundles, eq(schema.venueBundles.id, schema.subEvents.bundleId))
       .where(eq(schema.subEvents.eventId, eventId))
       .orderBy(schema.subEvents.eventDate, schema.subEvents.startTime),
     db

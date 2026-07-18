@@ -42,6 +42,8 @@ races return 409 with a human-readable message.
 - `GET|POST /change-requests`, `POST /change-requests/:id/decide`
 
 ## Menus (module: menus)
+- `GET  /menu/catalog` — every tier → categories → items, for the dish picker (menus:view;
+  reading tiers to build a booking is a `menus` concern, distinct from `menu_master` editing)
 - `GET  /sub-events/:id/menu` — snapshot + completion state
 - `PUT  /sub-events/:id/menu` — save tier + selections (tentative allowed);
   applies wedding surcharge; enforces pick-counts

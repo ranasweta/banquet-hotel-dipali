@@ -81,7 +81,11 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
             ) : (
               events.map((e) => (
                 <TableRow key={e.id}>
-                  <TableCell className="font-medium tabular-nums">{e.code}</TableCell>
+                  <TableCell className="font-medium tabular-nums">
+                    <Link href={`/bookings/${e.id}`} className="text-primary hover:underline">
+                      {e.code}
+                    </Link>
+                  </TableCell>
                   <TableCell>{e.guestName}</TableCell>
                   <TableCell className="capitalize">{e.eventType.replace(/_/g, ' ')}</TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">

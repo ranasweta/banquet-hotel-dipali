@@ -750,7 +750,7 @@ export const subEventMenuCategories = pgTable("sub_event_menu_categories", {
 			columns: [table.exceptionId],
 			foreignColumns: [exceptions.id],
 			name: "semc_exception_fk"
-		}),
+		}).onDelete("set null"),
 	primaryKey({ columns: [table.menuId, table.categoryName], name: "sub_event_menu_categories_pkey"}),
 	check("sub_event_menu_categories_base_pick_check", sql`(base_pick IS NULL) OR (base_pick > 0)`),
 	check("sub_event_menu_categories_check", sql`NOT ((base_pick IS NULL) AND (extra_picks > 0))`),
