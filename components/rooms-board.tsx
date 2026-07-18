@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -59,6 +60,18 @@ export function RoomsBoard({ initialUnits }: { initialUnits: Unit[] }) {
 
   const free = rooms?.filter((r) => r.allocations.length === 0).length ?? 0
 
+  // Per-type availability for the chosen window: how many of each type are free vs total.
+  const byType = useMemo(() => {
+    const m = new Map<string, { total: number; free: number }>()
+    for (const r of rooms ?? []) {
+      const t = m.get(r.roomType) ?? { total: 0, free: 0 }
+      t.total += 1
+      if (r.allocations.length === 0) t.free += 1
+      m.set(r.roomType, t)
+    }
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [rooms])
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end gap-3">
@@ -86,8 +99,21 @@ export function RoomsBoard({ initialUnits }: { initialUnits: Unit[] }) {
 
       {rooms && (
         <>
-          <div className="text-sm text-muted-foreground">
-            <span className="font-medium text-foreground">{free}</span> free of {rooms.length} rooms in this window
+          <div className="space-y-2">
+            <div className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">{free}</span> free of {rooms.length} rooms in this window
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {byType.map(([type, c]) => (
+                <Badge
+                  key={type}
+                  variant="outline"
+                  className={cn('capitalize', c.free > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-600')}
+                >
+                  {label(type)}: {c.free}/{c.total} free
+                </Badge>
+              ))}
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
             {rooms.map((r) => {
