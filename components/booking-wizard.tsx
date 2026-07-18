@@ -9,7 +9,6 @@ import { formatPaise, rupeesToPaise } from '@/lib/money'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
@@ -379,8 +378,10 @@ function SubEventEditor({
   const [end, setEnd] = useState('')
   const [pax, setPax] = useState('')
   const [note, setNote] = useState('')
-  const [avail, setAvail] = useState<{ available: boolean; conflicts: { subEventName: string; eventCode: string }[] } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [freeVenues, setFreeVenues] = useState<{ value: string; label: string }[] | null>(null)
+  const [hiddenCount, setHiddenCount] = useState(0)
+  const [checking, setChecking] = useState(false)
 
   const venueName = (s: SubEvent) =>
     s.bundleId
@@ -388,22 +389,37 @@ function SubEventEditor({
       : options.venues.find((v) => v.id === s.venueId)?.name ?? 'Venue'
 
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
-  const canCheck = date && HHMM.test(start) && HHMM.test(end) && start !== end && target
+  const windowSet = Boolean(date && HHMM.test(start) && HHMM.test(end) && start !== end)
 
-  async function checkAvailability() {
-    if (!canCheck) return
-    const [kind, id] = target.split(':')
-    const p = new URLSearchParams({ date, start, end, [kind === 'bundle' ? 'bundle_id' : 'venue_id']: id })
-    try {
-      setAvail(await api(`/availability?${p.toString()}`))
-    } catch {
-      setAvail(null)
-    }
-  }
+  // Once the date + time window is set, load only the venues (and bundles) free for it —
+  // anything booked over an overlapping window is hidden, so it can't be picked (BR-C1).
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (!windowSet) { setFreeVenues(null); setHiddenCount(0); return }
+    let active = true
+    setChecking(true)
+    api<{ venues: { id: string; name: string; propertyName: string; available: boolean }[]; bundles: { id: string; name: string; members: string; available: boolean }[] }>(
+      `/availability/venues?date=${date}&start=${start}&end=${end}`,
+    )
+      .then((r) => {
+        if (!active) return
+        const items = [
+          ...r.venues.filter((v) => v.available).map((v) => ({ value: `venue:${v.id}`, label: `${v.name} (${v.propertyName})` })),
+          ...r.bundles.filter((b) => b.available).map((b) => ({ value: `bundle:${b.id}`, label: `${b.name} [bundle]` })),
+        ]
+        setFreeVenues(items)
+        setHiddenCount(r.venues.filter((v) => !v.available).length + r.bundles.filter((b) => !b.available).length)
+        setTarget((t) => (items.some((i) => i.value === t) ? t : '')) // clear a now-unavailable pick
+      })
+      .catch(() => { if (active) { setFreeVenues([]); setHiddenCount(0) } })
+      .finally(() => { if (active) setChecking(false) })
+    return () => { active = false }
+  }, [date, start, end, windowSet])
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   async function add() {
     const [kind, id] = target.split(':')
-    if (!name || !canCheck || !pax) return toast.error('Fill in all fields')
+    if (!name || !windowSet || !target || !pax) return toast.error('Set the date, time, a free venue, a name and pax')
     setBusy(true)
     try {
       await api(`/events/${eventId}/sub-events`, {
@@ -418,7 +434,7 @@ function SubEventEditor({
           pax_override_note: note || undefined,
         }),
       })
-      setName(''); setDate(''); setTarget(''); setStart(''); setEnd(''); setPax(''); setNote(''); setAvail(null)
+      setName(''); setDate(''); setTarget(''); setStart(''); setEnd(''); setPax(''); setNote(''); setFreeVenues(null)
       onChange()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not add function')
@@ -432,10 +448,7 @@ function SubEventEditor({
     onChange()
   }
 
-  const targetItems = [
-    ...options.venues.map((v) => ({ value: `venue:${v.id}`, label: `${v.name} (${v.propertyName})` })),
-    ...options.bundles.map((b) => ({ value: `bundle:${b.id}`, label: `${b.name} [bundle]` })),
-  ]
+  const venueItems = freeVenues ?? []
 
   return (
     <div className="space-y-4">
@@ -458,56 +471,53 @@ function SubEventEditor({
       )}
 
       <div className="rounded-lg border p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <Field label="Function name">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Sangeet" />
+        {/* When first — date + time drive which venues are offered. */}
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="Date">
+            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
-          <Field label="Venue / bundle">
-            <Select items={targetItems} value={target} onValueChange={(v) => { setTarget(v ?? ''); setAvail(null) }}>
-              <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+          <Field label="Start">
+            <Input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
+          </Field>
+          <Field label="End">
+            <Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
+          </Field>
+        </div>
+
+        {/* Then the venue — only the ones free for that window. */}
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <Field label="Venue">
+            <Select items={venueItems} value={target} onValueChange={(v) => setTarget(v ?? '')}>
+              <SelectTrigger disabled={!windowSet || checking || venueItems.length === 0}>
+                <SelectValue placeholder={!windowSet ? 'Set date & time first' : checking ? 'Checking…' : venueItems.length ? 'Choose a free venue' : 'No venues free for this slot'} />
+              </SelectTrigger>
               <SelectContent>
-                {targetItems.map((it) => (
+                {venueItems.map((it) => (
                   <SelectItem key={it.value} value={it.value}>{it.label}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </Field>
+          <Field label="Function name">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Sangeet" />
+          </Field>
           <Field label="Pax">
             <Input type="number" value={pax} onChange={(e) => setPax(e.target.value)} />
           </Field>
-          <Field label="Date">
-            <Input type="date" value={date} onChange={(e) => { setDate(e.target.value); setAvail(null) }} />
-          </Field>
-          <Field label="Start">
-            <Input type="time" value={start} onChange={(e) => { setStart(e.target.value); setAvail(null) }} />
-          </Field>
-          <Field label="End">
-            <Input type="time" value={end} onChange={(e) => { setEnd(e.target.value); setAvail(null) }} />
-          </Field>
         </div>
-        <div className="mt-3 flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={checkAvailability} disabled={!canCheck}>
-            Check availability
-          </Button>
-          {avail && (
-            avail.available ? (
-              <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">Available</Badge>
-            ) : (
-              <span className="text-sm text-destructive">
-                Clashes with {avail.conflicts.map((c) => `${c.subEventName} (${c.eventCode})`).join(', ')}
-              </span>
-            )
-          )}
-        </div>
-        {avail && !avail.available && (
+
+        {windowSet && !checking && (
           <p className="mt-2 text-xs text-muted-foreground">
-            You can still add it, but confirmation will fail until the clash is cleared.
+            {venueItems.length === 0
+              ? 'Every venue is booked for this date & time. Pick another slot.'
+              : `${venueItems.length} venue${venueItems.length === 1 ? '' : 's'} free for this slot${hiddenCount > 0 ? ` · ${hiddenCount} already booked and hidden` : ''}.`}
           </p>
         )}
+
         <div className="mt-3">
           <Input placeholder="Pax override note (only if outside venue capacity)" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
-        <Button className="mt-3" onClick={add} disabled={busy}>Add function</Button>
+        <Button className="mt-3" onClick={add} disabled={busy || !windowSet || !target}>Add function</Button>
       </div>
     </div>
   )

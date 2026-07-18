@@ -6,7 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 // checkAvailability is server-only; the stub in vitest.config lets it import under node.
-const { checkAvailability } = await import('@/lib/availability')
+const { checkAvailability, listVenueAvailability } = await import('@/lib/availability')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -77,6 +77,26 @@ d('same venue, same day, multiple functions', () => {
     // Haldi ends 13:00; a booking 13:00-16:00 does not overlap (half-open ranges).
     const r = await checkAvailability({ venueId: crystalId, date: '2026-07-20', startTime: '13:00', endTime: '16:00' })
     expect(r.available).toBe(true)
+  })
+})
+
+d('venue availability list (the wizard "free venues only" filter)', () => {
+  it('marks a venue booked for an overlapping window and free otherwise', async () => {
+    // 2026-07-20 12:00-14:00 overlaps Crystal's Haldi (10-13).
+    const overlap = await listVenueAvailability('2026-07-20', '12:00', '14:00')
+    expect(overlap.venues.find((v) => v.id === crystalId)?.available).toBe(false)
+    // Signature has no booking then → still offered.
+    expect(overlap.venues.find((v) => v.id === signatureId)?.available).toBe(true)
+
+    // A gap that fits (14:00-18:00) → Crystal is free again.
+    const gap = await listVenueAvailability('2026-07-20', '14:00', '18:00')
+    expect(gap.venues.find((v) => v.id === crystalId)?.available).toBe(true)
+  })
+
+  it('marks a bundle unavailable when any member is booked', async () => {
+    // Imperial+Kohinoor bundle is booked 07-23 18:00-23:30.
+    const r = await listVenueAvailability('2026-07-23', '20:00', '22:00')
+    expect(r.bundles.find((b) => b.id === bundleId)?.available).toBe(false)
   })
 })
 
