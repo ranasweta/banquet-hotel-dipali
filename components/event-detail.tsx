@@ -13,6 +13,8 @@ import { EventRooms } from '@/components/event-rooms'
 import { EventBilling } from '@/components/event-billing'
 import { EventMaintenance } from '@/components/event-maintenance'
 import { RequestChange } from '@/components/request-change'
+import { EventLockInvoice } from '@/components/event-lock-invoice'
+import { EventTrail } from '@/components/event-trail'
 
 type SubEvent = {
   id: string
@@ -57,6 +59,9 @@ export function EventDetailView({
   canViewMaintenance,
   canEditMaintenance,
   canEditBookings,
+  canViewAudit,
+  role,
+  isAuditor,
 }: {
   initial: EventDetail
   canViewMenus: boolean
@@ -68,6 +73,9 @@ export function EventDetailView({
   canViewMaintenance: boolean
   canEditMaintenance: boolean
   canEditBookings: boolean
+  canViewAudit: boolean
+  role: string
+  isAuditor: boolean
 }) {
   const [event, setEvent] = useState(initial)
   const [tiers, setTiers] = useState<CatalogTier[] | null>(null)
@@ -268,6 +276,26 @@ export function EventDetailView({
                 editable={canEditBilling && !['locked', 'billed', 'closed'].includes(event.status)}
               />
             )}
+          </div>
+        </>
+      )}
+
+      {canViewBilling && ['completed', 'locked', 'billed', 'closed'].includes(event.status) && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Lock &amp; invoice</h2>
+            <EventLockInvoice eventId={event.id} role={role} isAuditor={isAuditor} />
+          </div>
+        </>
+      )}
+
+      {canViewAudit && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Audit trail</h2>
+            <EventTrail eventId={event.id} />
           </div>
         </>
       )}

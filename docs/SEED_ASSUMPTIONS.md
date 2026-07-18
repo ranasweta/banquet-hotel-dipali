@@ -431,6 +431,35 @@ Interpretations made while building the menu module, recorded so they can be cha
 
 ---
 
+## D9. Lock, invoice & audit design decisions (M9)
+
+- **No schema change.** invoices, invoice_lines, lock_signoffs and audit_log already exist.
+  GST rates and the invoice-number series are handled without a migration (below).
+- **GST rates are placeholder constants** in `lib/invoice.ts` (venue 18%, food 5%, rooms 12%,
+  maintenance 18%, adjustment 0%) pending the hotel's tax consultant (PRD open question 5).
+  FR-8.3 wants them Admin-editable; making them settings-backed is a small follow-up. **Tax
+  is charged per line on the GROSS amount; discounts are a separate deduction, not pro-rated
+  into each line's taxable value** — a simplification (real GST discounts before tax) to
+  revisit with the consultant.
+- **Invoice numbers via an atomic settings counter, not a sequence** (avoids a schema
+  change): `INSERT … ('invoice_next_no','1') ON CONFLICT DO UPDATE SET value = value+1
+  RETURNING` inside the finalise transaction — the row lock serialises concurrent
+  finalisations. Format `INV-2026-0001`. The prefix is a constant; both prefix and the GST
+  rates become masters when the client confirms them.
+- **Invoice totals** (verified to the paise in tests): gross = Σ line amounts (venue rate
+  snapshots + pax×per-plate food + add-ons + nights×rate rooms + closed-maintenance) + Auditor
+  adjustment lines; discount = effective discounts (BR-D2); net = gross − discount + Σ line
+  tax; advances = payments − refunds; balance = net − advances.
+- **Maintenance closure doubles as the maintenance lock sign-off** (set in M8); the checklist
+  reads the four sign-offs from `lock_signoffs`. The lodge sign-off is required only when the
+  event has rooms; otherwise it auto-passes. Lock is Auditor-only and only from `completed`.
+- **Post-lock immutability** rides on what M4–M8 already built: every service's editability
+  guard 409s on locked+ states, and the DB lock-guard trigger is the backstop.
+- **Audit trail** reads the append-only `audit_log` per event (FR-10), filterable by entity /
+  user / date, with CSV export. The log is never mutated (DB-enforced, FR-10.3).
+
+---
+
 ## D. Amendments made to the specs during M0
 
 | Document | Change | Why |
