@@ -20,6 +20,7 @@ import { resolve } from 'node:path'
 import bcrypt from 'bcryptjs'
 import { createClient, type Sql, type Tx } from './client'
 import { loadMenus, loadRegencyRooms } from './seed-data'
+import { splitMenuItemName } from './menu-split'
 import {
   BUNDLES,
   EVENT_TYPES,
@@ -144,16 +145,19 @@ export async function seed(
         is_wedding = EXCLUDED.is_wedding`
     counts.event_types = EVENT_TYPES.length
 
-    // --- Rate cards (per event type, exactly as the 2026 proposal prints) ---
+    // --- Rate cards: one price per venue, charged for every event type ---
+    // The proposal's third column is the venue's speciality, not a second price, so a venue
+    // costs the same whatever the event is. Each rate is therefore written against every
+    // event type — nothing gates on event type any more.
     // venue_rate_cards has no natural key to ON CONFLICT against, so re-seeding would
     // silently duplicate every rate card and make pricing ambiguous. The seed owns this
     // table's contents for the effective date it manages: clear that slice, then insert.
     // (A UNIQUE NULLS NOT DISTINCT constraint would be better — see SEED_ASSUMPTIONS.md.)
     const rateRows = RATE_CARDS.flatMap((r) =>
-      r.eventTypes.map((eventType) => ({
+      EVENT_TYPES.map((et) => ({
         venue_id: r.venue ? venueId.get(r.venue)! : null,
         bundle_id: r.bundle ? bundleId.get(r.bundle)! : null,
-        event_type: eventType,
+        event_type: et.code,
         rate_paise: r.ratePaise,
         effective_from: RATE_EFFECTIVE_FROM,
       })),
@@ -211,13 +215,13 @@ export async function seed(
     )
     counts.menu_categories = categories.length
 
+    // "/" and "\" separate distinct dishes on one printed line — split them into real choices.
     const itemRows = menus.tiers.flatMap((t) =>
-      t.categories.flatMap((c) =>
-        c.items.map((name) => ({
-          category_id: categoryId.get(`${tierId.get(t.name)!}|${c.name}`)!,
-          name,
-        })),
-      ),
+      t.categories.flatMap((c) => {
+        const catId = categoryId.get(`${tierId.get(t.name)!}|${c.name}`)!
+        const names = [...new Set(c.items.flatMap(splitMenuItemName))]
+        return names.map((name) => ({ category_id: catId, name }))
+      }),
     )
     await tx`
       INSERT INTO menu_items ${tx(itemRows, 'category_id', 'name')}

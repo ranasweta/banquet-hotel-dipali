@@ -110,46 +110,31 @@ export const RATE_EFFECTIVE_FROM = '2026-01-01'
  * ("package-based"), and any wedding rate for a standalone Imperial or Kohinoor — the
  * proposal prices those two for sangeet/engagement only, and weddings via the bundle.
  */
-export type RateSeed = { venue?: string; bundle?: string; eventTypes: string[]; ratePaise: number }
+export type RateSeed = { venue?: string; bundle?: string; ratePaise: number }
 
+/**
+ * One price per venue, charged whenever that venue is chosen — identical for every event type
+ * (client, 19 Jul 2026: the proposal's third column is the venue's *speciality*, not a second
+ * price). The seed writes each rate against every event type, so nothing gates on event type.
+ * Verified against the data before the change: no venue ever carried two different rates.
+ */
 export const RATE_CARDS: RateSeed[] = [
   // --- Dipali Palace (proposal p. 1) ---
-  { bundle: 'Gulmohar + Middle', eventTypes: ['wedding'], ratePaise: rupeesToPaise(225_000) },
-  { venue: 'Crystal', eventTypes: ['wedding'], ratePaise: rupeesToPaise(151_000) },
-  {
-    venue: 'Crystal',
-    eventTypes: ['mahila_sangeet', 'engagement'],
-    ratePaise: rupeesToPaise(151_000),
-  },
-  {
-    bundle: 'Diamond & Golden Hall',
-    eventTypes: ['mahila_sangeet', 'engagement'],
-    ratePaise: rupeesToPaise(25_000),
-  },
+  { bundle: 'Gulmohar + Middle', ratePaise: rupeesToPaise(225_000) },
+  { venue: 'Crystal', ratePaise: rupeesToPaise(151_000) },
+  { bundle: 'Diamond & Golden Hall', ratePaise: rupeesToPaise(25_000) },
 
   // --- Dipali Regency (proposal p. 2) ---
-  { venue: 'Tulip Lawn + Mandap Hall', eventTypes: ['wedding'], ratePaise: rupeesToPaise(175_000) },
-  {
-    venue: 'Imperial',
-    eventTypes: ['mahila_sangeet', 'engagement'],
-    ratePaise: rupeesToPaise(75_000),
-  },
-  {
-    venue: 'Kohinoor',
-    eventTypes: ['mahila_sangeet', 'engagement'],
-    ratePaise: rupeesToPaise(55_000),
-  },
-  { bundle: 'Imperial + Kohinoor', eventTypes: ['wedding'], ratePaise: rupeesToPaise(151_000) },
-  { venue: 'Saffron Hall & Lawn', eventTypes: ['wedding'], ratePaise: rupeesToPaise(55_000) },
+  { venue: 'Tulip Lawn + Mandap Hall', ratePaise: rupeesToPaise(175_000) },
+  { venue: 'Imperial', ratePaise: rupeesToPaise(75_000) },
+  { venue: 'Kohinoor', ratePaise: rupeesToPaise(55_000) },
+  { bundle: 'Imperial + Kohinoor', ratePaise: rupeesToPaise(151_000) },
+  { venue: 'Saffron Hall & Lawn', ratePaise: rupeesToPaise(55_000) },
 
   // --- Dipali Grand + Regency A-block (proposal p. 3) ---
-  { venue: 'Lotus Lawn', eventTypes: ['wedding'], ratePaise: rupeesToPaise(175_000) },
-  {
-    venue: 'Signature',
-    eventTypes: ['mahila_sangeet', 'engagement', 'wedding'],
-    ratePaise: rupeesToPaise(200_000),
-  },
-  { bundle: 'Lotus + Signature', eventTypes: ['wedding'], ratePaise: rupeesToPaise(500_000) },
+  { venue: 'Lotus Lawn', ratePaise: rupeesToPaise(175_000) },
+  { venue: 'Signature', ratePaise: rupeesToPaise(200_000) },
+  { bundle: 'Lotus + Signature', ratePaise: rupeesToPaise(500_000) },
 ]
 
 export const LODGING_UNITS = ['Palace', 'Regency', 'Grand / Regency A-block'] as const
@@ -216,6 +201,9 @@ export const ROLES = [
   'maintenance',
   'higher_authority',
   'auditor',
+  // Added 19 Jul 2026 (client): prices "chef delicacy" special requests — a guest asking for
+  // something off-menu (sushi, say). The Chef sets the per-plate charge; nobody else can.
+  'chef',
 ] as const
 export type RoleName = (typeof ROLES)[number]
 
@@ -235,16 +223,17 @@ export type RoleName = (typeof ROLES)[number]
 type Grant = 'view' | 'edit' | 'full' | 'none'
 
 const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
-  bookings:    { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'view', maintenance: 'none', higher_authority: 'view', auditor: 'full' },
-  calendar:    { booking_manager: 'view', banquet_manager: 'edit', lodge_manager: 'view', maintenance: 'none', higher_authority: 'view', auditor: 'full' },
-  menus:       { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full' },
-  menu_master: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full' },
-  rooms:       { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full' },
-  maintenance: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full' },
-  approvals:   { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'edit', auditor: 'full' },
-  billing:     { booking_manager: 'none', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full' },
-  roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full' },
-  audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full' },
+  bookings:    { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'view', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  calendar:    { booking_manager: 'view', banquet_manager: 'edit', lodge_manager: 'view', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'view' },
+  // The Chef reads menus to price a delicacy request, but never edits a guest's menu.
+  menus:       { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
+  menu_master: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
+  rooms:       { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  maintenance: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  approvals:   { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  billing:     { booking_manager: 'none', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
 }
 
 const GRANT_ACTIONS: Record<Grant, string[]> = {
@@ -289,6 +278,7 @@ export const USERS: UserSeed[] = [
   { fullName: 'Banquet Manager 2', mobile: '9000000013', role: 'banquet_manager' },
   { fullName: 'Banquet Manager 3', mobile: '9000000014', role: 'banquet_manager' },
   { fullName: 'Maintenance Lead', mobile: '9000000015', role: 'maintenance' },
+  { fullName: 'Head Chef', mobile: '9000000016', role: 'chef' },
 ]
 
 export const SETTINGS: { key: string; value: string }[] = [
