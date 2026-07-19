@@ -51,7 +51,7 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
       {canCreate && (
         <div className="flex justify-end">
           <Link href="/bookings/new" className={buttonVariants()}>
-            New booking
+            New proposal
           </Link>
         </div>
       )}
@@ -75,7 +75,7 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
             ) : events.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={6} className="text-muted-foreground">
-                  No bookings yet.{canCreate ? ' Start one with “New booking”.' : ''}
+                  No proposals yet.{canCreate ? ' Start one with “New proposal”.' : ''}
                 </TableCell>
               </TableRow>
             ) : (

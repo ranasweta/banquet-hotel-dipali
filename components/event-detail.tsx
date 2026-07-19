@@ -9,7 +9,7 @@ import { formatPaise } from '@/lib/money'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
-import { MenuPicker, type CatalogTier } from '@/components/menu-picker'
+import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-picker'
 import { EventRooms } from '@/components/event-rooms'
 import { EventBilling } from '@/components/event-billing'
 import { EventMaintenance } from '@/components/event-maintenance'
@@ -80,11 +80,15 @@ export function EventDetailView({
 }) {
   const [event, setEvent] = useState(initial)
   const [tiers, setTiers] = useState<CatalogTier[] | null>(null)
+  const [pools, setPools] = useState<MenuPool[]>([])
 
   useEffect(() => {
     if (!canViewMenus) return
-    api<{ tiers: CatalogTier[] }>('/menu/catalog')
-      .then((r) => setTiers(r.tiers))
+    api<{ tiers: CatalogTier[]; pools: MenuPool[] }>('/menu/catalog')
+      .then((r) => {
+        setTiers(r.tiers)
+        setPools(r.pools ?? [])
+      })
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load menu catalog'))
   }, [canViewMenus])
 
@@ -219,6 +223,7 @@ export function EventDetailView({
                   <MenuPicker
                     subEventId={s.id}
                     tiers={tiers}
+                    pools={pools}
                     canEdit={canEditMenus}
                     onChanged={refreshTotal}
                   />

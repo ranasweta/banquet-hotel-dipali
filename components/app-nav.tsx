@@ -11,10 +11,11 @@ type Perm = { module: string; action: string }
 
 const NAV: { href: string; label: string; module?: string }[] = [
   { href: '/', label: 'Dashboard' },
-  { href: '/bookings', label: 'Bookings', module: 'bookings' },
+  { href: '/bookings', label: 'Proposal', module: 'bookings' },
   { href: '/calendar', label: 'Calendar', module: 'calendar' },
   { href: '/day-sheet', label: 'Day sheet', module: 'calendar' },
   { href: '/rooms', label: 'Rooms', module: 'rooms' },
+  { href: '/chef', label: 'Chef requests', module: 'menus' },
   { href: '/approvals', label: 'Approvals', module: 'approvals' },
   { href: '/change-requests', label: 'Change requests', module: 'calendar' },
   { href: '/reports', label: 'Reports', module: 'audit' },
@@ -34,6 +35,13 @@ export function AppNav({
 
   const canView = (module?: string) =>
     !module || permissions.some((p) => p.module === module && p.action === 'view')
+  const canCreate = (module: string) =>
+    permissions.some((p) => p.module === module && p.action === 'create_edit')
+
+  // "Proposal" opens the date/time-first new-proposal flow for users who can create one;
+  // view-only roles land on the proposals list instead.
+  const resolveHref = (item: { href: string; module?: string }) =>
+    item.href === '/bookings' && canCreate('bookings') ? '/bookings/new' : item.href
 
   async function logout() {
     await api('/auth/logout', { method: 'POST' })
@@ -57,7 +65,7 @@ export function AppNav({
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={resolveHref(item)}
               className={cn(
                 'block rounded-md px-3 py-2 text-sm transition-colors',
                 active ? 'bg-primary text-primary-foreground' : 'hover:bg-muted',

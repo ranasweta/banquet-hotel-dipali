@@ -9,9 +9,10 @@ export default async function BookingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Bookings</h1>
+        <h1 className="text-2xl font-semibold">Proposals</h1>
         <p className="text-muted-foreground">
-          Enquiries and confirmed events. Start a new booking to walk through the five-step wizard.
+          Open enquiries and confirmed events. Start a new proposal to pick a date &amp; time,
+          then only the free venues.
         </p>
       </div>
       <BookingsList canCreate={canCreate} />

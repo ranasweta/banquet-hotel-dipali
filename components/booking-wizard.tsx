@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, Loader2, Trash2 } from 'lucide-react'
+import { Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, rupeesToPaise } from '@/lib/money'
@@ -17,12 +17,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { AadhaarCapture } from '@/components/aadhaar-capture'
 import { cn } from '@/lib/utils'
 
 type EventType = { code: string; displayName: string; contactNumbers: number; isWedding: boolean }
 type Venue = { id: string; name: string; kind: string; propertyName: string; capacityMin: number; capacityMax: number }
 type Bundle = { id: string; name: string; members: string }
-type Options = { eventTypes: EventType[]; venues: Venue[]; bundles: Bundle[]; roomTypes: string[] }
+type Options = {
+  eventTypes: EventType[]
+  venues: Venue[]
+  bundles: Bundle[]
+  roomTypes: string[]
+  roomRates: { roomType: string; rackRatePaise: number }[]
+}
+type Tier = { id: string; name: string; baseRatePaise: number }
 
 type SubEvent = {
   id: string
@@ -42,44 +50,52 @@ type Quote = {
   missing: { subEventId: string; name: string }[]
 }
 
-const STEPS = ['Guest & event', 'KYC', 'Functions', 'Rooms', 'Review & confirm']
+// Dates & event first, then who the guest is (KYC), then the functions with their menus.
+const STEPS = ['Date & event', 'KYC', 'Functions & menu', 'Rooms', 'Review & confirm']
 
 export function BookingWizard() {
   const router = useRouter()
   const [step, setStep] = useState(0)
   const [options, setOptions] = useState<Options | null>(null)
+  const [tiers, setTiers] = useState<Tier[]>([])
   const [eventId, setEventId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  // Step 1
+  // Step 1 — dates & event
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
   const [eventType, setEventType] = useState('')
   const [guestName, setGuestName] = useState('')
-  const [contacts, setContacts] = useState<string[]>([''])
 
-  // Step 2
+  // Step 2 — KYC
+  const [contacts, setContacts] = useState<string[]>([''])
   const [docs, setDocs] = useState<{ aadhaar_front?: boolean; aadhaar_back?: boolean }>({})
 
-  // Step 3
+  // Step 3 — functions & menu
   const [subEvents, setSubEvents] = useState<SubEvent[]>([])
+  const [menuBySub, setMenuBySub] = useState<Record<string, { tierName: string; perPlatePaise: number }>>({})
 
-  // Step 4
+  // Step 4 — rooms
   const [rooms, setRooms] = useState<RoomReq[]>([])
 
-  // Step 5
+  // Step 5 — review
   const [quote, setQuote] = useState<Quote | null>(null)
 
   useEffect(() => {
     api<Options>('/booking-options')
       .then(setOptions)
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load options'))
+    api<{ tiers: Tier[] }>('/menu/catalog')
+      .then((r) => setTiers(r.tiers))
+      .catch(() => setTiers([]))
   }, [])
 
   const selectedType = options?.eventTypes.find((t) => t.code === eventType)
+  const requiredContacts = selectedType?.contactNumbers ?? 1
 
   // Keep the contact fields in step with the event type's required count.
   useEffect(() => {
     if (!selectedType) return
-    // Sync the number of contact fields to the event type's required count.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setContacts((prev) => {
       const next = [...prev]
@@ -89,28 +105,25 @@ export function BookingWizard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventType])
 
-  const lawnWedding = useMemo(
-    () =>
-      selectedType?.isWedding &&
-      subEvents.some((s) => {
-        const v = options?.venues.find((x) => x.id === s.venueId)
-        return v?.kind === 'lawn'
-      }),
-    [selectedType, subEvents, options],
-  )
-
-  async function refreshSubEvents(id: string) {
+  async function refreshFunctions(id: string) {
     const { event } = await api<{ event: { subEvents: SubEvent[] } }>(`/events/${id}`)
     setSubEvents(event.subEvents)
+    void loadQuote(id)
   }
 
-  // ---- Step 1: create or update the enquiry ----
-  async function submitStep1() {
+  async function loadQuote(id: string) {
+    try {
+      setQuote(await api<Quote>(`/events/${id}/quote`))
+    } catch {
+      /* the quote only matters from the review step on */
+    }
+  }
+
+  // ---- Step 2: create (or update) the proposal from the dates/event + contacts ----
+  async function saveGuest() {
     const trimmed = contacts.map((c) => c.trim()).filter(Boolean)
-    if (!eventType) return toast.error('Choose an event type')
-    if (!guestName.trim()) return toast.error('Enter the guest name')
-    if (trimmed.length < (selectedType?.contactNumbers ?? 1)) {
-      return toast.error(`${selectedType?.contactNumbers} contact number(s) required for a ${selectedType?.displayName}`)
+    if (trimmed.length < requiredContacts) {
+      return toast.error(`${requiredContacts} contact number${requiredContacts > 1 ? 's are' : ' is'} required for a ${selectedType?.displayName}`)
     }
     setBusy(true)
     try {
@@ -121,13 +134,11 @@ export function BookingWizard() {
           body: JSON.stringify({ guest_name: guestName, event_type: eventType, contacts: contactsPayload }),
         })
         setEventId(event.id)
+        toast.success('Proposal created — now add the Aadhaar images.')
       } else {
-        await api(`/events/${eventId}`, {
-          method: 'PUT',
-          body: JSON.stringify({ guest_name: guestName, contacts: contactsPayload }),
-        })
+        await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, contacts: contactsPayload }) })
+        toast.success('Contacts saved.')
       }
-      setStep(1)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not save')
     } finally {
@@ -148,12 +159,57 @@ export function BookingWizard() {
         throw new Error(body?.error?.message ?? 'Upload failed')
       }
       setDocs((d) => ({ ...d, [kind]: true }))
-      toast.success(`${kind === 'aadhaar_front' ? 'Front' : 'Back'} uploaded`)
+      toast.success(`${kind === 'aadhaar_front' ? 'Front' : 'Back'} saved`)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Upload failed')
     } finally {
       setBusy(false)
     }
+  }
+
+  // ---- Step 3: add / remove a function, with its menu tier ----
+  async function addFunction(spec: {
+    name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; note: string; tierId: string
+  }) {
+    if (!eventId) return
+    const [kind, vid] = spec.target.split(':')
+    const { subEvent } = await api<{ subEvent: { id: string } }>(`/events/${eventId}/sub-events`, {
+      method: 'POST',
+      body: JSON.stringify({
+        name: spec.name,
+        event_date: spec.eventDate,
+        start_time: spec.startTime,
+        end_time: spec.endTime,
+        [kind === 'bundle' ? 'bundle_id' : 'venue_id']: vid,
+        pax: spec.pax,
+        pax_override_note: spec.note || undefined,
+      }),
+    })
+    // Tier now, dishes later: saving with no selections keeps the menu incomplete (FR-3.2).
+    if (spec.tierId) {
+      try {
+        await api(`/sub-events/${subEvent.id}/menu`, {
+          method: 'PUT',
+          body: JSON.stringify({ tier_id: spec.tierId, is_tentative: true, selections: {} }),
+        })
+        const tier = tiers.find((t) => t.id === spec.tierId)
+        if (tier) setMenuBySub((m) => ({ ...m, [subEvent.id]: { tierName: tier.name, perPlatePaise: tier.baseRatePaise } }))
+      } catch (e) {
+        toast.error(e instanceof Error ? `Function added, but the menu didn't save: ${e.message}` : 'Menu did not save')
+      }
+    }
+    await refreshFunctions(eventId)
+  }
+
+  async function removeFunction(id: string) {
+    if (!eventId) return
+    await api(`/sub-events/${id}`, { method: 'DELETE' }).catch((e) => toast.error(e.message))
+    setMenuBySub((m) => {
+      const next = { ...m }
+      delete next[id]
+      return next
+    })
+    await refreshFunctions(eventId)
   }
 
   async function saveRooms(next: number) {
@@ -165,7 +221,7 @@ export function BookingWizard() {
         body: JSON.stringify({ requirements: rooms.filter((r) => r.room_type && r.count > 0) }),
       })
       setStep(next)
-      if (next === 4) await loadQuote()
+      if (next === 4) await loadQuote(eventId)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not save rooms')
     } finally {
@@ -173,42 +229,72 @@ export function BookingWizard() {
     }
   }
 
-  async function loadQuote() {
-    if (!eventId) return
-    try {
-      setQuote(await api<Quote>(`/events/${eventId}/quote`))
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not price the proposal')
-    }
-  }
-
   if (!options) return <p className="text-sm text-muted-foreground">Loading…</p>
+
+  // The proposal only distinguishes Wedding from everything else ("Others" → the `other`
+  // type): Wedding drives the 3-contact rule and the silent food surcharge. The event's
+  // name never affects price.
+  const proposalTypes = (['wedding', 'other'] as const)
+    .map((code) => options.eventTypes.find((t) => t.code === code))
+    .filter((t): t is EventType => Boolean(t))
+    .map((t) => ({ value: t.code, label: t.code === 'other' ? 'Others' : t.displayName }))
+
+  const datesOk = Boolean(fromDate && toDate && toDate >= fromDate)
+  const foodTotalPaise = subEvents.reduce((sum, s) => sum + (menuBySub[s.id]?.perPlatePaise ?? 0) * s.pax, 0)
+
+  // Lodging estimate: rooms × nights × the type's rack rate. The exact charge is settled when
+  // the Lodge Manager allocates real rooms, but the proposal has to show a number.
+  const roomsTotalPaise = rooms.reduce((sum, r) => {
+    const rate = options.roomRates?.find((x) => x.roomType === r.room_type)?.rackRatePaise ?? 0
+    const nights = nightsBetween(r.check_in, r.check_out)
+    return sum + rate * Math.max(0, r.count) * nights
+  }, 0)
+  const grandTotalPaise = (quote?.totalPaise ?? 0) + foodTotalPaise + roomsTotalPaise
 
   return (
     <div className="space-y-6">
       <Stepper step={step} />
 
       {step === 0 && (
-        <StepCard title="Guest & event">
+        <StepCard title="Date & event">
+          <p className="text-sm text-muted-foreground">
+            When does the event run, and is it a wedding? Every function you add later must fall
+            inside these dates.
+          </p>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Event type">
-              <Select items={options.eventTypes.map((t) => ({ value: t.code, label: t.displayName }))} value={eventType} onValueChange={(v) => setEventType(v ?? '')}>
-                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+            <Field label="From date">
+              <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+            </Field>
+            <Field label="To date">
+              <Input type="date" min={fromDate || undefined} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            </Field>
+          </div>
+          {fromDate && toDate && toDate < fromDate && (
+            <p className="text-sm text-destructive">The To date can&apos;t be before the From date.</p>
+          )}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Event">
+              <Select items={proposalTypes} value={eventType} onValueChange={(v) => setEventType(v ?? '')}>
+                <SelectTrigger><SelectValue placeholder="Wedding or Others" /></SelectTrigger>
                 <SelectContent>
-                  {options.eventTypes.map((t) => (
-                    <SelectItem key={t.code} value={t.code}>{t.displayName}</SelectItem>
+                  {proposalTypes.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </Field>
             <Field label="Guest name">
-              <Input value={guestName} onChange={(e) => setGuestName(e.target.value)} />
+              <Input value={guestName} onChange={(e) => setGuestName(e.target.value)} placeholder="Any name — it doesn't affect pricing" />
             </Field>
           </div>
+          <Nav onNext={() => setStep(1)} busy={busy} nextDisabled={!datesOk || !eventType || !guestName.trim()} />
+        </StepCard>
+      )}
+
+      {step === 1 && (
+        <StepCard title="KYC">
           <div className="space-y-2">
-            <Label>
-              Contact numbers{selectedType ? ` (${selectedType.contactNumbers} required)` : ''}
-            </Label>
+            <Label>Contact numbers{selectedType ? ` (${requiredContacts} required)` : ''}</Label>
             {contacts.map((c, i) => (
               <div key={i} className="flex gap-2">
                 <Input
@@ -223,60 +309,79 @@ export function BookingWizard() {
                 )}
               </div>
             ))}
-            <Button variant="outline" size="sm" onClick={() => setContacts((prev) => [...prev, ''])}>
-              Add contact
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setContacts((prev) => [...prev, ''])}>Add contact</Button>
+              <Button size="sm" onClick={saveGuest} disabled={busy}>
+                {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
+                {eventId ? 'Save contacts' : 'Save & start proposal'}
+              </Button>
+            </div>
           </div>
-          <Nav onNext={submitStep1} busy={busy} nextLabel={eventId ? 'Save & continue' : 'Create enquiry'} />
-        </StepCard>
-      )}
 
-      {step === 1 && (
-        <StepCard title="KYC — Aadhaar images">
-          <p className="text-sm text-muted-foreground">
-            Front and back are required to confirm (FR-1.10). Stored encrypted; visible only to
-            staff with Bookings access.
-          </p>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {(['aadhaar_front', 'aadhaar_back'] as const).map((kind) => (
-              <div key={kind} className="rounded-lg border p-4">
-                <div className="mb-2 flex items-center gap-2 font-medium">
-                  {docs[kind] && <Check className="size-4 text-emerald-600" />}
-                  {kind === 'aadhaar_front' ? 'Aadhaar front' : 'Aadhaar back'}
-                </div>
-                <Input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(e) => e.target.files?.[0] && uploadDoc(kind, e.target.files[0])}
-                />
-              </div>
-            ))}
+          <div>
+            <Label className="mb-2 block">Aadhaar — front &amp; back</Label>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Capture the card live with the camera, or upload an image. Required to confirm
+              (FR-1.10); stored encrypted.
+              {!eventId && ' Save the contacts first to enable this.'}
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <AadhaarCapture label="Aadhaar front" done={Boolean(docs.aadhaar_front)} disabled={!eventId} onFile={(f) => uploadDoc('aadhaar_front', f)} />
+              <AadhaarCapture label="Aadhaar back" done={Boolean(docs.aadhaar_back)} disabled={!eventId} onFile={(f) => uploadDoc('aadhaar_back', f)} />
+            </div>
           </div>
-          <Nav onBack={() => setStep(0)} onNext={() => setStep(2)} busy={busy} nextDisabled={!docs.aadhaar_front || !docs.aadhaar_back} />
+
+          <Nav onBack={() => setStep(0)} onNext={() => setStep(2)} busy={busy} nextDisabled={!eventId || !docs.aadhaar_front || !docs.aadhaar_back} />
         </StepCard>
       )}
 
       {step === 2 && eventId && (
-        <StepCard title="Functions">
-          <SubEventEditor
-            eventId={eventId}
-            options={options}
-            subEvents={subEvents}
-            onChange={() => refreshSubEvents(eventId)}
+        <StepCard title="Functions & menu">
+          <FunctionsEditor
+            venues={options.venues}
+            tiers={tiers}
+            fromDate={fromDate}
+            toDate={toDate}
+            rows={subEvents.map((s) => ({
+              id: s.id,
+              name: s.name,
+              eventDate: s.eventDate,
+              startTime: s.startTime.slice(0, 5),
+              endTime: s.endTime.slice(0, 5),
+              venueLabel: s.bundleId
+                ? options.bundles.find((b) => b.id === s.bundleId)?.name ?? 'Bundle'
+                : options.venues.find((v) => v.id === s.venueId)?.name ?? 'Venue',
+              pax: s.pax,
+              menu: menuBySub[s.id],
+            }))}
+            onAdd={addFunction}
+            onRemove={removeFunction}
           />
+          {subEvents.length > 0 && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <div className="flex justify-between"><span className="text-muted-foreground">Venue total</span><span className="tabular-nums">{quote ? formatPaise(quote.totalPaise) : '—'}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Food (pax × per plate)</span><span className="tabular-nums">{formatPaise(foodTotalPaise)}</span></div>
+              {roomsTotalPaise > 0 && (
+                <div className="flex justify-between"><span className="text-muted-foreground">Rooms (estimate)</span><span className="tabular-nums">{formatPaise(roomsTotalPaise)}</span></div>
+              )}
+              <div className="mt-1 flex justify-between border-t pt-1 font-medium"><span>Running total</span><span className="tabular-nums">{formatPaise(grandTotalPaise)}</span></div>
+            </div>
+          )}
           <Nav onBack={() => setStep(1)} onNext={() => setStep(3)} busy={busy} nextDisabled={subEvents.length === 0} />
         </StepCard>
       )}
 
       {step === 3 && (
         <StepCard title="Room requirements">
-          {lawnWedding && (
-            <p className="rounded-md border bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-              Lawn wedding — Palace is the preferred lodging unit (BR-L1). The Lodge Manager
-              allocates specific rooms later.
-            </p>
-          )}
           <RoomEditor rooms={rooms} setRooms={setRooms} roomTypes={options.roomTypes} />
+          {rooms.length > 0 && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Rooms (rack-rate estimate)</span>
+                <span className="tabular-nums">{formatPaise(roomsTotalPaise)}</span>
+              </div>
+            </div>
+          )}
           <Nav onBack={() => setStep(2)} onNext={() => saveRooms(4)} busy={busy} nextLabel="Save & review" />
         </StepCard>
       )}
@@ -285,6 +390,8 @@ export function BookingWizard() {
         <ReviewStep
           eventId={eventId}
           quote={quote}
+          foodTotalPaise={foodTotalPaise}
+          roomsTotalPaise={roomsTotalPaise}
           onBack={() => setStep(3)}
           onConfirmed={(code) => {
             toast.success(`Confirmed — ${code}`)
@@ -319,9 +426,7 @@ function Stepper({ step }: { step: number }) {
 function StepCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-      </CardHeader>
+      <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
       <CardContent className="space-y-5">{children}</CardContent>
     </Card>
   )
@@ -360,39 +465,53 @@ function Nav({
   )
 }
 
-function SubEventEditor({
-  eventId,
-  options,
-  subEvents,
-  onChange,
+type FunctionRow = {
+  id: string
+  name: string
+  eventDate: string
+  startTime: string
+  endTime: string
+  venueLabel: string
+  pax: number
+  menu?: { tierName: string; perPlatePaise: number }
+}
+
+function FunctionsEditor({
+  venues,
+  tiers,
+  fromDate,
+  toDate,
+  rows,
+  onAdd,
+  onRemove,
 }: {
-  eventId: string
-  options: Options
-  subEvents: SubEvent[]
-  onChange: () => void
+  venues: Venue[]
+  tiers: Tier[]
+  fromDate: string
+  toDate: string
+  rows: FunctionRow[]
+  onAdd: (spec: { name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; note: string; tierId: string }) => Promise<void>
+  onRemove: (id: string) => Promise<void>
 }) {
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
-  const [target, setTarget] = useState('') // venue:<id> or bundle:<id>
+  const [target, setTarget] = useState('')
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [pax, setPax] = useState('')
   const [note, setNote] = useState('')
+  const [tierId, setTierId] = useState('')
   const [busy, setBusy] = useState(false)
   const [freeVenues, setFreeVenues] = useState<{ value: string; label: string }[] | null>(null)
   const [hiddenCount, setHiddenCount] = useState(0)
   const [checking, setChecking] = useState(false)
 
-  const venueName = (s: SubEvent) =>
-    s.bundleId
-      ? options.bundles.find((b) => b.id === s.bundleId)?.name ?? 'Bundle'
-      : options.venues.find((v) => v.id === s.venueId)?.name ?? 'Venue'
-
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
-  const windowSet = Boolean(date && HHMM.test(start) && HHMM.test(end) && start !== end)
+  const inRange = Boolean(date && (!fromDate || date >= fromDate) && (!toDate || date <= toDate))
+  const windowSet = Boolean(date && inRange && HHMM.test(start) && HHMM.test(end) && start !== end)
 
-  // Once the date + time window is set, load only the venues (and bundles) free for it —
-  // anything booked over an overlapping window is hidden, so it can't be picked (BR-C1).
+  // Date + time decide which venues are on offer — anything booked over an overlapping
+  // window is hidden so it can't be picked (BR-C1).
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!windowSet) { setFreeVenues(null); setHiddenCount(0); return }
@@ -409,7 +528,7 @@ function SubEventEditor({
         ]
         setFreeVenues(items)
         setHiddenCount(r.venues.filter((v) => !v.available).length + r.bundles.filter((b) => !b.available).length)
-        setTarget((t) => (items.some((i) => i.value === t) ? t : '')) // clear a now-unavailable pick
+        setTarget((t) => (items.some((i) => i.value === t) ? t : ''))
       })
       .catch(() => { if (active) { setFreeVenues([]); setHiddenCount(0) } })
       .finally(() => { if (active) setChecking(false) })
@@ -418,24 +537,19 @@ function SubEventEditor({
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function add() {
-    const [kind, id] = target.split(':')
     if (!name || !windowSet || !target || !pax) return toast.error('Set the date, time, a free venue, a name and pax')
+    if (!tierId) return toast.error('Choose a menu for this function')
+    const [kind, id] = target.split(':')
+    if (kind === 'venue') {
+      const v = venues.find((x) => x.id === id)
+      if (v && (Number(pax) < v.capacityMin || Number(pax) > v.capacityMax) && !note.trim()) {
+        return toast.error(`Pax ${pax} is outside ${v.name}'s range (${v.capacityMin}–${v.capacityMax}). Add an override note to proceed.`)
+      }
+    }
     setBusy(true)
     try {
-      await api(`/events/${eventId}/sub-events`, {
-        method: 'POST',
-        body: JSON.stringify({
-          name,
-          event_date: date,
-          start_time: start,
-          end_time: end,
-          [kind === 'bundle' ? 'bundle_id' : 'venue_id']: id,
-          pax: Number(pax),
-          pax_override_note: note || undefined,
-        }),
-      })
-      setName(''); setDate(''); setTarget(''); setStart(''); setEnd(''); setPax(''); setNote(''); setFreeVenues(null)
-      onChange()
+      await onAdd({ name, eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), note, tierId })
+      setName(''); setDate(''); setTarget(''); setStart(''); setEnd(''); setPax(''); setNote(''); setTierId(''); setFreeVenues(null)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not add function')
     } finally {
@@ -443,26 +557,27 @@ function SubEventEditor({
     }
   }
 
-  async function remove(id: string) {
-    await api(`/sub-events/${id}`, { method: 'DELETE' }).catch((e) => toast.error(e.message))
-    onChange()
-  }
-
   const venueItems = freeVenues ?? []
+  const tierItems = tiers.map((t) => ({ value: t.id, label: `${t.name} — ${formatPaise(t.baseRatePaise)}/plate` }))
 
   return (
     <div className="space-y-4">
-      {subEvents.length > 0 && (
+      {rows.length > 0 && (
         <ul className="divide-y rounded-lg border">
-          {subEvents.map((s) => (
-            <li key={s.id} className="flex items-center justify-between px-3 py-2 text-sm">
-              <div>
-                <span className="font-medium">{s.name}</span>{' '}
-                <span className="text-muted-foreground tabular-nums">
-                  {s.eventDate} · {s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)} · {venueName(s)} · {s.pax} pax
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+              <div className="min-w-0">
+                <span className="font-medium">{r.name}</span>{' '}
+                <span className="tabular-nums text-muted-foreground">
+                  {r.eventDate} · {r.startTime}–{r.endTime} · {r.venueLabel} · {r.pax} pax
                 </span>
+                <div className="text-xs text-muted-foreground">
+                  {r.menu
+                    ? `${r.menu.tierName} · ${formatPaise(r.menu.perPlatePaise)}/plate · food ${formatPaise(r.menu.perPlatePaise * r.pax)}`
+                    : 'No menu chosen'}
+                </div>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => remove(s.id)}>
+              <Button variant="ghost" size="icon" onClick={() => onRemove(r.id)}>
                 <Trash2 className="size-4" />
               </Button>
             </li>
@@ -471,10 +586,9 @@ function SubEventEditor({
       )}
 
       <div className="rounded-lg border p-4">
-        {/* When first — date + time drive which venues are offered. */}
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Date">
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+            <Input type="date" min={fromDate || undefined} max={toDate || undefined} value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
           <Field label="Start">
             <Input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
@@ -483,8 +597,10 @@ function SubEventEditor({
             <Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
           </Field>
         </div>
+        {date && !inRange && (
+          <p className="mt-2 text-xs text-destructive">That date is outside {fromDate} → {toDate}.</p>
+        )}
 
-        {/* Then the venue — only the ones free for that window. */}
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
           <Field label="Venue">
             <Select items={venueItems} value={target} onValueChange={(v) => setTarget(v ?? '')}>
@@ -506,6 +622,19 @@ function SubEventEditor({
           </Field>
         </div>
 
+        <div className="mt-3">
+          <Field label="Menu (per plate)">
+            <Select items={tierItems} value={tierId} onValueChange={(v) => setTierId(v ?? '')}>
+              <SelectTrigger><SelectValue placeholder="Choose a menu — dishes are picked later" /></SelectTrigger>
+              <SelectContent>
+                {tierItems.map((t) => (
+                  <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+
         {windowSet && !checking && (
           <p className="mt-2 text-xs text-muted-foreground">
             {venueItems.length === 0
@@ -517,7 +646,7 @@ function SubEventEditor({
         <div className="mt-3">
           <Input placeholder="Pax override note (only if outside venue capacity)" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
-        <Button className="mt-3" onClick={add} disabled={busy || !windowSet || !target}>Add function</Button>
+        <Button className="mt-3" onClick={add} disabled={busy || !windowSet || !target || !tierId}>Add function</Button>
       </div>
     </div>
   )
@@ -555,14 +684,27 @@ function RoomEditor({
   )
 }
 
+/** Whole nights between two YYYY-MM-DD dates (0 if either is missing or the range is invalid). */
+function nightsBetween(checkIn: string, checkOut: string): number {
+  if (!checkIn || !checkOut) return 0
+  const [ay, am, ad] = checkIn.split('-').map(Number)
+  const [by, bm, bd] = checkOut.split('-').map(Number)
+  const days = Math.round((new Date(by, bm - 1, bd).getTime() - new Date(ay, am - 1, ad).getTime()) / 86_400_000)
+  return days > 0 ? days : 0
+}
+
 function ReviewStep({
   eventId,
   quote,
+  foodTotalPaise,
+  roomsTotalPaise,
   onBack,
   onConfirmed,
 }: {
   eventId: string
   quote: Quote | null
+  foodTotalPaise: number
+  roomsTotalPaise: number
   onBack: () => void
   onConfirmed: (code: string) => void
 }) {
@@ -587,12 +729,7 @@ function ReviewStep({
       const { event } = await api<{ event: { code: string } }>(`/events/${eventId}/confirm`, {
         method: 'POST',
         body: JSON.stringify({
-          advance: {
-            amount_paise: rupeesToPaise(Number(amount)),
-            mode,
-            receipt_no: receipt,
-            received_on: receivedOn,
-          },
+          advance: { amount_paise: rupeesToPaise(Number(amount)), mode, receipt_no: receipt, received_on: receivedOn },
         }),
       })
       onConfirmed(event.code)
@@ -626,17 +763,33 @@ function ReviewStep({
                     </td>
                   </tr>
                 ))}
-                <tr className="font-medium">
-                  <td className="px-3 py-2">Proposal total (venue)</td>
+                <tr>
+                  <td className="px-3 py-2 text-muted-foreground">Venue total</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.totalPaise)}</td>
                 </tr>
+                <tr>
+                  <td className="px-3 py-2 text-muted-foreground">Food (pax × per plate)</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(foodTotalPaise)}</td>
+                </tr>
+                <tr>
+                  <td className="px-3 py-2 text-muted-foreground">Rooms (rack-rate estimate)</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(roomsTotalPaise)}</td>
+                </tr>
+                <tr className="font-medium">
+                  <td className="px-3 py-2">Proposal total</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.totalPaise + foodTotalPaise + roomsTotalPaise)}</td>
+                </tr>
                 <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">Advance required (25%)</td>
+                  <td className="px-3 py-2">Advance required (25% of venue)</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.advanceRequiredPaise)}</td>
                 </tr>
               </tbody>
             </table>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Rooms are a rack-rate estimate until the Lodge Manager allocates them; maintenance is
+            added to the final bill once logged.
+          </p>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Advance received (₹)">
@@ -657,10 +810,6 @@ function ReviewStep({
               <Input type="date" value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
             </Field>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Confirming records the advance and blocks every venue slot atomically. If a slot was
-            taken since you last checked, confirmation fails and nothing is booked.
-          </p>
         </>
       )}
 
@@ -668,7 +817,7 @@ function ReviewStep({
         <Button variant="outline" onClick={onBack} disabled={busy}>Back</Button>
         <Button onClick={confirm} disabled={busy || !quote || quote.missing.length > 0}>
           {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
-          Confirm booking
+          Confirm proposal
         </Button>
       </div>
     </StepCard>
