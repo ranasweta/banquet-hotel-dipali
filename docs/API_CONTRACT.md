@@ -31,6 +31,8 @@ races return 409 with a human-readable message.
 - `POST /events/:id/confirm` — THE transaction: re-validates all windows, checks
   advance ≥ 25%, inserts venue_bookings atomically → 409 on any race
 - `POST /events/:id/cancel` { reason }
+- `GET  /events/:id/proforma` — a live proforma estimate (same bill math, nothing persisted)
+  for a confirmed-but-unlocked event; gated on `bookings` view so the Booking Manager can quote
 
 ## Calendar (module: calendar)
 - `GET /calendar?from=&to=` — venues × dates board; banquet manager capped to

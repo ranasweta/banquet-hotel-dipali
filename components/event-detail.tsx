@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { CalendarDays, MapPin, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
@@ -124,17 +125,24 @@ export function EventDetailView({
             )}
           </p>
         </div>
-        <Card className="min-w-52">
-          <CardContent className="py-3">
-            <div className="text-xs text-muted-foreground">Proposal total</div>
-            <div className="text-xl font-semibold tabular-nums">{formatPaise(event.proposalTotalPaise)}</div>
-            {advancePaid > 0 && (
-              <div className="text-xs text-muted-foreground tabular-nums">
-                Advance recorded: {formatPaise(advancePaid)}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <div className="flex flex-col items-end gap-1.5">
+          <Card className="min-w-52">
+            <CardContent className="py-3">
+              <div className="text-xs text-muted-foreground">Proposal total</div>
+              <div className="text-xl font-semibold tabular-nums">{formatPaise(event.proposalTotalPaise)}</div>
+              {advancePaid > 0 && (
+                <div className="text-xs text-muted-foreground tabular-nums">
+                  Advance recorded: {formatPaise(advancePaid)}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+          {['confirmed', 'in_progress', 'completed'].includes(event.status) && (
+            <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
+              Proforma estimate →
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* At-a-glance meta */}

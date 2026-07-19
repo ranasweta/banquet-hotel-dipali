@@ -21,17 +21,18 @@ type PrintData = {
 
 const SECTIONS = ['venue', 'food', 'rooms', 'maintenance', 'adjustment'] as const
 
-export function InvoicePrint({ eventId }: { eventId: string }) {
+export function InvoicePrint({ eventId, proforma = false }: { eventId: string; proforma?: boolean }) {
   const [data, setData] = useState<PrintData | null>(null)
 
   useEffect(() => {
-    api<PrintData>(`/events/${eventId}/invoice/print`)
+    api<PrintData>(proforma ? `/events/${eventId}/proforma` : `/events/${eventId}/invoice/print`)
       .then(setData)
-      .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load invoice'))
-  }, [eventId])
+      .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load'))
+  }, [eventId, proforma])
 
-  if (!data) return <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading invoice…</div>
+  if (!data) return <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
   const inv = data.invoice
+  const heading = proforma ? 'PROFORMA / ESTIMATE' : inv.finalised ? 'TAX INVOICE' : 'DRAFT BILL'
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 p-2">
@@ -48,10 +49,16 @@ export function InvoicePrint({ eventId }: { eventId: string }) {
           <div className="text-xs text-muted-foreground">GSTIN: [hotel GSTIN — to be configured]</div>
         </div>
         <div className="text-right">
-          <div className="text-lg font-semibold">{inv.finalised ? 'TAX INVOICE' : 'DRAFT BILL'}</div>
+          <div className="text-lg font-semibold">{heading}</div>
           {inv.invoiceNo && <div className="tabular-nums">{inv.invoiceNo}</div>}
         </div>
       </div>
+
+      {proforma && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+          This is a <strong>provisional estimate</strong>, not a tax invoice. Amounts may change until the event is finalised (locked), and no invoice number has been issued.
+        </div>
+      )}
 
       {/* Guest */}
       <div className="grid grid-cols-2 gap-4 text-sm">

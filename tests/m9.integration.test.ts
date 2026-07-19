@@ -162,6 +162,23 @@ d('invoice reconciliation (FR-7.3) — hand-computed to the paise', () => {
   })
 })
 
+d('proforma estimate (pre-lock)', () => {
+  it('computes the same bill live, without locking or issuing an invoice number', async () => {
+    const { eventId } = await buildLockable()
+    const pf = await invoice.proformaData(eventId)
+    expect(pf.proforma).toBe(true)
+    expect(pf.invoice.invoiceNo).toBeNull()
+    // Same figures as the locked-invoice test — the estimate matches the eventual bill.
+    expect(pf.invoice.grossPaise).toBe(9_300_000)
+    expect(pf.invoice.netPaise).toBe(10_069_000)
+    expect(pf.invoice.balancePaise).toBe(7_569_000)
+    // Nothing was persisted: the event is still Completed and no invoice was drafted.
+    const [e] = await db.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, eventId))
+    expect(e!.status).toBe('completed')
+    expect(await invoice.getInvoice(eventId)).toBeNull()
+  })
+})
+
 d('post-lock immutability + audit (FR-10.x)', () => {
   it('post-lock edits return 409 and the trail records the lock', async () => {
     const { eventId, subId } = await buildLockable()

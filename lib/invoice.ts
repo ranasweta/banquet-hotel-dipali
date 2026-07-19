@@ -209,5 +209,46 @@ export async function invoicePrintData(eventId: string) {
     SELECT s.designation::text AS designation, u.full_name AS "signedBy", s.signed_at AS "signedAt"
     FROM lock_signoffs s JOIN users u ON u.id = s.signed_by WHERE s.event_id = ${eventId}
   `)) as unknown as { designation: string; signedBy: string; signedAt: string }[]
-  return { event, contacts, invoice, signoffs, lockedPlus: LOCKED_PLUS.has(event?.status ?? '') }
+  return { event, contacts, invoice, signoffs, lockedPlus: LOCKED_PLUS.has(event?.status ?? ''), proforma: false }
+}
+
+/**
+ * A live proforma estimate for a not-yet-locked event (a quote before the invoice exists).
+ * Computes the same lines and totals as the real bill from current data, but persists
+ * nothing and assigns no invoice number — the shape matches invoicePrintData so the print
+ * view can render either. Amounts are provisional until the event is locked.
+ */
+export async function proformaData(eventId: string) {
+  const [event] = (await db.execute(sql`
+    SELECT e.code, e.guest_name AS "guestName", e.event_type AS "eventType", e.status::text AS status,
+           e.first_date::text AS "firstDate", e.last_date::text AS "lastDate"
+    FROM events e WHERE e.id = ${eventId}
+  `)) as unknown as { code: string; guestName: string; eventType: string; status: string; firstDate: string | null; lastDate: string | null }[]
+  if (!event) throw notFound('Event not found')
+  if (event.status === 'enquiry') throw badRequest('Confirm the booking to produce an estimate.')
+
+  const specs = await computeBillLines(db, eventId)
+  const gross = specs.reduce((s, l) => s + l.amountPaise, 0)
+  const tax = specs.reduce((s, l) => s + l.taxPaise, 0)
+  const discount = await effectiveDiscountPaise(eventId)
+  const advances = await advancesPaise(db, eventId)
+  const net = gross - discount + tax
+
+  const [tnc] = (await db.execute(sql`SELECT value FROM settings WHERE key = 'terms_and_conditions'`)) as unknown as { value: string }[]
+  const contacts = (await db.execute(sql`SELECT phone, label FROM event_contacts WHERE event_id = ${eventId}`)) as unknown as { phone: string; label: string | null }[]
+
+  const invoice: InvoiceView = {
+    id: '',
+    invoiceNo: null,
+    finalised: false,
+    grossPaise: gross,
+    discountPaise: discount,
+    taxPaise: tax,
+    netPaise: net,
+    advancesPaise: advances,
+    balancePaise: net - advances,
+    tncSnapshot: tnc?.value ?? '',
+    lines: specs.map((l, i) => ({ id: `p${i}`, section: l.section, description: l.description, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
+  }
+  return { event, contacts, invoice, signoffs: [] as { designation: string; signedBy: string; signedAt: string }[], lockedPlus: false, proforma: true }
 }
