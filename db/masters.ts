@@ -8,7 +8,7 @@
  */
 import { rupeesToPaise } from '../lib/money'
 
-export const PROPERTIES = ['Palace', 'Regency', 'Dipali Grand', 'Residency'] as const
+export const PROPERTIES = ['Palace', 'Regency', 'Dipali Grand'] as const
 export type PropertyName = (typeof PROPERTIES)[number]
 
 export type VenueSeed = {
@@ -27,8 +27,10 @@ export const VENUES: VenueSeed[] = [
   { name: 'Imperial', property: 'Regency', kind: 'hall', capacityMin: 250, capacityMax: 400 },
   { name: 'Crystal', property: 'Palace', kind: 'hall', capacityMin: 300, capacityMax: 450 },
   { name: 'Signature', property: 'Dipali Grand', kind: 'hall', capacityMin: 300, capacityMax: 600 },
-  { name: 'Upper Hall', property: 'Residency', kind: 'hall', capacityMin: 1, capacityMax: 50 },
-  { name: 'Utsav Hall', property: 'Regency', kind: 'hall', capacityMin: 1, capacityMax: 50 },
+  // Upper Hall (Residency) and Utsav Hall (Regency) are gone: the 2026 proposal prices
+  // neither, in any table or bundle, and the client's rule is that a venue with no price
+  // is not carried at all (19 Jul 2026). Removing Upper Hall also retires the Residency
+  // property, which existed only to hold it — see SEED_ASSUMPTIONS §C5, now moot.
   {
     name: 'Diamond Hall',
     property: 'Palace',
@@ -102,13 +104,17 @@ export const EVENT_TYPES = [
 export const RATE_EFFECTIVE_FROM = '2026-01-01'
 
 /**
- * Rates exactly as the 2026 proposal prints them, per event type.
+ * Rates exactly as the 2026 proposal prints them — one price per venue, charged whatever
+ * the event is (the proposal's third column is the venue's speciality, not a price).
  *
- * A venue+event-type with no row here has NO rate. That is deliberate and must stay an
- * explicit gate: the wizard blocks confirm and demands an Authority-approved manual
- * rate. Never fall back to zero. Missing on purpose: Upper Hall and Utsav Hall
- * ("package-based"), and any wedding rate for a standalone Imperial or Kohinoor — the
- * proposal prices those two for sangeet/engagement only, and weddings via the bundle.
+ * Every venue offered on its own is priced here. The four that are not — Diamond Hall,
+ * Golden Hall, Gulmohar Lawn, Middle Lawn — are sold ONLY as their bundle (the proposal
+ * prints "DIAMOND & GOLDEN HALL 25,000/-", never the halls apart), so they stay as bundle
+ * members but are never offered standalone; see listVenueAvailability. Anything the
+ * proposal prices nowhere at all is not carried (Upper Hall, Utsav Hall — removed).
+ *
+ * A venue with no row here still has NO rate, and that must stay an explicit gate rather
+ * than a zero: confirm is blocked until an Authority-approved manual rate exists (BR-R1).
  */
 export type RateSeed = { venue?: string; bundle?: string; ratePaise: number }
 

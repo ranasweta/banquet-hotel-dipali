@@ -205,19 +205,22 @@ export async function listVenueAvailability(
   `)) as unknown as { venueId: string }[]
   const busy = new Set(busyRows.map((r) => r.venueId))
 
-  const venues = await db
-    .select({
-      id: schema.venues.id,
-      name: schema.venues.name,
-      kind: schema.venues.kind,
-      propertyName: schema.properties.name,
-      capacityMin: schema.venues.capacityMin,
-      capacityMax: schema.venues.capacityMax,
-    })
-    .from(schema.venues)
-    .innerJoin(schema.properties, eq(schema.properties.id, schema.venues.propertyId))
-    .where(eq(schema.venues.isActive, true))
-    .orderBy(schema.properties.name, schema.venues.name)
+  // Only venues that carry a price of their own are offered on their own. Diamond Hall,
+  // Golden Hall, Gulmohar Lawn and Middle Lawn are priced by the proposal solely as their
+  // bundle, so they stay bundle members (and keep their calendar occupancy) but never appear
+  // as a standalone choice — otherwise a booking manager picks one and dead-ends at confirm
+  // on the missing-rate gate (BR-R1). The bundles themselves are listed below and are priced.
+  const venues = (await db.execute(sql`
+    SELECT v.id, v.name, v.kind, p.name AS "propertyName",
+           v.capacity_min AS "capacityMin", v.capacity_max AS "capacityMax"
+    FROM venues v
+    JOIN properties p ON p.id = v.property_id
+    WHERE v.is_active
+      AND EXISTS (SELECT 1 FROM venue_rate_cards r WHERE r.venue_id = v.id)
+    ORDER BY p.name, v.name
+  `)) as unknown as {
+    id: string; name: string; kind: string; propertyName: string; capacityMin: number; capacityMax: number
+  }[]
 
   const bundleRows = (await db.execute(sql`
     SELECT b.id, b.name,
