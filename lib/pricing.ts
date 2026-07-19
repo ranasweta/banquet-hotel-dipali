@@ -90,7 +90,8 @@ export async function priceProposal(
 /**
  * The food + add-on side of the proposal (M4). Food per sub-event is pax × per-plate rate,
  * where the per-plate rate is the snapshotted (base + wedding surcharge) on the saved menu —
- * never the master, so it survives menu-master edits (BR-M1). Add-ons are qty × rate.
+ * never the master, so it survives menu-master edits (BR-M1) — plus any chef delicacy the Chef
+ * has priced for that function, which is also charged per plate. Add-ons are qty × rate.
  * A sub-event with no saved menu contributes nothing (menus can be deferred; FR-3.2).
  */
 export async function foodAndAddonTotal(
@@ -98,7 +99,11 @@ export async function foodAndAddonTotal(
   e?: Exec,
 ): Promise<{ foodPaise: number; addonPaise: number }> {
   const [food] = (await exec(e).execute(sql`
-    SELECT COALESCE(sum(se.pax::bigint * (m.base_rate_paise + m.surcharge_paise)), 0)::bigint AS total
+    SELECT COALESCE(sum(se.pax::bigint * (
+             m.base_rate_paise + m.surcharge_paise
+             + COALESCE((SELECT sum(c.charge_paise) FROM chef_requests c
+                         WHERE c.sub_event_id = se.id AND c.status = 'priced'), 0)
+           )), 0)::bigint AS total
     FROM sub_event_menus m
     JOIN sub_events se ON se.id = m.sub_event_id
     WHERE se.event_id = ${eventId}

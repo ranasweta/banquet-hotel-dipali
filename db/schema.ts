@@ -727,6 +727,7 @@ export const subEventMenuSelections = pgTable("sub_event_menu_selections", {
 	menuId: uuid("menu_id").notNull(),
 	categoryName: text("category_name").notNull(),
 	itemName: text("item_name").notNull(),
+	note: text(),
 }, (table) => [
 	foreignKey({
 			columns: [table.menuId],
@@ -792,4 +793,37 @@ export const subEventMenuCategories = pgTable("sub_event_menu_categories", {
 	primaryKey({ columns: [table.menuId, table.categoryName], name: "sub_event_menu_categories_pkey"}),
 	check("sub_event_menu_categories_base_pick_check", sql`(base_pick IS NULL) OR (base_pick > 0)`),
 	check("sub_event_menu_categories_check", sql`NOT ((base_pick IS NULL) AND (extra_picks > 0))`),
+]);
+
+// Chef delicacy requests: an off-menu ask the Chef prices per plate. See db/schema.sql.
+export const chefRequests = pgTable("chef_requests", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	subEventId: uuid("sub_event_id").notNull(),
+	description: text().notNull(),
+	status: text().default('pending').notNull(),
+	// bigint paise — the per-plate addition set by the Chef.
+	chargePaise: bigint("charge_paise", { mode: "number" }),
+	remark: text(),
+	requestedBy: uuid("requested_by").notNull(),
+	requestedAt: timestamp("requested_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	pricedBy: uuid("priced_by"),
+	pricedAt: timestamp("priced_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("chef_requests_sub_event_idx").using("btree", table.subEventId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.subEventId],
+			foreignColumns: [subEvents.id],
+			name: "chef_requests_sub_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.requestedBy],
+			foreignColumns: [users.id],
+			name: "chef_requests_requested_by_fkey"
+		}),
+	foreignKey({
+			columns: [table.pricedBy],
+			foreignColumns: [users.id],
+			name: "chef_requests_priced_by_fkey"
+		}),
+	check("chef_requests_status_chk", sql`status = ANY (ARRAY['pending'::text, 'priced'::text, 'declined'::text])`),
 ]);

@@ -39,10 +39,15 @@ export const GET = route(async () => {
       GROUP BY b.id, b.name
       ORDER BY b.name
     `),
-    db
-      .selectDistinct({ roomType: schema.rooms.roomType })
-      .from(schema.rooms)
-      .orderBy(asc(schema.rooms.roomType)),
+    // Room type + the rack rate we price a requirement at. A requirement is only a promise
+    // (type, count, dates) — the billable rate lands when the Lodge Manager allocates real
+    // rooms — so the wizard prices it at the type's lowest rack rate as an estimate.
+    db.execute(sql`
+      SELECT room_type AS "roomType", min(rack_rate_paise)::bigint AS "rackRatePaise"
+      FROM rooms WHERE is_active
+      GROUP BY room_type
+      ORDER BY room_type
+    `),
   ])
 
   const bundles = (bundleRows as unknown as { id: string; name: string; members: string }[]).map((b) => ({
@@ -51,10 +56,16 @@ export const GET = route(async () => {
     members: b.members,
   }))
 
+  const roomRates = (roomTypeRows as unknown as { roomType: string; rackRatePaise: number }[]).map((r) => ({
+    roomType: r.roomType,
+    rackRatePaise: Number(r.rackRatePaise),
+  }))
+
   return ok({
     eventTypes,
     venues,
     bundles,
-    roomTypes: roomTypeRows.map((r) => r.roomType),
+    roomTypes: roomRates.map((r) => r.roomType),
+    roomRates,
   })
 })

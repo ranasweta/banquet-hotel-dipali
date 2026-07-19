@@ -15,8 +15,10 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
 const saveSchema = z.object({
   tier_id: z.uuid(),
   is_tentative: z.boolean().optional(),
-  // categoryName -> chosen item names. Server validates against the tier master.
+  // categoryName -> chosen item names. Server validates against the pooled master menu.
   selections: z.record(z.string().min(1), z.array(z.string().min(1))).default({}),
+  // categoryName -> itemName -> preference note ("dal spicy"). Never affects price.
+  notes: z.record(z.string().min(1), z.record(z.string().min(1), z.string().max(200))).optional(),
 })
 
 /**
@@ -31,6 +33,7 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
     tierId: input.tier_id,
     isTentative: input.is_tentative,
     selections: input.selections,
+    notes: input.notes,
   })
   return ok({ menu: result })
 })

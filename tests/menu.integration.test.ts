@@ -127,7 +127,12 @@ d('save + snapshot (BR-M1)', () => {
     const snap = await menus.getSubEventMenu(sub)
     const bread = snap.menu!.categories.find((c) => c.categoryName === 'Assorted Indian Bread')!
     expect(bread.effectivePick).toBeNull()
-    expect(bread.selected).toHaveLength(3) // whole list copied in
+    // The whole list is copied in — compare against the master rather than a magic number,
+    // which would drift every time a combined "A / B" line is split into separate dishes.
+    const silverBread = (await menus.getTierCatalog())
+      .find((t) => t.name === 'Silver')!
+      .categories.find((c) => c.name === 'Assorted Indian Bread')!
+    expect(bread.selected).toHaveLength(silverBread.items.length)
     expect(bread.complete).toBe(true)
     await expect(menus.increaseCategory(actor, sub, 'Assorted Indian Bread')).rejects.toThrow(/already included/)
   })
@@ -256,5 +261,83 @@ d('locked-event guard (rule 6)', () => {
     } finally {
       await db.update(schema.events).set({ status: 'confirmed' }).where(eq(schema.events.id, eid))
     }
+  })
+})
+
+d('swap from the pooled master menu', () => {
+  it('accepts an item from another tier in the same sub-heading, and still caps the picks', async () => {
+    const sub = await makeSubEvent()
+    const silver = await tierId('Silver')
+
+    // A Dessert that exists on some tier's list but NOT on Silver's — the swap case.
+    const [outsider] = (await db.execute(sql`
+      SELECT i.name FROM menu_items i
+      JOIN menu_categories c ON c.id = i.category_id
+      WHERE i.is_active AND c.name = 'Dessert'
+        AND i.name NOT IN (
+          SELECT i2.name FROM menu_items i2
+          JOIN menu_categories c2 ON c2.id = i2.category_id
+          WHERE c2.tier_id = ${silver} AND c2.name = 'Dessert' AND i2.is_active
+        )
+      LIMIT 1
+    `)) as unknown as { name: string }[]
+    expect(outsider, 'expected a Dessert on another tier only').toBeTruthy()
+
+    // Swapping it in is allowed — it just spends a Dessert pick.
+    await menus.saveSubEventMenu(actor, sub, { tierId: silver, selections: { Dessert: [outsider!.name] } })
+    const saved = await menus.getSubEventMenu(sub)
+    const dessert = saved.menu!.categories.find((c) => c.categoryName === 'Dessert')!
+    expect(dessert.selected).toContain(outsider!.name)
+
+    // The pick count still caps it: base pick + 1 more than allowed is refused.
+    const cap = dessert.effectivePick ?? 1
+    const pool = (await db.execute(sql`
+      SELECT DISTINCT i.name FROM menu_items i
+      JOIN menu_categories c ON c.id = i.category_id
+      WHERE i.is_active AND c.name = 'Dessert' LIMIT ${cap + 1}
+    `)) as unknown as { name: string }[]
+    await expect(
+      menus.saveSubEventMenu(actor, sub, { tierId: silver, selections: { Dessert: pool.map((p) => p.name) } }),
+    ).rejects.toThrow(/at most/i)
+
+    // A name that is on no Dessert list anywhere is still refused.
+    await expect(
+      menus.saveSubEventMenu(actor, sub, { tierId: silver, selections: { Dessert: ['Definitely Not A Dessert'] } }),
+    ).rejects.toThrow(/not on any/i)
+  })
+})
+
+d('per-item preference notes', () => {
+  it('saves a free-text note per dish, returns it, and never changes the price', async () => {
+    const sub = await makeSubEvent()
+    const silver = await tierId('Silver')
+
+    const before = await menus.saveSubEventMenu(actor, sub, {
+      tierId: silver,
+      selections: { Soup: ['Hot & Sour Soup'] },
+    })
+    const priceBefore = (await menus.getSubEventMenu(sub)).menu!.perPlatePaise
+
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: silver,
+      selections: { Soup: ['Hot & Sour Soup'] },
+      notes: { Soup: { 'Hot & Sour Soup': 'extra spicy, no cornflour' } },
+    })
+
+    const snap = await menus.getSubEventMenu(sub)
+    const soup = snap.menu!.categories.find((c) => c.categoryName === 'Soup')!
+    expect(soup.notes['Hot & Sour Soup']).toBe('extra spicy, no cornflour')
+    // A preference is a kitchen instruction, not a charge.
+    expect(snap.menu!.perPlatePaise).toBe(priceBefore)
+    expect(before.menuId).toBeTruthy()
+
+    // Clearing the note removes it.
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: silver,
+      selections: { Soup: ['Hot & Sour Soup'] },
+      notes: { Soup: { 'Hot & Sour Soup': '   ' } },
+    })
+    const cleared = await menus.getSubEventMenu(sub)
+    expect(cleared.menu!.categories.find((c) => c.categoryName === 'Soup')!.notes).toEqual({})
   })
 })

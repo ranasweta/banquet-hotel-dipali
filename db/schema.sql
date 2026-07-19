@@ -270,6 +270,7 @@ CREATE TABLE sub_event_menu_selections (
   menu_id       uuid NOT NULL REFERENCES sub_event_menus(id) ON DELETE CASCADE,
   category_name text NOT NULL,
   item_name     text NOT NULL,                   -- snapshot by name, survives master edits
+  note          text,                            -- "dal spicy" — a preference, never a charge
   PRIMARY KEY (menu_id, category_name, item_name)
 );
 
@@ -441,6 +442,29 @@ CREATE INDEX change_requests_pending ON change_requests(status) WHERE status = '
 -- ============================================================
 -- 12. Lock, invoice, T&C (FR-7.x)
 -- ============================================================
+-- Chef delicacy requests: an off-menu ask ("sushi") that only the Chef prices. The charge is
+-- PER PLATE and joins the tier rate + wedding surcharge in the food line. Deliberately not an
+-- `exception`: that carries a verdict from the Authority, this carries an amount from the Chef.
+CREATE TABLE chef_requests (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  sub_event_id  uuid NOT NULL REFERENCES sub_events(id) ON DELETE CASCADE,
+  description   text NOT NULL,
+  status        text NOT NULL DEFAULT 'pending',  -- pending | priced | declined
+  charge_paise  bigint,                           -- per-plate addition, set by the Chef
+  remark        text,
+  requested_by  uuid NOT NULL REFERENCES users(id),
+  requested_at  timestamptz NOT NULL DEFAULT now(),
+  priced_by     uuid REFERENCES users(id),
+  priced_at     timestamptz,
+  CONSTRAINT chef_requests_status_chk CHECK (status IN ('pending', 'priced', 'declined')),
+  CONSTRAINT chef_requests_charge_chk CHECK (
+    (status = 'priced' AND charge_paise IS NOT NULL AND charge_paise >= 0)
+    OR (status <> 'priced' AND charge_paise IS NULL)
+  )
+);
+CREATE INDEX chef_requests_sub_event_idx ON chef_requests (sub_event_id);
+CREATE INDEX chef_requests_pending_idx ON chef_requests (status) WHERE status = 'pending';
+
 CREATE TABLE lock_signoffs (
   event_id    uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   designation signoff_role NOT NULL,

@@ -45,15 +45,22 @@ export type CatalogCategory = {
 export type CatalogTier = {
   id: string
   name: string
+  /** Per-plate base rate (currently effective). The wedding surcharge is applied server-side
+   *  on save and deliberately not shown to the guest — see BR-M5. */
+  baseRatePaise: number
   categories: CatalogCategory[]
 }
 
 /** Every tier → its categories (in card order) → its active item names. Drives the picker. */
 export async function getTierCatalog(): Promise<CatalogTier[]> {
-  const tiers = await db
-    .select({ id: schema.menuTiers.id, name: schema.menuTiers.name })
-    .from(schema.menuTiers)
-    .orderBy(asc(schema.menuTiers.name))
+  const tiers = (await db.execute(sql`
+    SELECT t.id, t.name,
+           COALESCE((SELECT p.base_rate_paise FROM menu_tier_prices p
+                     WHERE p.tier_id = t.id AND p.effective_from <= CURRENT_DATE
+                     ORDER BY p.effective_from DESC LIMIT 1), 0) AS "baseRatePaise"
+    FROM menu_tiers t
+    ORDER BY "baseRatePaise", t.name
+  `)) as unknown as { id: string; name: string; baseRatePaise: number }[]
 
   const cats = await db
     .select({
@@ -91,7 +98,35 @@ export async function getTierCatalog(): Promise<CatalogTier[]> {
     })
     catsByTier.set(c.tierId, list)
   }
-  return tiers.map((t) => ({ id: t.id, name: t.name, categories: catsByTier.get(t.id) ?? [] }))
+  return tiers.map((t) => ({
+    id: t.id,
+    name: t.name,
+    baseRatePaise: Number(t.baseRatePaise),
+    categories: catsByTier.get(t.id) ?? [],
+  }))
+}
+
+export type MenuPool = { categoryName: string; items: string[] }
+
+/**
+ * The pooled "master menu": every active item across every tier, grouped by sub-heading.
+ * Drives Swap — picking from here spends one of that sub-heading's picks (see saveSubEventMenu).
+ */
+export async function getMasterMenuPools(): Promise<MenuPool[]> {
+  const rows = await db
+    .select({ categoryName: schema.menuCategories.name, itemName: schema.menuItems.name })
+    .from(schema.menuItems)
+    .innerJoin(schema.menuCategories, eq(schema.menuCategories.id, schema.menuItems.categoryId))
+    .where(eq(schema.menuItems.isActive, true))
+    .orderBy(asc(schema.menuCategories.name), asc(schema.menuItems.name))
+
+  const byCat = new Map<string, Set<string>>()
+  for (const r of rows) {
+    const set = byCat.get(r.categoryName) ?? new Set<string>()
+    set.add(r.itemName)
+    byCat.set(r.categoryName, set)
+  }
+  return [...byCat.entries()].map(([categoryName, items]) => ({ categoryName, items: [...items] }))
 }
 
 // ── Sub-event context + snapshot ─────────────────────────────────────────────
@@ -130,6 +165,8 @@ export type MenuCategorySnapshot = {
   exceptionStatus: string | null
   exceptionRemark: string | null
   selected: string[]
+  /** itemName -> preference note ("dal spicy"). Free text, never priced. */
+  notes: Record<string, string>
   complete: boolean
 }
 export type MenuSnapshot = {
@@ -216,10 +253,16 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
   }
 
   const selByCat = new Map<string, string[]>()
+  const notesByCat = new Map<string, Record<string, string>>()
   for (const s of sels) {
     const list = selByCat.get(s.categoryName) ?? []
     list.push(s.itemName)
     selByCat.set(s.categoryName, list)
+    if (s.note) {
+      const notes = notesByCat.get(s.categoryName) ?? {}
+      notes[s.itemName] = s.note
+      notesByCat.set(s.categoryName, notes)
+    }
   }
 
   const categories: MenuCategorySnapshot[] = cats.map((c) => {
@@ -237,6 +280,7 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
       exceptionStatus: exc?.status ?? null,
       exceptionRemark: exc?.status === 'rejected' ? exc.remark : null,
       selected,
+      notes: notesByCat.get(c.categoryName) ?? {},
       complete,
     }
   })
@@ -268,6 +312,12 @@ export type MenuSaveInput = {
   isTentative?: boolean
   /** categoryName -> chosen item names. Omit or [] for an untouched/incomplete category. */
   selections: Record<string, string[]>
+  /**
+   * categoryName -> itemName -> preference note ("dal spicy", "rasgulla less sugary").
+   * A kitchen instruction, never a charge — only a chef delicacy or a pick increase can move
+   * the per-plate rate. Notes for items that aren't selected are ignored.
+   */
+  notes?: Record<string, Record<string, string>>
 }
 
 /**
@@ -327,6 +377,22 @@ export async function saveSubEventMenu(
     }
     const masterNames = new Set(masterCats.map((c) => c.name))
 
+    // Swap (client request, 19 Jul 2026): within a sub-heading the guest may take an item from
+    // ANY tier's list — a Gold dessert on a Silver plate — and it simply spends one of that
+    // sub-heading's picks. So picks validate against the pooled master menu (every tier's items
+    // for that sub-heading), while the pick count still caps how many. Tier rate is unaffected.
+    const pooledRows = await tx
+      .select({ categoryName: schema.menuCategories.name, itemName: schema.menuItems.name })
+      .from(schema.menuItems)
+      .innerJoin(schema.menuCategories, eq(schema.menuCategories.id, schema.menuItems.categoryId))
+      .where(eq(schema.menuItems.isActive, true))
+    const pooledByCat = new Map<string, Set<string>>()
+    for (const it of pooledRows) {
+      const set = pooledByCat.get(it.categoryName) ?? new Set<string>()
+      set.add(it.itemName)
+      pooledByCat.set(it.categoryName, set)
+    }
+
     // Reject selections for categories that aren't in this tier (catches stale/typo input).
     for (const key of Object.keys(input.selections)) {
       if (!masterNames.has(key)) throw badRequest(`"${key}" is not a category of ${tier.name}`)
@@ -372,9 +438,10 @@ export async function saveSubEventMenu(
         selected = [...(itemsByCat.get(mc.name) ?? [])]
       } else {
         const requested = [...new Set(input.selections[mc.name] ?? [])]
-        const allowed = itemsByCat.get(mc.name) ?? new Set<string>()
+        // Pooled, not tier-only — a swapped-in item from another tier is legitimate here.
+        const allowed = pooledByCat.get(mc.name) ?? new Set<string>()
         for (const item of requested) {
-          if (!allowed.has(item)) throw badRequest(`"${item}" is not on the ${mc.name} list`)
+          if (!allowed.has(item)) throw badRequest(`"${item}" is not on any ${mc.name} list`)
         }
         const ceiling = mc.pickCount + extraPicks
         if (requested.length > ceiling) {
@@ -437,7 +504,13 @@ export async function saveSubEventMenu(
       })),
     )
     const selectionRows = writes.flatMap((w) =>
-      w.selected.map((itemName) => ({ menuId, categoryName: w.categoryName, itemName })),
+      w.selected.map((itemName) => ({
+        menuId,
+        categoryName: w.categoryName,
+        itemName,
+        // Preference notes ride along with the snapshot so the day sheet shows them.
+        note: input.notes?.[w.categoryName]?.[itemName]?.trim() || null,
+      })),
     )
     if (selectionRows.length > 0) await tx.insert(schema.subEventMenuSelections).values(selectionRows)
 

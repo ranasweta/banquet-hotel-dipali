@@ -1,0 +1,119 @@
+/**
+ * Chef delicacy requests (client, 19 Jul 2026): an off-menu ask that only the Chef prices,
+ * charged PER PLATE so it joins the tier rate + wedding surcharge in the food line.
+ */
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { eq, sql } from 'drizzle-orm'
+
+const chef = await import('@/lib/chef')
+const menus = await import('@/lib/menus')
+const { createClient } = await import('@/db/client')
+const { migrate } = await import('@/db/migrate')
+const { seed } = await import('@/db/seed')
+const { db, schema } = await import('@/db/drizzle')
+
+const hasDb = Boolean(process.env.TEST_DATABASE_URL)
+const d = hasDb ? describe : describe.skip
+if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping chef tests\n')
+
+const bm = { id: '', roleName: 'booking_manager' }
+const theChef = { id: '', roleName: 'chef' }
+
+async function userOf(role: string): Promise<string> {
+  const [u] = await db
+    .select({ id: schema.users.id })
+    .from(schema.users)
+    .innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId))
+    .where(eq(schema.roles.name, role))
+    .limit(1)
+  return u!.id
+}
+async function venueId(name: string): Promise<string> {
+  const [v] = await db.select({ id: schema.venues.id }).from(schema.venues).where(eq(schema.venues.name, name)).limit(1)
+  return v!.id
+}
+async function tierId(name: string): Promise<string> {
+  const [t] = await db.select({ id: schema.menuTiers.id }).from(schema.menuTiers).where(eq(schema.menuTiers.name, name)).limit(1)
+  return t!.id
+}
+/** An enquiry with one 100-pax function; returns { eventId, subId }. */
+async function makeSub(): Promise<{ eventId: string; subId: string }> {
+  const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
+  const [event] = await db
+    .insert(schema.events)
+    .values({ code, guestName: 'Chef Test', eventType: 'engagement', createdBy: bm.id })
+    .returning({ id: schema.events.id })
+  const [sub] = await db
+    .insert(schema.subEvents)
+    .values({ eventId: event!.id, name: 'Dinner', eventDate: '2026-09-01', startTime: '19:00', endTime: '23:00', venueId: await venueId('Crystal'), pax: 100 })
+    .returning({ id: schema.subEvents.id })
+  return { eventId: event!.id, subId: sub!.id }
+}
+async function proposalTotal(eventId: string): Promise<number> {
+  const [e] = await db.select({ t: schema.events.proposalTotalPaise }).from(schema.events).where(eq(schema.events.id, eventId)).limit(1)
+  return e!.t
+}
+
+beforeAll(async () => {
+  if (!hasDb) return
+  const setup = createClient('TEST_DATABASE_URL')
+  try {
+    await migrate(setup, () => {})
+    await seed(setup, { reset: true, force: true, password: 'test-only' }, () => {})
+  } finally {
+    await setup.end()
+  }
+  bm.id = await userOf('booking_manager')
+  theChef.id = await userOf('chef')
+}, 90_000)
+
+async function cleanup() {
+  await db.delete(schema.venueBookings)
+  await db.delete(schema.events)
+}
+afterEach(async () => { if (hasDb) await cleanup() })
+afterAll(async () => { if (hasDb) await cleanup() })
+
+d('chef delicacy', () => {
+  it('is priced only by the Chef, per plate, and moves the proposal total', async () => {
+    const { eventId, subId } = await makeSub()
+    await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: {} })
+    const before = await proposalTotal(eventId)
+
+    const { id } = await chef.requestDelicacy(bm, subId, 'Sushi counter for the head table')
+
+    // A Booking Manager cannot put a price on it.
+    await expect(chef.priceDelicacy(bm, id, { chargePaise: 12_000 })).rejects.toMatchObject({ status: 403 })
+
+    // The Chef can. Rs. 120 per plate on a 100-pax function = Rs. 12,000 more.
+    await chef.priceDelicacy(theChef, id, { chargePaise: 12_000, remark: 'imported fish' })
+    expect(await proposalTotal(eventId)).toBe(before + 12_000 * 100)
+
+    // It shows on the function's per-plate rate: Silver 650 + 120 = 770.
+    const snap = await menus.getSubEventMenu(subId)
+    expect(snap.menu!.perPlatePaise + (await chef.delicacyChargePaise(db, subId))).toBe(65_000 + 12_000)
+
+    // Pricing twice is refused.
+    await expect(chef.priceDelicacy(theChef, id, { chargePaise: 999 })).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('declining costs nothing and leaves no charge', async () => {
+    const { eventId, subId } = await makeSub()
+    await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: {} })
+    const before = await proposalTotal(eventId)
+
+    const { id } = await chef.requestDelicacy(bm, subId, 'Live teppanyaki')
+    await chef.priceDelicacy(theChef, id, { decline: true, remark: 'no equipment' })
+
+    expect(await proposalTotal(eventId)).toBe(before)
+    expect(await chef.delicacyChargePaise(db, subId)).toBe(0)
+    const list = await chef.listForSubEvent(subId)
+    expect(list[0]!.status).toBe('declined')
+    expect(list[0]!.chargePaise).toBeNull()
+  })
+
+  it('rejects an empty description', async () => {
+    const { subId } = await makeSub()
+    await expect(chef.requestDelicacy(bm, subId, '   ')).rejects.toThrow(/Describe/)
+  })
+})
