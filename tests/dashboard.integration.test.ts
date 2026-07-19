@@ -1,18 +1,18 @@
 /**
- * Booking-manager home dashboard (lib/dashboard.getBookingDashboard).
- *
- * Verifies each panel selects the right rows for a fixed as-of date:
- *   - today  = confirmed-and-beyond functions on the day (never enquiries, never tomorrow);
- *   - upcoming = the next seven days only (excludes today and anything past +7);
- *   - openEnquiries = events still in 'enquiry';
- *   - approvals = pending exceptions + pending change requests;
- *   - paymentsDue = confirmed events with a positive balance whose date is within 30 days,
- *     and nothing outside that window.
+ * Role home dashboards (lib/dashboard). Verifies each board selects the right rows for a fixed
+ * as-of date:
+ *   - Booking: today (confirmed-and-beyond, never enquiries/tomorrow), next-7-days, open
+ *     enquiries, approvals (exceptions + change requests), 30-day balances;
+ *   - Banquet: agenda carries menu state, menuGaps flags functions with no/draft menu;
+ *   - Lodge: today's arrivals, live occupancy, promised-but-unallocated, 35+ approvals;
+ *   - Maintenance: In Progress / Completed events with running totals;
+ *   - getDashboardForRole dispatches each role to the right board.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 
-const { getBookingDashboard } = await import('@/lib/dashboard')
+const { getBookingDashboard, getBanquetDashboard, getLodgeDashboard, getMaintenanceDashboard, getDashboardForRole } =
+  await import('@/lib/dashboard')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -37,6 +37,14 @@ async function userId(role: string): Promise<string> {
 async function venueId(name: string): Promise<string> {
   const [v] = await db.select({ id: schema.venues.id }).from(schema.venues).where(eq(schema.venues.name, name)).limit(1)
   return v!.id
+}
+async function tierId(name: string): Promise<string> {
+  const [t] = await db.select({ id: schema.menuTiers.id }).from(schema.menuTiers).where(eq(schema.menuTiers.name, name)).limit(1)
+  return t!.id
+}
+async function anyRoomId(): Promise<string> {
+  const [r] = (await db.execute(sql`SELECT id FROM rooms WHERE is_active LIMIT 1`)) as unknown as { id: string }[]
+  return r!.id
 }
 async function makeEvent(status: string, proposalPaise = 0): Promise<string> {
   const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
@@ -154,5 +162,106 @@ d('getBookingDashboard', () => {
     expect(dash.today).toEqual([])
     expect(dash.upcoming).toEqual([])
     expect(dash.paymentsDue).toEqual([])
+  })
+})
+
+d('getBanquetDashboard', () => {
+  it('carries menu state on the agenda and flags menu gaps', async () => {
+    const withMenu = await makeConfirmedSub('Crystal', ASOF, '19:00', '23:00') // today, complete menu
+    await db.insert(schema.subEventMenus).values({
+      subEventId: withMenu.subId,
+      tierId: await tierId('Silver'),
+      tierName: 'Silver',
+      baseRatePaise: 65_000,
+      surchargePaise: 0,
+      isComplete: true,
+    })
+    const noMenu = await makeConfirmedSub('Kohinoor', '2027-03-18', '18:00', '22:00') // +3, no menu
+    await db.insert(schema.changeRequests).values({
+      eventId: withMenu.eventId,
+      subEventId: withMenu.subId,
+      payload: { eventDate: '2027-03-16' },
+      summary: 'Move to 2027-03-16',
+      requestedBy: bm.id,
+    })
+
+    const b = await getBanquetDashboard(ASOF)
+
+    // Today's function carries its (complete) menu; the +3 has none.
+    expect(b.today.find((f) => f.subEventId === withMenu.subId)?.tierName).toBe('Silver')
+    expect(b.today.find((f) => f.subEventId === withMenu.subId)?.menuComplete).toBe(true)
+    expect(b.upcoming.find((f) => f.subEventId === noMenu.subId)?.tierName).toBeNull()
+
+    // Menu gaps: the menuless function is flagged; the complete one is not.
+    expect(b.menuGaps.map((g) => g.subEventId)).toContain(noMenu.subId)
+    expect(b.menuGaps.map((g) => g.subEventId)).not.toContain(withMenu.subId)
+
+    expect(b.changeRequests.some((c) => c.eventId === withMenu.eventId)).toBe(true)
+  })
+})
+
+d('getLodgeDashboard', () => {
+  it('reports arrivals, occupancy, unallocated promises, and 35+ approvals', async () => {
+    const stay = await makeEvent('confirmed')
+    const room = await anyRoomId()
+    // A stay that starts today and spans it: an arrival today, and occupied now.
+    await db.execute(sql`
+      INSERT INTO room_allocations (event_id, room_id, stay, rate_paise, allocated_by)
+      VALUES (${stay}, ${room}, daterange(${ASOF}::date, ${ASOF}::date + 2, '[)'), 500000, ${bm.id})
+    `)
+    // A confirmed event promising rooms it hasn't been allocated, plus a 35+ approval in flight.
+    const gap = await makeEvent('confirmed')
+    await db.insert(schema.roomRequirements).values({ eventId: gap, roomType: 'deluxe', count: 5, checkIn: ASOF, checkOut: '2027-03-20' })
+    await db.insert(schema.exceptions).values({
+      eventId: gap,
+      kind: 'room_allocation_35plus',
+      payload: { requestedCount: 35, existingCount: 0 },
+      raisedBy: bm.id,
+    })
+
+    const l = await getLodgeDashboard(ASOF)
+
+    expect(l.arrivals.some((a) => a.eventId === stay)).toBe(true)
+    expect(l.departures.some((a) => a.eventId === stay)).toBe(false) // check-out is +2, not today
+    expect(l.occupancy.reduce((s, u) => s + u.occupied, 0)).toBeGreaterThanOrEqual(1)
+    expect(l.occupancy.every((u) => u.available === u.total - u.occupied)).toBe(true)
+    expect(l.awaitingAllocation.find((g) => g.eventId === gap)?.shortfall).toBe(5)
+    expect(l.pendingRoomApprovals.some((x) => x.eventId === gap)).toBe(true)
+  })
+})
+
+d('getMaintenanceDashboard', () => {
+  it('lists In Progress and Completed events with running totals', async () => {
+    const inprog = await makeEvent('in_progress')
+    const done = await makeEvent('completed')
+    await db.insert(schema.maintenanceEntries).values({
+      eventId: done,
+      item: 'Generator (extra hours)',
+      qty: '2',
+      unit: 'hrs',
+      ratePaise: 150_000,
+      amountPaise: 300_000,
+      createdBy: bm.id,
+    })
+
+    const m = await getMaintenanceDashboard(ASOF)
+
+    expect(m.events.some((e) => e.id === inprog && e.status === 'in_progress')).toBe(true)
+    const row = m.events.find((e) => e.id === done)
+    expect(row?.entryCount).toBe(1)
+    expect(row?.totalPaise).toBe(300_000)
+    expect(row?.closed).toBe(false)
+  })
+})
+
+d('getDashboardForRole', () => {
+  it('dispatches each role to its board', async () => {
+    expect((await getDashboardForRole('booking_manager', ASOF)).kind).toBe('booking')
+    expect((await getDashboardForRole('banquet_manager', ASOF)).kind).toBe('banquet')
+    expect((await getDashboardForRole('lodge_manager', ASOF)).kind).toBe('lodge')
+    expect((await getDashboardForRole('maintenance', ASOF)).kind).toBe('maintenance')
+    // Higher Authority and the Auditor share the Booking board for now.
+    expect((await getDashboardForRole('higher_authority', ASOF)).kind).toBe('booking')
+    expect((await getDashboardForRole('auditor', ASOF)).kind).toBe('booking')
   })
 })
