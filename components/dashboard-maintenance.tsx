@@ -42,10 +42,10 @@ export function MaintenanceDashboard({ data, user }: { data: MaintenanceData; us
       </Hero>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile icon={<Activity className="size-5" aria-hidden />} value={inProgress.length} label="Events in progress" tone={inProgress.length ? 'emerald' : 'slate'} />
-        <KpiTile icon={<Lock className="size-5" aria-hidden />} value={awaitingClose.length} label="Awaiting close" tone={awaitingClose.length ? 'amber' : 'slate'} />
-        <KpiTile icon={<IndianRupee className="size-5" aria-hidden />} value={formatPaise(openValue)} label="Open (un-closed) value" tone={openValue ? 'blue' : 'slate'} />
-        <KpiTile icon={<ListChecks className="size-5" aria-hidden />} value={entries} label="Entries logged" tone="slate" />
+        <KpiTile href="/maintenance" icon={<Activity className="size-5" aria-hidden />} value={inProgress.length} label="Events in progress" tone={inProgress.length ? 'emerald' : 'slate'} />
+        <KpiTile href="/maintenance" icon={<Lock className="size-5" aria-hidden />} value={awaitingClose.length} label="Awaiting close" tone={awaitingClose.length ? 'amber' : 'slate'} />
+        <KpiTile href="/maintenance" icon={<IndianRupee className="size-5" aria-hidden />} value={formatPaise(openValue)} label="Open (un-closed) value" tone={openValue ? 'blue' : 'slate'} />
+        <KpiTile href="/maintenance" icon={<ListChecks className="size-5" aria-hidden />} value={entries} label="Entries logged" tone="slate" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -54,6 +54,7 @@ export function MaintenanceDashboard({ data, user }: { data: MaintenanceData; us
           icon={<Wrench className="size-4 text-muted-foreground" aria-hidden />}
           title="Events to service"
           note="in progress & completed"
+          link={{ href: '/maintenance', label: 'Log charges' }}
         >
           {events.length === 0 ? (
             <EmptyState text="No events are live — maintenance can be logged once an event starts." />

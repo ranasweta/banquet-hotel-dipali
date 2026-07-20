@@ -15,6 +15,7 @@ const NAV: { href: string; label: string; module?: string }[] = [
   { href: '/calendar', label: 'Calendar', module: 'calendar' },
   { href: '/day-sheet', label: 'Day sheet', module: 'calendar' },
   { href: '/rooms', label: 'Rooms', module: 'rooms' },
+  { href: '/maintenance', label: 'Maintenance', module: 'maintenance' },
   { href: '/chef', label: 'Chef requests', module: 'menus' },
   { href: '/approvals', label: 'Approvals', module: 'approvals' },
   { href: '/change-requests', label: 'Change requests', module: 'calendar' },

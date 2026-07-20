@@ -255,13 +255,49 @@ d('getMaintenanceDashboard', () => {
 })
 
 d('getDashboardForRole', () => {
-  it('dispatches each role to its board', async () => {
-    expect((await getDashboardForRole('booking_manager', ASOF)).kind).toBe('booking')
-    expect((await getDashboardForRole('banquet_manager', ASOF)).kind).toBe('banquet')
-    expect((await getDashboardForRole('lodge_manager', ASOF)).kind).toBe('lodge')
-    expect((await getDashboardForRole('maintenance', ASOF)).kind).toBe('maintenance')
-    // Higher Authority and the Auditor share the Booking board for now.
-    expect((await getDashboardForRole('higher_authority', ASOF)).kind).toBe('booking')
-    expect((await getDashboardForRole('auditor', ASOF)).kind).toBe('booking')
+  it('gives every role its own board — none shared', async () => {
+    const kinds = await Promise.all(
+      ['booking_manager', 'banquet_manager', 'lodge_manager', 'maintenance', 'chef', 'higher_authority', 'auditor'].map(
+        async (role) => (await getDashboardForRole(role, ASOF)).kind,
+      ),
+    )
+    expect(kinds).toEqual(['booking', 'banquet', 'lodge', 'maintenance', 'chef', 'authority', 'auditor'])
+    // The point of the exercise: no two roles land on the same board.
+    expect(new Set(kinds).size).toBe(kinds.length)
+  })
+
+  it('covers every seeded role, so a new one cannot silently inherit another board', async () => {
+    const roles = (await db.execute(sql`SELECT name FROM roles ORDER BY name`)) as unknown as { name: string }[]
+    const kinds = await Promise.all(roles.map(async (r) => (await getDashboardForRole(r.name, ASOF)).kind))
+    expect(new Set(kinds).size).toBe(roles.length)
+  })
+})
+
+d('approval queues are scoped to whoever settles them', () => {
+  it('shows a non-decider only what they raised, never another role’s queue', async () => {
+    const { listExceptions } = await import('@/lib/approvals')
+    const gm = await userId('higher_authority')
+    const banquet = await userId('banquet_manager')
+
+    const fx = await makeConfirmedSub('Crystal', ASOF, '19:00', '23:00')
+    // Two menu increases sitting with the GM: one raised by the Booking Manager, one by Banquet.
+    await db.insert(schema.exceptions).values([
+      { eventId: fx.eventId, kind: 'menu_increase', payload: { categoryName: 'Soup' }, raisedBy: bm.id },
+      { eventId: fx.eventId, kind: 'menu_increase', payload: { categoryName: 'Dessert' }, raisedBy: banquet },
+    ])
+
+    // The decider (GM) sees the whole queue.
+    const forGm = await listExceptions({ status: 'pending' })
+    expect(forGm.length).toBeGreaterThanOrEqual(2)
+
+    // A non-decider sees only their own — not the one the GM is holding for someone else.
+    const forBanquet = await listExceptions({ status: 'pending', mineId: banquet })
+    expect(forBanquet).toHaveLength(1)
+    expect(forBanquet[0]!.raisedByName).toBeTruthy()
+    const forBooking = await listExceptions({ status: 'pending', mineId: bm.id })
+    expect(forBooking).toHaveLength(1)
+    // The two views are disjoint: neither can read the other's request.
+    expect(forBanquet[0]!.id).not.toBe(forBooking[0]!.id)
+    expect(gm).toBeTruthy()
   })
 })

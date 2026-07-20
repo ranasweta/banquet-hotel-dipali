@@ -392,13 +392,193 @@ export async function getMaintenanceDashboard(asOf: string = todayLocal()): Prom
 
 // ── Role dispatch ────────────────────────────────────────────────────────────
 
+// ── Chef ─────────────────────────────────────────────────────────────────────
+
+export type ChefRequestRow = {
+  id: string
+  description: string
+  status: string
+  chargePaise: number | null
+  eventCode: string
+  guestName: string
+  subEventName: string
+  eventDate: string
+  pax: number
+  requestedByName: string
+}
+
+export type ChefDashboard = {
+  asOf: string
+  toPrice: ChefRequestRow[]
+  today: AgendaFunctionWithMenu[]
+  upcoming: AgendaFunctionWithMenu[]
+  menuGaps: MenuGap[]
+}
+
+/** The Chef's board: delicacy requests waiting on a price, and what the kitchen cooks next. */
+export async function getChefDashboard(asOf: string = todayLocal()): Promise<ChefDashboard> {
+  const [toPrice, today, upcoming, menuGaps] = await Promise.all([
+    db.execute(sql`
+      SELECT r.id, r.description, r.status, r.charge_paise AS "chargePaise",
+             e.code AS "eventCode", e.guest_name AS "guestName",
+             se.name AS "subEventName", se.event_date::text AS "eventDate", se.pax,
+             u.full_name AS "requestedByName"
+      FROM chef_requests r
+      JOIN sub_events se ON se.id = r.sub_event_id
+      JOIN events e ON e.id = se.event_id
+      JOIN users u ON u.id = r.requested_by
+      WHERE r.status = 'pending'
+      ORDER BY r.requested_at
+    `) as unknown as Promise<ChefRequestRow[]>,
+    db.execute(agendaWithMenu(sql`se.event_date = ${asOf}::date`)) as unknown as Promise<AgendaFunctionWithMenu[]>,
+    db.execute(
+      agendaWithMenu(sql`se.event_date > ${asOf}::date AND se.event_date <= ${asOf}::date + 7`),
+    ) as unknown as Promise<AgendaFunctionWithMenu[]>,
+    db.execute(sql`
+      SELECT se.id AS "subEventId", se.event_id AS "eventId", e.code AS "eventCode", e.guest_name AS "guestName",
+             se.name, se.event_date::text AS "eventDate", m.tier_name AS "tierName"
+      FROM sub_events se
+      JOIN events e ON e.id = se.event_id
+      LEFT JOIN sub_event_menus m ON m.sub_event_id = se.id
+      WHERE se.event_date >= ${asOf}::date AND e.status IN ('confirmed','in_progress')
+        AND (m.id IS NULL OR m.is_complete = false)
+      ORDER BY se.event_date, se.start_time
+      LIMIT 20
+    `) as unknown as Promise<MenuGap[]>,
+  ])
+  return {
+    asOf,
+    toPrice: toPrice.map((r) => ({ ...r, pax: Number(r.pax), chargePaise: r.chargePaise == null ? null : Number(r.chargePaise) })),
+    today: today.map(coerceAgendaMenu),
+    upcoming: upcoming.map(coerceAgendaMenu),
+    menuGaps,
+  }
+}
+
+// ── Higher Authority ─────────────────────────────────────────────────────────
+
+export type HighValueEvent = {
+  id: string
+  code: string
+  guestName: string
+  eventType: string
+  firstDate: string | null
+  proposalTotalPaise: number
+}
+
+export type AuthorityDashboard = {
+  asOf: string
+  exceptions: ExceptionRow[]
+  byKind: { kind: string; n: number }[]
+  paymentsDue: PaymentDue[]
+  highValue: HighValueEvent[]
+  upcoming: AgendaFunction[]
+}
+
+/** The Authority's board: what needs a decision, what money is at risk, what's biggest. */
+export async function getAuthorityDashboard(asOf: string = todayLocal()): Promise<AuthorityDashboard> {
+  const [exceptions, booking, highValue] = await Promise.all([
+    listExceptions({ status: 'pending' }),
+    getBookingDashboard(asOf),
+    db.execute(sql`
+      SELECT id, code, guest_name AS "guestName", event_type AS "eventType",
+             first_date::text AS "firstDate", proposal_total_paise AS "proposalTotalPaise"
+      FROM events
+      WHERE status IN ('confirmed','in_progress')
+      ORDER BY proposal_total_paise DESC
+      LIMIT 5
+    `) as unknown as Promise<HighValueEvent[]>,
+  ])
+
+  const byKind = [...exceptions.reduce((m, x) => m.set(x.kind, (m.get(x.kind) ?? 0) + 1), new Map<string, number>())]
+    .map(([kind, n]) => ({ kind, n }))
+    .sort((a, b) => b.n - a.n)
+
+  return {
+    asOf,
+    exceptions,
+    byKind,
+    paymentsDue: booking.paymentsDue,
+    highValue: highValue.map((e) => ({ ...e, proposalTotalPaise: Number(e.proposalTotalPaise) })),
+    upcoming: booking.upcoming,
+  }
+}
+
+// ── Auditor / Admin ──────────────────────────────────────────────────────────
+
+export type AuditEntry = {
+  seq: number
+  entity: string
+  action: string
+  field: string | null
+  oldValue: string | null
+  newValue: string | null
+  userName: string
+  roleName: string
+  at: string
+  eventCode: string | null
+}
+
+export type AuditorDashboard = {
+  asOf: string
+  statusCounts: { status: string; n: number }[]
+  pendingApprovals: number
+  userCount: number
+  roleCount: number
+  recent: AuditEntry[]
+}
+
+/** The Auditor's board: the system at a glance, and the newest entries in the trail. */
+export async function getAuditorDashboard(asOf: string = todayLocal()): Promise<AuditorDashboard> {
+  const [statusCounts, approvals, people, recent] = await Promise.all([
+    db.execute(sql`
+      SELECT status::text AS status, count(*)::int AS n FROM events GROUP BY status ORDER BY status
+    `) as unknown as Promise<{ status: string; n: number }[]>,
+    db.execute(sql`
+      SELECT (SELECT count(*) FROM exceptions WHERE status = 'pending')
+           + (SELECT count(*) FROM change_requests WHERE status = 'pending') AS n
+    `) as unknown as Promise<{ n: number }[]>,
+    db.execute(sql`
+      SELECT (SELECT count(*) FROM users WHERE is_active)::int AS users,
+             (SELECT count(*) FROM roles)::int AS roles
+    `) as unknown as Promise<{ users: number; roles: number }[]>,
+    // The trail is append-only (CLAUDE.md rule 5); newest first is the useful view.
+    db.execute(sql`
+      SELECT a.seq, a.entity, a.action, a.field, a.old_value AS "oldValue", a.new_value AS "newValue",
+             u.full_name AS "userName", a.role_name AS "roleName", a.at, e.code AS "eventCode"
+      FROM audit_log a
+      JOIN users u ON u.id = a.user_id
+      LEFT JOIN events e ON e.id = a.event_id
+      ORDER BY a.seq DESC
+      LIMIT 15
+    `) as unknown as Promise<AuditEntry[]>,
+  ])
+  return {
+    asOf,
+    statusCounts: statusCounts.map((s) => ({ ...s, n: Number(s.n) })),
+    pendingApprovals: Number(approvals[0]?.n ?? 0),
+    userCount: Number(people[0]?.users ?? 0),
+    roleCount: Number(people[0]?.roles ?? 0),
+    recent: recent.map((r) => ({ ...r, seq: Number(r.seq) })),
+  }
+}
+
+// ── Role dispatch ────────────────────────────────────────────────────────────
+
 export type RoleDashboard =
   | ({ kind: 'booking' } & BookingDashboard)
   | ({ kind: 'banquet' } & BanquetDashboard)
   | ({ kind: 'lodge' } & LodgeDashboard)
   | ({ kind: 'maintenance' } & MaintenanceDashboard)
+  | ({ kind: 'chef' } & ChefDashboard)
+  | ({ kind: 'authority' } & AuthorityDashboard)
+  | ({ kind: 'auditor' } & AuditorDashboard)
 
-/** The board for a role. Booking Manager, Higher Authority, and Auditor share the Booking board. */
+/**
+ * The board for a role — every role has its own. The fallback is the Booking board, but it is
+ * only reached by a role that doesn't exist yet: all seven are matched explicitly, deliberately,
+ * so a new role can never silently inherit a board full of data it cannot act on.
+ */
 export async function getDashboardForRole(roleName: string, asOf: string = todayLocal()): Promise<RoleDashboard> {
   switch (roleName) {
     case 'banquet_manager':
@@ -407,6 +587,13 @@ export async function getDashboardForRole(roleName: string, asOf: string = today
       return { kind: 'lodge', ...(await getLodgeDashboard(asOf)) }
     case 'maintenance':
       return { kind: 'maintenance', ...(await getMaintenanceDashboard(asOf)) }
+    case 'chef':
+      return { kind: 'chef', ...(await getChefDashboard(asOf)) }
+    case 'higher_authority':
+      return { kind: 'authority', ...(await getAuthorityDashboard(asOf)) }
+    case 'auditor':
+      return { kind: 'auditor', ...(await getAuditorDashboard(asOf)) }
+    case 'booking_manager':
     default:
       return { kind: 'booking', ...(await getBookingDashboard(asOf)) }
   }
