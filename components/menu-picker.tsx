@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { menuItemKey } from '@/lib/menu-name'
 import { cn } from '@/lib/utils'
 
 export type CatalogCategory = {
@@ -25,7 +26,7 @@ export type CatalogCategory = {
   freeIncreaseEligible: boolean
   items: string[]
 }
-export type CatalogTier = { id: string; name: string; categories: CatalogCategory[] }
+export type CatalogTier = { id: string; name: string; baseRatePaise: number; categories: CatalogCategory[] }
 /** The pooled master menu: every tier's items for a sub-heading. Drives Swap. */
 export type MenuPool = { categoryName: string; items: string[] }
 
@@ -93,6 +94,12 @@ export function MenuPicker({
   const [notes, setNotes] = useState<Record<string, Record<string, string>>>({})
   const [delicacy, setDelicacy] = useState('')
   const [delicacies, setDelicacies] = useState<ChefRequestRow[]>([])
+  const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState<Date | null>(null)
+  /** Snapshot taken before a tier switch, so the wipe it causes can be undone. */
+  const [undoTier, setUndoTier] = useState<
+    { tierId: string; selected: Record<string, Set<string>>; notes: Record<string, Record<string, string>> } | null
+  >(null)
 
   const loadDelicacies = useCallback(async () => {
     const r = await api<{ requests: ChefRequestRow[] }>(`/sub-events/${subEventId}/chef-requests`)
@@ -141,13 +148,43 @@ export function MenuPicker({
   }
 
   function chooseTier(id: string) {
+    if (id === tierId) return
+    // Switching tiers starts a fresh selection, so keep the old one to hand: with auto-save
+    // on, an accidental switch would otherwise wipe a menu that took days to assemble.
+    const hadChoices = Object.values(selected).some((s) => s.size > 0)
+    if (hadChoices) {
+      setUndoTier({ tierId, selected, notes })
+      toast('Menu tier changed — the previous choices were cleared.', {
+        action: { label: 'Undo', onClick: () => restoreTier() },
+        duration: 10_000,
+      })
+    }
+
     setTierId(id)
-    // Switching tiers starts a fresh selection (the snapshot for the old tier is dropped on save).
     const existing = resp?.menu?.tierId === id ? resp!.menu : null
     const next: Record<string, Set<string>> = {}
-    if (existing) for (const c of existing.categories) next[c.categoryName] = new Set(c.selected)
+    const nextNotes: Record<string, Record<string, string>> = {}
+    if (existing) {
+      for (const c of existing.categories) {
+        next[c.categoryName] = new Set(c.selected)
+        if (c.notes && Object.keys(c.notes).length) nextNotes[c.categoryName] = { ...c.notes }
+      }
+    }
     setSelected(next)
-    setDirty(existing == null)
+    setNotes(nextNotes)
+    setDirty(true)
+  }
+
+  /** Puts back the tier and the choices that were cleared by the last switch. */
+  function restoreTier() {
+    setUndoTier((prev) => {
+      if (!prev) return null
+      setTierId(prev.tierId)
+      setSelected(prev.selected)
+      setNotes(prev.notes)
+      setDirty(true)
+      return null
+    })
   }
 
   function toggleItem(cat: CatalogCategory, item: string, on: boolean) {
@@ -176,9 +213,9 @@ export function MenuPicker({
     setDirty(true)
   }
 
-  async function save() {
+  const save = useCallback(async () => {
     if (!tier) return
-    setBusy(true)
+    setSaving(true)
     try {
       const selections: Record<string, string[]> = {}
       for (const c of tier.categories) {
@@ -191,13 +228,25 @@ export function MenuPicker({
       })
       await load()
       onChanged?.()
-      toast.success('Menu saved')
+      setSavedAt(new Date())
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
     } finally {
-      setBusy(false)
+      setSaving(false)
     }
-  }
+    // `load` and `onChanged` are stable; selected/notes/tier drive the payload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier, selected, notes, subEventId])
+
+  /**
+   * Auto-save. Picking a menu can span days, so nothing waits on a Save button — every
+   * change is persisted a beat after it settles, and the header says where it stands.
+   */
+  useEffect(() => {
+    if (!dirty || !editable || !tier) return
+    const t = setTimeout(() => { void save() }, 700)
+    return () => clearTimeout(t)
+  }, [dirty, editable, tier, save])
 
   /**
    * The other kind of increase: instead of one more pick from the printed list, the guest
@@ -479,14 +528,27 @@ export function MenuPicker({
       )}
 
       {editable && tier && (
-        <div className="flex items-center gap-2">
-          <Button onClick={save} disabled={busy || !dirty}>
-            {busy && <Loader2 className="size-4 animate-spin" />}
-            Save menu
-          </Button>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {/* Saved as you go — a menu can take days to settle, so nothing waits on a button. */}
+          {saving ? (
+            <span className="inline-flex items-center gap-1"><Loader2 className="size-3 animate-spin" /> Saving…</span>
+          ) : dirty ? (
+            <span>Unsaved changes…</span>
+          ) : savedAt ? (
+            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+              <Check className="size-3" /> Saved automatically
+            </span>
+          ) : (
+            <span>Changes save automatically</span>
+          )}
+          {undoTier && (
+            <Button size="xs" variant="ghost" onClick={restoreTier}>
+              Undo tier change
+            </Button>
+          )}
           {savedForThisTier && (
-            <span className="text-xs text-muted-foreground">
-              {savedForThisTier.isComplete ? 'All categories complete' : 'Incomplete — you can finish later'}
+            <span>
+              · {savedForThisTier.isComplete ? 'All categories complete' : 'Incomplete — you can finish later'}
               {savedForThisTier.isTentative && ' · tentative'}
             </span>
           )}
@@ -624,8 +686,10 @@ function SwapPanel({
   onClose: () => void
 }) {
   const [q, setQ] = useState('')
-  const own = new Set(ownItems)
-  const others = pool.filter((i) => !own.has(i))
+  // Compare by identity, not spelling: the tier may list "Aam Pana (Seasonal)" while the pool
+  // carries "Aam Panna", and offering that as something new is just noise.
+  const own = new Set([...ownItems, ...chosen].map(menuItemKey))
+  const others = pool.filter((i) => !own.has(menuItemKey(i)))
   const shown = q.trim() ? others.filter((i) => i.toLowerCase().includes(q.trim().toLowerCase())) : others
 
   return (

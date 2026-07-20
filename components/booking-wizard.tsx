@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { AadhaarCapture } from '@/components/aadhaar-capture'
+import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-picker'
 import { cn } from '@/lib/utils'
 
 type EventType = { code: string; displayName: string; contactNumbers: number; isWedding: boolean }
@@ -30,7 +31,7 @@ type Options = {
   roomTypes: string[]
   roomRates: { roomType: string; rackRatePaise: number }[]
 }
-type Tier = { id: string; name: string; baseRatePaise: number }
+type Tier = CatalogTier
 
 type SubEvent = {
   id: string
@@ -58,6 +59,7 @@ export function BookingWizard() {
   const [step, setStep] = useState(0)
   const [options, setOptions] = useState<Options | null>(null)
   const [tiers, setTiers] = useState<Tier[]>([])
+  const [pools, setPools] = useState<MenuPool[]>([])
   const [eventId, setEventId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -77,6 +79,7 @@ export function BookingWizard() {
 
   // Step 4 — rooms
   const [rooms, setRooms] = useState<RoomReq[]>([])
+  const [roomsSavedAt, setRoomsSavedAt] = useState<Date | null>(null)
 
   // Step 5 — review
   const [quote, setQuote] = useState<Quote | null>(null)
@@ -85,8 +88,11 @@ export function BookingWizard() {
     api<Options>('/booking-options')
       .then(setOptions)
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load options'))
-    api<{ tiers: Tier[] }>('/menu/catalog')
-      .then((r) => setTiers(r.tiers))
+    api<{ tiers: Tier[]; pools: MenuPool[] }>('/menu/catalog')
+      .then((r) => {
+        setTiers(r.tiers)
+        setPools(r.pools ?? [])
+      })
       .catch(() => setTiers([]))
   }, [])
 
@@ -212,14 +218,34 @@ export function BookingWizard() {
     await refreshFunctions(eventId)
   }
 
+  const persistRooms = useCallback(async () => {
+    if (!eventId) return
+    await api(`/events/${eventId}/room-requirements`, {
+      method: 'POST',
+      body: JSON.stringify({ requirements: rooms.filter((r) => r.room_type && r.count > 0) }),
+    })
+  }, [eventId, rooms])
+
+  /**
+   * Rooms save themselves too. Deciding lodging can take days, so a half-filled list has to
+   * survive leaving the page — only complete lines are sent, so a row being typed is ignored.
+   */
+  useEffect(() => {
+    if (!eventId || step !== 3) return
+    const t = setTimeout(() => {
+      persistRooms()
+        .then(() => setRoomsSavedAt(new Date()))
+        .catch(() => { /* surfaced on the explicit Save & review */ })
+    }, 800)
+    return () => clearTimeout(t)
+  }, [rooms, eventId, step, persistRooms])
+
   async function saveRooms(next: number) {
     if (!eventId) return
     setBusy(true)
     try {
-      await api(`/events/${eventId}/room-requirements`, {
-        method: 'POST',
-        body: JSON.stringify({ requirements: rooms.filter((r) => r.room_type && r.count > 0) }),
-      })
+      await persistRooms()
+      setRoomsSavedAt(new Date())
       setStep(next)
       if (next === 4) await loadQuote(eventId)
     } catch (e) {
@@ -340,6 +366,7 @@ export function BookingWizard() {
           <FunctionsEditor
             venues={options.venues}
             tiers={tiers}
+            pools={pools}
             fromDate={fromDate}
             toDate={toDate}
             rows={subEvents.map((s) => ({
@@ -381,6 +408,11 @@ export function BookingWizard() {
                 <span className="tabular-nums">{formatPaise(roomsTotalPaise)}</span>
               </div>
             </div>
+          )}
+          {roomsSavedAt && (
+            <p className="text-xs text-emerald-600 dark:text-emerald-400">
+              Saved automatically — you can come back to this later.
+            </p>
           )}
           <Nav onBack={() => setStep(2)} onNext={() => saveRooms(4)} busy={busy} nextLabel="Save & review" />
         </StepCard>
@@ -479,6 +511,7 @@ type FunctionRow = {
 function FunctionsEditor({
   venues,
   tiers,
+  pools,
   fromDate,
   toDate,
   rows,
@@ -487,12 +520,14 @@ function FunctionsEditor({
 }: {
   venues: Venue[]
   tiers: Tier[]
+  pools: MenuPool[]
   fromDate: string
   toDate: string
   rows: FunctionRow[]
   onAdd: (spec: { name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; note: string; tierId: string }) => Promise<void>
   onRemove: (id: string) => Promise<void>
 }) {
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
   const [target, setTarget] = useState('')
@@ -565,21 +600,39 @@ function FunctionsEditor({
       {rows.length > 0 && (
         <ul className="divide-y rounded-lg border">
           {rows.map((r) => (
-            <li key={r.id} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-              <div className="min-w-0">
-                <span className="font-medium">{r.name}</span>{' '}
-                <span className="tabular-nums text-muted-foreground">
-                  {r.eventDate} · {r.startTime}–{r.endTime} · {r.venueLabel} · {r.pax} pax
-                </span>
-                <div className="text-xs text-muted-foreground">
-                  {r.menu
-                    ? `${r.menu.tierName} · ${formatPaise(r.menu.perPlatePaise)}/plate · food ${formatPaise(r.menu.perPlatePaise * r.pax)}`
-                    : 'No menu chosen'}
+            <li key={r.id} className="px-3 py-2 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="font-medium">{r.name}</span>{' '}
+                  <span className="tabular-nums text-muted-foreground">
+                    {r.eventDate} · {r.startTime}–{r.endTime} · {r.venueLabel} · {r.pax} pax
+                  </span>
+                  <div className="text-xs text-muted-foreground">
+                    {r.menu
+                      ? `${r.menu.tierName} · ${formatPaise(r.menu.perPlatePaise)}/plate · food ${formatPaise(r.menu.perPlatePaise * r.pax)}`
+                      : 'No menu chosen'}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setOpenMenu((o) => (o === r.id ? null : r.id))}
+                  >
+                    {openMenu === r.id ? 'Hide dishes' : 'Choose dishes'}
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={() => onRemove(r.id)}>
+                    <Trash2 className="size-4" />
+                  </Button>
                 </div>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => onRemove(r.id)}>
-                <Trash2 className="size-4" />
-              </Button>
+              {/* The full picker for this function — dishes, swap, preferences, chef delicacy.
+                  Everything in it saves itself, so a menu can be assembled over several days. */}
+              {openMenu === r.id && (
+                <div className="mt-3 rounded-lg border bg-muted/20 p-3">
+                  <MenuPicker subEventId={r.id} tiers={tiers} pools={pools} canEdit />
+                </div>
+              )}
             </li>
           ))}
         </ul>

@@ -10,18 +10,28 @@
  * names ("Rabdi Jalebi / Rose Barfi") are left alone.
  */
 /**
- * Lines where the last word really is shared by every part. Kept as an explicit list, not a
- * heuristic: a dry run over the hotel's 119 combined lines showed a "single-word parts share
- * the trailing noun" rule inventing dishes ("Rasbhari / Gulab Jamun" → "Rasbhari Jamun",
- * "Dosa / Bombey Bhel" → "Dosa Bhel"). It cannot tell a modifier ("Veg") from a whole dish
- * ("Rasmalai"), so only lines verified by eye belong here. Add to it as more are spotted.
+ * Lines the separators alone get wrong, written out by hand. A dry run over the hotel's 119
+ * combined lines showed every heuristic inventing dishes — a "single-word parts share the
+ * trailing noun" rule turned "Rasbhari / Gulab Jamun" into "Rasbhari Jamun" and
+ * "Dosa / Bombey Bhel" into "Dosa Bhel", because it cannot tell a modifier ("Veg") from a
+ * whole dish ("Rasmalai"). So only lines checked by eye are listed here; everything else
+ * splits plainly. Add to this as more are spotted.
  */
-const SHARED_TRAILING_NOUN = new Set(['Veg / Punjabi / Malai / Palak Kofta'])
+const EXPLICIT_SPLITS: Record<string, string[]> = {
+  // The koftas share their trailing noun.
+  'Veg / Punjabi / Malai / Palak Kofta': ['Veg Kofta', 'Punjabi Kofta', 'Malai Kofta', 'Palak Kofta'],
+  // ...and this one shares its leading words, so a plain split would leave a dish called
+  // "Masala" on its own.
+  'South Indian Dosa Plain, Masala': ['South Indian Dosa Plain', 'South Indian Dosa Masala'],
+}
+
+/** "/", "\" and "," all separate dishes on one printed line. */
+const SEPARATORS = new Set(['/', '\\', ','])
 
 /**
- * Splits on "/" and "\" only at the top level. A separator inside brackets is part of one
- * name — "Seasonal Halwa (Gajar / Lauki)" is a single dish, and splitting it blindly produced
- * the nonsense pair "Seasonal Halwa (Gajar" + "Lauki)".
+ * Splits on the separators, but only at the top level. One inside brackets belongs to the name:
+ * "Seasonal Halwa (Gajar / Lauki)" and "Poori Two Types (Plain, Masala)" are each a single
+ * dish, and splitting them blindly produced nonsense like "Seasonal Halwa (Gajar" + "Lauki)".
  */
 function splitTopLevel(raw: string): string[] {
   const out: string[] = []
@@ -30,7 +40,7 @@ function splitTopLevel(raw: string): string[] {
   for (const ch of raw) {
     if (ch === '(') depth++
     else if (ch === ')') depth = Math.max(0, depth - 1)
-    if ((ch === '/' || ch === '\\') && depth === 0) {
+    if (SEPARATORS.has(ch) && depth === 0) {
       out.push(cur)
       cur = ''
     } else {
@@ -42,14 +52,8 @@ function splitTopLevel(raw: string): string[] {
 }
 
 export function splitMenuItemName(raw: string): string[] {
+  const explicit = EXPLICIT_SPLITS[raw.trim()]
+  if (explicit) return explicit
   const parts = splitTopLevel(raw)
-  if (parts.length < 2) return [raw.trim()]
-
-  if (SHARED_TRAILING_NOUN.has(raw.trim())) {
-    const last = parts[parts.length - 1]!
-    const words = last.split(/\s+/)
-    const suffix = words[words.length - 1]!
-    return [...parts.slice(0, -1).map((p) => `${p} ${suffix}`), last]
-  }
-  return parts
+  return parts.length < 2 ? [raw.trim()] : parts
 }

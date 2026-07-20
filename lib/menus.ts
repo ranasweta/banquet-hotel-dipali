@@ -3,6 +3,7 @@ import { and, asc, eq, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
+import { dedupeMenuNames } from '@/lib/menu-name'
 import { recomputeProposalTotal } from '@/lib/pricing'
 
 /**
@@ -120,13 +121,18 @@ export async function getMasterMenuPools(): Promise<MenuPool[]> {
     .where(eq(schema.menuItems.isActive, true))
     .orderBy(asc(schema.menuCategories.name), asc(schema.menuItems.name))
 
-  const byCat = new Map<string, Set<string>>()
+  const byCat = new Map<string, string[]>()
   for (const r of rows) {
-    const set = byCat.get(r.categoryName) ?? new Set<string>()
-    set.add(r.itemName)
-    byCat.set(r.categoryName, set)
+    const list = byCat.get(r.categoryName) ?? []
+    list.push(r.itemName)
+    byCat.set(r.categoryName, list)
   }
-  return [...byCat.entries()].map(([categoryName, items]) => ({ categoryName, items: [...items] }))
+  // The same dish is spelled differently from tier to tier ("Aam Panna" / "Aam Pana
+  // (Seasonal)"), which would otherwise show up as several entries in one Swap list.
+  return [...byCat.entries()].map(([categoryName, items]) => ({
+    categoryName,
+    items: dedupeMenuNames(items),
+  }))
 }
 
 // ── Sub-event context + snapshot ─────────────────────────────────────────────
