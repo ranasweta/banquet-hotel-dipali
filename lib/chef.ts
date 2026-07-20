@@ -20,8 +20,12 @@ import { recomputeProposalTotal } from '@/lib/pricing'
  */
 
 const LOCKED_STATES = new Set(['locked', 'billed', 'closed'])
-/** Only the Chef prices a delicacy. The Auditor is the standing break-glass, as elsewhere. */
-const PRICER_ROLES = new Set(['chef', 'auditor'])
+/**
+ * Only the Chef prices a delicacy (the Auditor is the standing break-glass, as elsewhere). Like
+ * the other queues, this also scopes visibility: the queue belongs to whoever settles it, so
+ * everyone else sees only the requests they raised.
+ */
+export const PRICER_ROLES = new Set(['chef', 'auditor'])
 
 export type ChefRequest = {
   id: string
@@ -175,8 +179,12 @@ export type ChefQueueRow = ChefRequest & {
 }
 
 /** The Chef's queue: every request, pending first, with the function it belongs to. */
-export async function listChefQueue(status?: string): Promise<ChefQueueRow[]> {
-  const where = status ? sql`WHERE r.status = ${status}` : sql``
+export async function listChefQueue(status?: string, mineId?: string): Promise<ChefQueueRow[]> {
+  const conds = [] as ReturnType<typeof sql>[]
+  if (status) conds.push(sql`r.status = ${status}`)
+  // Non-pricers see only what they asked for — see the route.
+  if (mineId) conds.push(sql`r.requested_by = ${mineId}`)
+  const where = conds.length ? sql`WHERE ${sql.join(conds, sql` AND `)}` : sql``
   return (await db.execute(sql`
     SELECT r.id, r.sub_event_id AS "subEventId", r.description, r.status,
            r.charge_paise AS "chargePaise", r.remark,

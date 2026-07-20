@@ -1,23 +1,46 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { Bell } from 'lucide-react'
+import { useRouter, usePathname } from 'next/navigation'
+import { Bell, Check } from 'lucide-react'
 import { api } from '@/lib/http'
 import { cn } from '@/lib/utils'
 
 type Notification = { id: string; kind: string; message: string; href: string; at: string }
 
 const KIND_DOT: Record<string, string> = {
-  approval: 'bg-amber-500', change_request: 'bg-blue-500', payment: 'bg-red-500', stale: 'bg-slate-400',
+  approval: 'bg-amber-500',
+  change_request: 'bg-blue-500',
+  chef: 'bg-violet-500',
+  maintenance: 'bg-orange-500',
+  payment: 'bg-red-500',
+  stale: 'bg-slate-400',
 }
 
-/** Notification bell: the signed-in user's actionable feed (FR-9.1), refreshed on navigation. */
+/** Where each kind sends you — shown on the row so it's obvious before you click. */
+const KIND_TARGET: Record<string, string> = {
+  approval: 'Approvals',
+  change_request: 'Change requests',
+  chef: 'Chef requests',
+  maintenance: 'Maintenance',
+  payment: 'Booking',
+  stale: 'Booking',
+}
+
+/**
+ * Notification bell: the signed-in user's actionable feed (FR-9.1), refreshed on navigation.
+ *
+ * Clicking an item marks it read and takes the user to the screen where they can act on it, so
+ * a thing they've dealt with stops following them around. The panel opens to the RIGHT of the
+ * bell: the bell sits in a 240px sidebar, so a right-aligned panel would hang off the left edge
+ * of the window. It is also width- and height-capped against the viewport, and long messages
+ * wrap, so the feed can never push the window sideways.
+ */
 export function NotificationBell() {
   const [items, setItems] = useState<Notification[]>([])
   const [open, setOpen] = useState(false)
   const pathname = usePathname()
+  const router = useRouter()
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -32,9 +55,28 @@ export function NotificationBell() {
     function onClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
     document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onClick)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [])
+
+  async function dismiss(ids: string[]) {
+    // Drop it locally first so the row goes the moment it's touched; the write follows.
+    setItems((prev) => prev.filter((n) => !ids.includes(n.id)))
+    await api('/notifications/read', { method: 'POST', body: JSON.stringify({ ids }) }).catch(() => {})
+  }
+
+  async function openItem(n: Notification) {
+    setOpen(false)
+    await dismiss([n.id])
+    router.push(n.href)
+  }
 
   return (
     <div ref={ref} className="relative">
@@ -53,21 +95,46 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 z-20 mt-1 max-h-96 w-80 overflow-auto rounded-lg border bg-popover p-1 shadow-lg">
+        // left-0 (not right-0): the bell lives in a narrow sidebar, so the panel opens rightward
+        // into the page. Capped to the viewport in both directions so it never overflows.
+        <div className="absolute left-0 z-30 mt-1 w-[min(22rem,calc(100vw-2rem))] max-h-[min(24rem,70vh)] overflow-y-auto overscroll-contain rounded-lg border bg-popover shadow-lg">
+          <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="text-xs font-medium">
+              {items.length === 0 ? 'All clear' : `${items.length} need${items.length === 1 ? 's' : ''} you`}
+            </span>
+            {items.length > 0 && (
+              <button
+                type="button"
+                onClick={() => dismiss(items.map((n) => n.id))}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Check className="size-3" /> Mark all read
+              </button>
+            )}
+          </div>
+
           {items.length === 0 ? (
             <div className="p-3 text-sm text-muted-foreground">Nothing needs your attention.</div>
           ) : (
-            items.map((n) => (
-              <Link
-                key={n.id}
-                href={n.href}
-                onClick={() => setOpen(false)}
-                className="flex items-start gap-2 rounded-md p-2 text-sm hover:bg-muted"
-              >
-                <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', KIND_DOT[n.kind] ?? 'bg-muted-foreground')} />
-                <span>{n.message}</span>
-              </Link>
-            ))
+            <ul className="p-1">
+              {items.map((n) => (
+                <li key={n.id}>
+                  <button
+                    type="button"
+                    onClick={() => openItem(n)}
+                    className="flex w-full items-start gap-2 rounded-md p-2 text-left text-sm hover:bg-muted"
+                  >
+                    <span className={cn('mt-1.5 size-1.5 shrink-0 rounded-full', KIND_DOT[n.kind] ?? 'bg-muted-foreground')} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block break-words">{n.message}</span>
+                      <span className="mt-0.5 block text-xs text-muted-foreground">
+                        Go to {KIND_TARGET[n.kind] ?? 'the page'} →
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

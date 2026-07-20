@@ -465,6 +465,16 @@ CREATE TABLE chef_requests (
 CREATE INDEX chef_requests_sub_event_idx ON chef_requests (sub_event_id);
 CREATE INDEX chef_requests_pending_idx ON chef_requests (status) WHERE status = 'pending';
 
+-- Notifications a user has already dealt with. The feed itself is derived from live data; this
+-- records only "I've seen this one", so a touched item stops following them around. The id is
+-- the feed's own derived key ('exc:<uuid>'), so no foreign key is possible or wanted.
+CREATE TABLE notification_reads (
+  user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  notification_id text NOT NULL,
+  read_at         timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, notification_id)
+);
+
 CREATE TABLE lock_signoffs (
   event_id    uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   designation signoff_role NOT NULL,

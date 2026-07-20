@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
-import { listChangeRequests, requestChange } from '@/lib/change-requests'
+import { DECIDER_ROLES, listChangeRequests, requestChange } from '@/lib/change-requests'
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -20,13 +20,19 @@ const bodySchema = z.object({
     .refine((p) => Object.keys(p).length > 0, { message: 'nothing to change' }),
 })
 
-/** GET /change-requests?status=&event_id= — the change-request queue (pending first). */
+/**
+ * GET /change-requests?status=&event_id= — the change-request queue (pending first).
+ *
+ * Scoped like the exception queue: the Banquet Manager decides venue/timing moves, so only they
+ * (and the Auditor) see the whole queue. Everyone else sees only the moves they asked for.
+ */
 export const GET = route(async (req: NextRequest) => {
-  await requirePermission('calendar', 'view')
+  const actor = await requirePermission('calendar', 'view')
   const url = new URL(req.url)
   const status = url.searchParams.get('status') ?? undefined
   const eventId = url.searchParams.get('event_id') ?? undefined
   const rows = await listChangeRequests({
+    mineId: DECIDER_ROLES.has(actor.roleName) ? undefined : actor.id,
     status: status && ['pending', 'approved', 'rejected'].includes(status) ? status : undefined,
     eventId: eventId ?? undefined,
   })

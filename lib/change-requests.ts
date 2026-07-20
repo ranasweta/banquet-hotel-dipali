@@ -16,7 +16,12 @@ import { occupancyParts } from '@/lib/occupancy'
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 const REQUESTABLE = new Set(['confirmed', 'in_progress'])
-const DECIDER_ROLES = new Set(['banquet_manager', 'auditor'])
+/**
+ * Only the Banquet Manager settles a venue/timing move (plus the Auditor for oversight). This
+ * also scopes visibility: the queue belongs to whoever decides it, so everyone else sees only
+ * the moves they asked for themselves.
+ */
+export const DECIDER_ROLES = new Set(['banquet_manager', 'auditor'])
 const EXCLUSION_VIOLATION = '23P01'
 
 function pgCode(err: unknown): string | undefined {
@@ -185,10 +190,14 @@ export type ChangeRequestRow = {
 }
 
 /** Lists change requests with event + requester context (pending-first). */
-export async function listChangeRequests(opts: { status?: string; eventId?: string } = {}): Promise<ChangeRequestRow[]> {
+export async function listChangeRequests(
+  opts: { status?: string; eventId?: string; mineId?: string } = {},
+): Promise<ChangeRequestRow[]> {
   const conds = [] as ReturnType<typeof sql>[]
   if (opts.status) conds.push(sql`c.status = ${opts.status}`)
   if (opts.eventId) conds.push(sql`c.event_id = ${opts.eventId}`)
+  // `mineId` restricts to what this user raised — see the route for who gets the full queue.
+  if (opts.mineId) conds.push(sql`c.requested_by = ${opts.mineId}`)
   const where = conds.length ? sql`WHERE ${sql.join(conds, sql` AND `)}` : sql``
   return (await db.execute(sql`
     SELECT c.id, c.summary, c.status, c.reason, c.remark, c.event_id AS "eventId",

@@ -18,8 +18,14 @@ import { badRequest, conflict, forbidden, notFound, ApiError } from '@/lib/api'
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
-/** Only these roles may decide — a behavioural rule, not a permission bit (masters.ts). */
-const DECIDER_ROLES = new Set(['higher_authority', 'auditor'])
+/**
+ * Only these roles may decide an exception — a behavioural rule, not a permission bit
+ * (masters.ts). It also decides *visibility*: an approval queue belongs to whoever settles it,
+ * so everyone else sees only what they raised themselves. A Banquet Manager has no business
+ * reading a menu increase awaiting the GM, and the `approvals` permission bit is too coarse to
+ * say so — hence this list, applied server-side in the route.
+ */
+export const DECIDER_ROLES = new Set(['higher_authority', 'auditor'])
 const EXCLUSION_VIOLATION = '23P01'
 
 function pgCode(err: unknown): string | undefined {
