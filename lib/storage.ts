@@ -12,8 +12,8 @@ import { join, resolve } from 'node:path'
  *
  * Two drivers behind one interface, chosen by whether a blob store is configured:
  *
- *   BLOB_READ_WRITE_TOKEN set  ->  Vercel Blob, `access: 'private'`
- *   otherwise                  ->  the local `storage/` directory
+ *   BLOB_STORE_ID or BLOB_READ_WRITE_TOKEN  ->  Vercel Blob, `access: 'private'`
+ *   neither                                 ->  the local `storage/` directory
  *
  * The local driver is not a deployment option, it is the dev convenience. A serverless
  * filesystem is read-only apart from /tmp, and /tmp does not survive between invocations —
@@ -40,8 +40,37 @@ const BLOB_PREFIX = 'documents/'
 const IV_LEN = 12
 const TAG_LEN = 16
 
-/** Vercel Blob is used when its token is present — Vercel injects it once a store exists. */
-const usingBlob = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN)
+/**
+ * Is a blob store configured?
+ *
+ * Two credential shapes, because @vercel/blob accepts two: the classic
+ * `BLOB_READ_WRITE_TOKEN`, and `BLOB_STORE_ID` with OIDC, which is what a store connected
+ * through the dashboard actually provides today — no read-write token appears at all.
+ * Checking only the token sent this straight back to the local driver on Vercel, silently,
+ * which is the very failure this module exists to prevent.
+ */
+const usingBlob = () =>
+  Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID)
+
+/**
+ * Refuses to write to a filesystem that will forget.
+ *
+ * The local driver is correct on a laptop and catastrophic on a serverless host, and the
+ * difference is invisible at the call site — the upload succeeds either way. Deployed
+ * without a blob store, the file is gone by the next request, and because confirming an
+ * event requires both Aadhaar sides on record the symptom appears as "nothing can be
+ * confirmed", nowhere near the cause. Better to fail at the upload, loudly, naming the fix.
+ */
+function assertPersistent(): void {
+  if (usingBlob()) return
+  if (process.env.VERCEL) {
+    throw new Error(
+      'No blob store is configured, so an uploaded document would be written to a ' +
+        'filesystem that does not survive the request. Attach a Vercel Blob store to this ' +
+        'project (it provides BLOB_STORE_ID), or set BLOB_READ_WRITE_TOKEN.',
+    )
+  }
+}
 
 function key(): Buffer {
   const b64 = process.env.STORAGE_KEY
@@ -88,6 +117,7 @@ export async function storeEncrypted(
   bytes: Buffer,
   meta: { contentType: string },
 ): Promise<{ fileKey: string }> {
+  assertPersistent()
   const id = randomUUID()
 
   if (usingBlob()) {

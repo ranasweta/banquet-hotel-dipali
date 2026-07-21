@@ -90,8 +90,12 @@ clarifying questions arriving before implementation rather than after mistakes.
 7. **Aadhaar images** go to object storage (or `storage/` locally in dev),
    encrypted at rest, referenced by `guest_documents.file_key`. Never log
    Aadhaar data; never return file bytes without a permission check.
-   `lib/storage.ts` picks its driver from `BLOB_READ_WRITE_TOKEN`: Vercel Blob
-   with `access: 'private'` when set, the local `storage/` directory when not.
+   `lib/storage.ts` picks its driver from `BLOB_STORE_ID` **or**
+   `BLOB_READ_WRITE_TOKEN` — a dashboard-connected store provides the former and
+   authenticates by OIDC, so checking only the token silently falls back to disk.
+   Vercel Blob with `access: 'private'` when either is set, the local `storage/`
+   directory when neither is. On Vercel with neither, an upload throws rather
+   than writing somewhere that forgets.
    AES-256-GCM encryption happens **before** the bytes leave the process either
    way, so a leaked URL or a bucket snapshot yields ciphertext. The local driver
    is a dev convenience and never a deployment option — a serverless filesystem
