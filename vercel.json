@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "comment": "The daily job. It advances events onto their own dates (confirmed -> in_progress -> completed), which nothing else does — without it no event reaches Completed and none can be locked, invoiced or billed. It also generates wedding balance reminders and surfaces stale enquiries. 03:00 UTC is 08:30 IST, before the hotel's day starts.",
+      "path": "/api/v1/cron/run",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
