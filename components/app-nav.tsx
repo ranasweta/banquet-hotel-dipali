@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   BadgeCheck,
@@ -17,6 +18,7 @@ import {
   Repeat2,
   ShieldCheck,
   Users,
+  UtensilsCrossed,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
@@ -31,16 +33,18 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/bookings', label: 'Proposal', module: 'bookings', icon: FileText },
   { href: '/calendar', label: 'Calendar', module: 'calendar', icon: CalendarDays },
-  // Day sheet and Rooms are off the sidebar (client, 21 Jul 2026): both are reached from
-  // the dashboard tiles that already point at them, so they don't need a nav row of their
-  // own. The pages and their routes are intact — see SEED_ASSUMPTIONS §F13 for why they
-  // were not deleted outright.
+  // The 15-day operations board (client, 21 Jul 2026). It is the Banquet Manager's main
+  // screen, so it earns a sidebar row — the Chef and Booking Manager reach the same board.
+  { href: '/day-sheet', label: 'Next 15 days', module: 'calendar', icon: CalendarDays },
+  // Rooms stays off the sidebar: it is reached from the dashboard tile that already points
+  // at it, so it doesn't need a nav row of its own.
   { href: '/rooms/calendar', label: 'Lodging calendar', module: 'lodging_calendar', icon: BedDouble },
   { href: '/maintenance', label: 'Maintenance', module: 'maintenance', icon: Wrench },
   { href: '/chef', label: 'Chef requests', module: 'menus', icon: ChefHat },
   { href: '/approvals', label: 'Approvals', module: 'approvals', icon: BadgeCheck },
   { href: '/change-requests', label: 'Change requests', module: 'calendar', icon: Repeat2 },
   { href: '/reports', label: 'Reports', module: 'audit', icon: BarChart3 },
+  { href: '/admin/menus', label: 'Menu master', module: 'menu_master', icon: UtensilsCrossed },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users', icon: ShieldCheck },
   { href: '/admin/users', label: 'Users', module: 'roles_users', icon: Users },
 ]
@@ -102,21 +106,35 @@ export function AppNav({
         collapsed ? 'w-[4.5rem]' : 'w-60',
       )}
     >
-      {/* Brand */}
+      {/* Brand. The mark itself when there is room for it, the diamond alone when collapsed —
+          the logo ships on a white background rather than transparent, so `mix-blend-multiply`
+          drops that white into the sidebar instead of showing a box around it. */}
       <div className={cn('flex items-start gap-2 border-b p-4', collapsed && 'flex-col items-center gap-3 px-2')}>
         {collapsed ? (
-          <span
-            className="grid size-9 place-items-center rounded-lg bg-sidebar-primary font-[family-name:var(--font-serif)] text-sm font-bold text-sidebar-primary-foreground"
-            aria-hidden
-          >
-            HD
-          </span>
+          <Image
+            src="/hotel-dipali-logo.png"
+            alt="Hotel Dipali"
+            width={128}
+            height={128}
+            // Cropped to the diamond-and-monogram: the wordmark underneath is illegible at
+            // 36px and would just read as a grey smudge.
+            className="size-9 shrink-0 object-cover object-top mix-blend-multiply dark:mix-blend-normal"
+          />
         ) : (
-          <div className="min-w-0 flex-1">
-            <div className="truncate font-[family-name:var(--font-serif)] text-base font-bold tracking-tight text-sidebar-primary">
-              Hotel Dipali
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <Image
+              src="/hotel-dipali-logo.png"
+              alt=""
+              width={128}
+              height={128}
+              className="size-9 shrink-0 object-cover object-top mix-blend-multiply dark:mix-blend-normal"
+            />
+            <div className="min-w-0">
+              <div className="truncate font-[family-name:var(--font-serif)] text-base font-bold tracking-tight text-sidebar-primary">
+                Hotel Dipali
+              </div>
+              <div className="truncate text-xs text-muted-foreground">Banquet Management</div>
             </div>
-            <div className="truncate text-xs text-muted-foreground">Banquet Management</div>
           </div>
         )}
         <NotificationBell />

@@ -52,12 +52,20 @@ export const users = pgTable("users", {
 	passwordHash: text("password_hash").notNull(),
 	roleId: uuid("role_id").notNull(),
 	isActive: boolean("is_active").default(true).notNull(),
+	// Which lodge a Lodge Manager is responsible for (migration 0013). NULL for every
+	// other role; a Lodge Manager with NULL sees no rooms rather than all of them.
+	lodgingUnitId: uuid("lodging_unit_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	foreignKey({
 			columns: [table.roleId],
 			foreignColumns: [roles.id],
 			name: "users_role_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.lodgingUnitId],
+			foreignColumns: [lodgingUnits.id],
+			name: "users_lodging_unit_id_fkey"
 		}),
 	unique("users_mobile_key").on(table.mobile),
 	unique("users_email_key").on(table.email),
@@ -638,6 +646,9 @@ export const invoiceLines = pgTable("invoice_lines", {
 	invoiceId: uuid("invoice_id").notNull(),
 	section: text().notNull(),
 	description: text().notNull(),
+	// Which function the line belongs to, for grouping the printed bill (migration 0015).
+	// NULL for event-level lines: rooms, maintenance, adjustments.
+	functionLabel: text("function_label"),
 	sacHsn: text("sac_hsn"),
 	qty: numeric({ precision: 12, scale:  2 }).default('1').notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
@@ -731,6 +742,9 @@ export const subEventMenuSelections = pgTable("sub_event_menu_selections", {
 	categoryName: text("category_name").notNull(),
 	itemName: text("item_name").notNull(),
 	note: text(),
+	// Chosen after Increase was pressed on its segment (migration 0013). Rendered apart in
+	// the picker and listed by name when the function submits its increases.
+	isExtra: boolean("is_extra").default(false).notNull(),
 }, (table) => [
 	foreignKey({
 			columns: [table.menuId],
@@ -781,6 +795,15 @@ export const subEventMenuCategories = pgTable("sub_event_menu_categories", {
 	categoryName: text("category_name").notNull(),
 	basePick: integer("base_pick"),
 	extraPicks: integer("extra_picks").default(0).notNull(),
+	// How many extra picks the Authority has sanctioned (migration 0012). The difference
+	// against extraPicks is what still has to reach the GM at lock.
+	approvedExtraPicks: integer("approved_extra_picks").default(0).notNull(),
+	// How many extra picks have been sent to the Authority (migration 0013). Increases now
+	// go out per function on an explicit button, so extraPicks minus this is what the next
+	// press will carry. approved <= submitted <= extra.
+	submittedExtraPicks: integer("submitted_extra_picks").default(0).notNull(),
+	// Increase pressed on this segment: picking is unbounded from here on (migration 0013).
+	increaseUnlocked: boolean("increase_unlocked").default(false).notNull(),
 	exceptionId: uuid("exception_id"),
 }, (table) => [
 	foreignKey({

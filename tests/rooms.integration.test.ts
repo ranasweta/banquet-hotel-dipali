@@ -156,10 +156,13 @@ d('bulk room booking + BR-L2 on the proposal', () => {
     expect(under).toMatchObject({ totalRooms: 20, deferred: false })
     expect(await pending35(e)).toHaveLength(0)
 
-    // Two lodges, 34 + 1 = 35 — the threshold is the event's total, not any one line.
+    // Two lodges, 33 + 2 = 35 — the threshold is the event's total, not any one line.
+    // The counts are the lodges' real inventory: Palace holds 33 deluxe and Regency 2
+    // suites, and asking for more than that is refused by the hard cap before BR-L2 is
+    // ever reached (see §F13 — the two rules are independent).
     const over = await rooms.saveRoomRequirements(actor, e, [
-      { unitId: palace, roomType: 'deluxe', count: 34, checkIn: '2026-09-01', checkOut: '2026-09-03' },
-      { unitId: regency, roomType: 'suite', count: 1, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: palace, roomType: 'deluxe', count: 33, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: regency, roomType: 'suite', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
     ])
     expect(over).toMatchObject({ totalRooms: 35, deferred: true })
 
@@ -183,13 +186,23 @@ d('bulk room booking + BR-L2 on the proposal', () => {
     expect(await pending35(e)).toHaveLength(0)
   })
 
-  it('refuses requirements on an event that is no longer an enquiry', async () => {
+  it('keeps rooms editable after confirmation, and freezes them at lock', async () => {
+    // Client, 21 Jul 2026: "old proposal can be updated with rooms and all". A guest's
+    // lodging changes right up to the event, and the proposal is the only place rooms are
+    // recorded. Locked is still locked.
     const e = await makeEvent() // confirmed
-    await expect(
-      rooms.saveRoomRequirements(actor, e, [
-        { unitId: await unitId('Palace'), roomType: 'deluxe', count: 1, checkIn: '2026-09-01', checkOut: '2026-09-02' },
-      ]),
-    ).rejects.toThrow(/enquiry/)
+    const line = [
+      { unitId: await unitId('Palace'), roomType: 'deluxe', count: 1, checkIn: '2026-09-01', checkOut: '2026-09-02' },
+    ]
+    const saved = await rooms.saveRoomRequirements(actor, e, line)
+    expect(saved.totalRooms).toBe(1)
+
+    await db.update(schema.events).set({ status: 'locked' }).where(eq(schema.events.id, e))
+    try {
+      await expect(rooms.saveRoomRequirements(actor, e, line)).rejects.toMatchObject({ status: 409 })
+    } finally {
+      await db.update(schema.events).set({ status: 'confirmed' }).where(eq(schema.events.id, e))
+    }
   })
 })
 
@@ -308,24 +321,323 @@ d('lodging calendar (Lodge Manager 30-day occupancy)', () => {
   })
 })
 
-d('reconciliation (FR-4.5)', () => {
-  it('reports promised vs allocated vs variance per type', async () => {
-    const e = await makeEvent()
-    await db.insert(schema.roomRequirements).values([
-      { eventId: e, roomType: 'deluxe', count: 3, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+d('reconciliation — can the lodge deliver? (FR-4.5, rewritten 21 Jul 2026)', () => {
+  async function unit(name: string): Promise<string> {
+    const [u] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = ${name}`)) as unknown as { id: string }[]
+    return u!.id
+  }
+  /** A confirmed event spanning [from, to] holding `count` Palace deluxe over those nights. */
+  async function holding(count: number, from: string, to: string): Promise<string> {
+    const eventId = await makeEvent()
+    const venueId = await lawnVenueId()
+    await db.insert(schema.subEvents).values({
+      eventId, name: 'Function', eventDate: from, startTime: '19:00', endTime: '23:00', venueId, pax: 100,
+    })
+    await db.insert(schema.subEvents).values({
+      eventId, name: 'Reception', eventDate: to, startTime: '19:00', endTime: '23:00', venueId, pax: 100,
+    })
+    await rooms.saveRoomRequirements(actor, eventId, [
+      { unitId: await unit('Palace'), roomType: 'deluxe', count, checkIn: from, checkOut: to },
     ])
-    const [d1, d2] = await roomsOfType('Regency', 'deluxe', 2)
-    await rooms.allocateRooms(actor, e, [
-      { roomId: d1!, checkIn: '2026-09-01', checkOut: '2026-09-03' },
-      { roomId: d2!, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+    return eventId
+  }
+
+  it('reports a deliverable booking with no shortfall', async () => {
+    const e = await holding(5, '2026-09-01', '2026-09-03')
+    const rec = await rooms.getReconciliation(e)
+
+    expect(rec.lines).toHaveLength(1)
+    const line = rec.lines[0]!
+    expect(line.unitName).toBe('Palace')
+    expect(line.promised).toBe(5)
+    expect(line.capacity).toBe(33)
+    expect(line.takenByOthers).toBe(0)
+    expect(line.shortfall).toBe(0)
+    expect(rec.deliverable).toBe(true)
+  })
+
+  it('does not count the event against itself', async () => {
+    // The old implementation compared against room_allocations and reported -promised for
+    // every event; the new one must not simply move that bug to a different table.
+    const e = await holding(30, '2026-09-05', '2026-09-07')
+    const rec = await rooms.getReconciliation(e)
+    expect(rec.lines[0]!.takenByOthers).toBe(0)
+    expect(rec.deliverable).toBe(true)
+  })
+
+  it('reports a shortfall when another event has taken the rooms since', async () => {
+    // The hard cap stops an overbooking at save time; this is the re-check at lock, when a
+    // competing event may have confirmed over the same nights.
+    const ours = await holding(20, '2026-09-10', '2026-09-12')
+    const theirs = await holding(13, '2026-09-10', '2026-09-12') // 20 + 13 = 33, all of Palace
+
+    // A third booking cannot even be saved now — the cap refuses it.
+    await expect(holding(1, '2026-09-10', '2026-09-12')).rejects.toMatchObject({ status: 409 })
+
+    // Retiring a room after the fact is the case reconciliation exists to catch.
+    await db.execute(sql`
+      UPDATE rooms SET is_active = false
+       WHERE id IN (SELECT r.id FROM rooms r JOIN lodging_units u ON u.id = r.unit_id
+                    WHERE u.name = 'Palace' AND r.room_type = 'deluxe' AND r.is_active
+                    ORDER BY r.room_no LIMIT 3)`)
+    try {
+      const rec = await rooms.getReconciliation(ours)
+      expect(rec.lines[0]!.capacity).toBe(30) // 33 - 3 retired
+      expect(rec.lines[0]!.takenByOthers).toBe(13) // the other event
+      expect(rec.lines[0]!.available).toBe(17)
+      expect(rec.lines[0]!.shortfall).toBe(3) // promised 20, only 17 left
+      expect(rec.deliverable).toBe(false)
+      expect(rec.totals).toEqual({ promised: 20, shortfall: 3 })
+    } finally {
+      await db.execute(sql`
+        UPDATE rooms SET is_active = true
+         WHERE room_type = 'deluxe'
+           AND unit_id = (SELECT id FROM lodging_units WHERE name = 'Palace')`)
+      void theirs
+    }
+  })
+
+  it('reports an empty reconciliation for an event with no rooms', async () => {
+    const rec = await rooms.getReconciliation(await makeEvent())
+    expect(rec.lines).toHaveLength(0)
+    expect(rec.deliverable).toBe(true)
+  })
+})
+
+d('room inventory hard cap (client, 21 Jul 2026)', () => {
+  async function palaceId(): Promise<string> {
+    const [u] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = 'Palace'`)) as unknown as { id: string }[]
+    return u!.id
+  }
+  /**
+   * An event spanning [from, to], so the room-date clamp has a real span to work against.
+   * Rooms may be held from the first function's date to the morning after the last.
+   */
+  async function eventOn(from: string, to = from): Promise<string> {
+    const eventId = await makeEvent()
+    const venueId = await lawnVenueId()
+    await db.insert(schema.subEvents).values({
+      eventId, name: 'Function', eventDate: from, startTime: '19:00', endTime: '23:00', venueId, pax: 100,
+    })
+    if (to !== from) {
+      await db.insert(schema.subEvents).values({
+        eventId, name: 'Reception', eventDate: to, startTime: '19:00', endTime: '23:00', venueId, pax: 100,
+      })
+    }
+    return eventId
+  }
+
+  it('refuses more rooms of a category than the lodge has', async () => {
+    // Palace holds 33 deluxe. Asking for 40 is not an approval question, it is impossible.
+    const eventId = await eventOn('2026-11-10', '2026-11-11')
+    await expect(
+      rooms.saveRoomRequirements(actor, eventId, [
+        { unitId: await palaceId(), roomType: 'deluxe', count: 40, checkIn: '2026-11-10', checkOut: '2026-11-12' },
+      ]),
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('counts only committed events, so an enquiry holds nothing', async () => {
+    const unitId = await palaceId()
+    // An enquiry takes 30 of the 33 deluxe…
+    const enquiry = await makeEvent({ status: 'enquiry' })
+    const enquiryVenue = await lawnVenueId()
+    await db.insert(schema.subEvents).values({
+      eventId: enquiry, name: 'Function', eventDate: '2026-11-20', startTime: '19:00', endTime: '23:00',
+      venueId: enquiryVenue, pax: 100,
+    })
+    await db.insert(schema.subEvents).values({
+      eventId: enquiry, name: 'Reception', eventDate: '2026-11-21', startTime: '19:00', endTime: '23:00',
+      venueId: enquiryVenue, pax: 100,
+    })
+    await rooms.saveRoomRequirements(actor, enquiry, [
+      { unitId, roomType: 'deluxe', count: 30, checkIn: '2026-11-20', checkOut: '2026-11-22' },
     ])
 
-    const rec = await rooms.getReconciliation(e)
-    const deluxe = rec.byType.find((r) => r.roomType === 'deluxe')!
-    expect(deluxe.promised).toBe(3)
-    expect(deluxe.allocated).toBe(2)
-    expect(deluxe.variance).toBe(-1) // one short of promised
-    expect(rec.totals.allocated).toBe(2)
-    expect(rec.allocations).toHaveLength(2)
+    // …and a confirmed booking can still take all 33: whoever commits first wins.
+    const confirmed = await eventOn('2026-11-20', '2026-11-21')
+    const res = await rooms.saveRoomRequirements(actor, confirmed, [
+      { unitId, roomType: 'deluxe', count: 33, checkIn: '2026-11-20', checkOut: '2026-11-22' },
+    ])
+    expect(res.totalRooms).toBe(33)
+  })
+
+  it('measures the tightest night in the range, not the average', async () => {
+    const unitId = await palaceId()
+    const held = await eventOn('2026-11-02')
+    await rooms.saveRoomRequirements(actor, held, [
+      // Only the middle night of the window below.
+      { unitId, roomType: 'suite', count: 3, checkIn: '2026-11-02', checkOut: '2026-11-03' },
+    ])
+
+    // Palace has 3 suites, all taken on the 2nd. A 1st–4th stay must see zero free, even
+    // though two of its three nights are wide open.
+    const avail = await rooms.getRoomAvailability([
+      { unitId, roomType: 'suite', checkIn: '2026-11-01', checkOut: '2026-11-04' },
+    ])
+    expect(avail[0]!.total).toBe(3)
+    expect(avail[0]!.peakBooked).toBe(3)
+    expect(avail[0]!.available).toBe(0)
+  })
+
+  it('does not count an event against itself when its rooms are re-saved', async () => {
+    const unitId = await palaceId()
+    const eventId = await eventOn('2026-11-15', '2026-11-16')
+    await rooms.saveRoomRequirements(actor, eventId, [
+      { unitId, roomType: 'deluxe', count: 33, checkIn: '2026-11-15', checkOut: '2026-11-17' },
+    ])
+    // Re-saving the same 33 must not read them as already taken.
+    const res = await rooms.saveRoomRequirements(actor, eventId, [
+      { unitId, roomType: 'deluxe', count: 33, checkIn: '2026-11-15', checkOut: '2026-11-17' },
+    ])
+    expect(res.totalRooms).toBe(33)
+  })
+
+  it('keeps room dates inside the event, allowing checkout the morning after', async () => {
+    const unitId = await palaceId()
+    const eventId = await eventOn('2026-11-25')
+
+    await expect(
+      rooms.saveRoomRequirements(actor, eventId, [
+        { unitId, roomType: 'deluxe', count: 2, checkIn: '2026-11-24', checkOut: '2026-11-26' },
+      ]),
+    ).rejects.toThrow(/before the event starts/)
+
+    await expect(
+      rooms.saveRoomRequirements(actor, eventId, [
+        { unitId, roomType: 'deluxe', count: 2, checkIn: '2026-11-25', checkOut: '2026-11-28' },
+      ]),
+    ).rejects.toThrow(/after the event ends/)
+
+    // Check-out on the 26th — the morning after the function — is the boundary and is fine.
+    const ok = await rooms.saveRoomRequirements(actor, eventId, [
+      { unitId, roomType: 'deluxe', count: 2, checkIn: '2026-11-25', checkOut: '2026-11-26' },
+    ])
+    expect(ok.totalRooms).toBe(2)
+  })
+})
+
+d('room shortfalls — the notification behind "someone booked it first"', () => {
+  async function unitId2(name: string): Promise<string> {
+    const [u] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = ${name}`)) as unknown as { id: string }[]
+    return u!.id
+  }
+  async function spanning(from: string, to: string, status = 'confirmed'): Promise<string> {
+    const eventId = await makeEvent({ status })
+    const venueId = await lawnVenueId()
+    await db.insert(schema.subEvents).values([
+      { eventId, name: 'Function', eventDate: from, startTime: '19:00', endTime: '23:00', venueId, pax: 100 },
+      { eventId, name: 'Reception', eventDate: to, startTime: '19:00', endTime: '23:00', venueId, pax: 100 },
+    ])
+    return eventId
+  }
+
+  it('flags an enquiry whose rooms were taken by an event that confirmed after it', async () => {
+    // The client's exact case: enquiries hold nothing, so the enquiry saves happily, and
+    // then someone else commits the same rooms. Nobody is blocked — the loser is told.
+    const palace = await unitId2('Palace')
+    const enquiry = await spanning('2026-10-10', '2026-10-12', 'enquiry')
+    await rooms.saveRoomRequirements(actor, enquiry, [
+      { unitId: palace, roomType: 'deluxe', count: 10, checkIn: '2026-10-10', checkOut: '2026-10-12' },
+    ])
+    expect(await rooms.listRoomShortfalls({})).toHaveLength(0) // nothing wrong yet
+
+    // A confirmed booking takes 30 of the 33 — the enquiry held none of them.
+    const confirmed = await spanning('2026-10-10', '2026-10-12')
+    await rooms.saveRoomRequirements(actor, confirmed, [
+      { unitId: palace, roomType: 'deluxe', count: 30, checkIn: '2026-10-10', checkOut: '2026-10-12' },
+    ])
+
+    const shortfalls = await rooms.listRoomShortfalls({})
+    expect(shortfalls).toHaveLength(1)
+    const sf = shortfalls[0]!
+    expect(sf.eventId).toBe(enquiry) // the loser, not the winner
+    expect(sf.promised).toBe(10)
+    expect(sf.available).toBe(3) // 33 - 30
+    expect(sf.shortfall).toBe(7)
+    expect(sf.unitName).toBe('Palace')
+  })
+
+  it('clears itself once the booking is changed', async () => {
+    const palace = await unitId2('Palace')
+    const enquiry = await spanning('2026-10-20', '2026-10-22', 'enquiry')
+    await rooms.saveRoomRequirements(actor, enquiry, [
+      { unitId: palace, roomType: 'deluxe', count: 10, checkIn: '2026-10-20', checkOut: '2026-10-22' },
+    ])
+    const confirmed = await spanning('2026-10-20', '2026-10-22')
+    await rooms.saveRoomRequirements(actor, confirmed, [
+      { unitId: palace, roomType: 'deluxe', count: 30, checkIn: '2026-10-20', checkOut: '2026-10-22' },
+    ])
+    expect(await rooms.listRoomShortfalls({})).toHaveLength(1)
+
+    // Trimming to what is actually free resolves it — the notice is derived, never stored.
+    await rooms.saveRoomRequirements(actor, enquiry, [
+      { unitId: palace, roomType: 'deluxe', count: 3, checkIn: '2026-10-20', checkOut: '2026-10-22' },
+    ])
+    expect(await rooms.listRoomShortfalls({})).toHaveLength(0)
+  })
+
+  it('scopes to the proposal owner and to a lodge', async () => {
+    const palace = await unitId2('Palace')
+    const enquiry = await spanning('2026-10-25', '2026-10-27', 'enquiry')
+    await rooms.saveRoomRequirements(actor, enquiry, [
+      { unitId: palace, roomType: 'deluxe', count: 10, checkIn: '2026-10-25', checkOut: '2026-10-27' },
+    ])
+    const confirmed = await spanning('2026-10-25', '2026-10-27')
+    await rooms.saveRoomRequirements(actor, confirmed, [
+      { unitId: palace, roomType: 'deluxe', count: 30, checkIn: '2026-10-25', checkOut: '2026-10-27' },
+    ])
+
+    // The owner of the losing proposal hears about it…
+    expect(await rooms.listRoomShortfalls({ ownerId: actor.id })).toHaveLength(1)
+    // …and somebody else does not.
+    const [other] = (await db.execute(sql`
+      SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+      WHERE r.name = 'higher_authority' LIMIT 1`)) as unknown as { id: string }[]
+    expect(await rooms.listRoomShortfalls({ ownerId: other!.id })).toHaveLength(0)
+
+    // Palace's Lodge Manager sees it; Regency's does not.
+    expect(await rooms.listRoomShortfalls({ unitId: palace })).toHaveLength(1)
+    expect(await rooms.listRoomShortfalls({ unitId: await unitId2('Regency') })).toHaveLength(0)
+  })
+
+  it('gives every line its own identity, even when they look alike', async () => {
+    // A proposal may hold two lines of the same category in the same lodge from the same
+    // check-in, differing only in check-out — and nothing forbids two identical lines. The
+    // feed keys on the requirement row for exactly this reason; keying on the shape of the
+    // line put duplicate React keys in the notification list.
+    const palace = await unitId2('Palace')
+    const enquiry = await spanning('2026-12-01', '2026-12-05', 'enquiry')
+    await rooms.saveRoomRequirements(actor, enquiry, [
+      { unitId: palace, roomType: 'deluxe', count: 10, checkIn: '2026-12-01', checkOut: '2026-12-03' },
+      { unitId: palace, roomType: 'deluxe', count: 10, checkIn: '2026-12-01', checkOut: '2026-12-05' },
+    ])
+    const confirmed = await spanning('2026-12-01', '2026-12-05')
+    await rooms.saveRoomRequirements(actor, confirmed, [
+      { unitId: palace, roomType: 'deluxe', count: 30, checkIn: '2026-12-01', checkOut: '2026-12-05' },
+    ])
+
+    const shortfalls = await rooms.listRoomShortfalls({})
+    expect(shortfalls).toHaveLength(2) // both lines are short
+    const ids = shortfalls.map((s) => s.requirementId)
+    expect(new Set(ids).size).toBe(2) // and they are distinguishable
+    expect(ids.every(Boolean)).toBe(true)
+  })
+
+  it('ignores locked and cancelled proposals', async () => {
+    const palace = await unitId2('Palace')
+    const enquiry = await spanning('2026-11-05', '2026-11-07', 'enquiry')
+    await rooms.saveRoomRequirements(actor, enquiry, [
+      { unitId: palace, roomType: 'deluxe', count: 10, checkIn: '2026-11-05', checkOut: '2026-11-07' },
+    ])
+    const confirmed = await spanning('2026-11-05', '2026-11-07')
+    await rooms.saveRoomRequirements(actor, confirmed, [
+      { unitId: palace, roomType: 'deluxe', count: 30, checkIn: '2026-11-05', checkOut: '2026-11-07' },
+    ])
+    expect(await rooms.listRoomShortfalls({})).toHaveLength(1)
+
+    // A settled proposal is nobody's problem any more.
+    await db.update(schema.events).set({ status: 'cancelled' }).where(eq(schema.events.id, enquiry))
+    expect(await rooms.listRoomShortfalls({})).toHaveLength(0)
   })
 })

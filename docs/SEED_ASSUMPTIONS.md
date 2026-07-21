@@ -771,6 +771,154 @@ the fact that it is measured against `proposal_total_paise` — which excludes r
 design (§F10). On a proposal with heavy lodging the cap therefore applies to the smaller
 number; the client was asked and chose to keep it as is.
 
+### F13. Rooms are capped by real inventory, and by the event's own dates
+Client, 21 Jul 2026. Two bounds now sit on a room line, and they are different things:
+
+**The hard cap.** A lodge cannot sell a category it does not have. `getRoomAvailability`
+(`lib/rooms.ts`) measures each requested line against `rooms` for that unit and category,
+and refuses a save that exceeds it. It is measured **per night and reported at the tightest
+one** — a 1–5 Jul stay where nights 1–2 have 20 of 27 taken and night 3 has 25 has two rooms
+free, not seven. Quoting the average would promise a room that vanishes mid-stay.
+
+**The 35+ rule (BR-L2) is unchanged and is NOT a limit.** It is an Authority approval. The
+two stack: 40 rooms when 27 exist is blocked outright; 36 rooms that do exist are allowed
+and escalated.
+
+**Enquiries hold nothing.** Only committed events (`confirmed` and beyond) count against
+inventory, so two managers may both be drafting the same rooms and whoever confirms first
+takes them. The client was explicit: no soft reservations, and the loser is *notified* to
+change dates, category or lodge rather than being blocked in advance.
+
+**The notification.** `listRoomShortfalls` (`lib/rooms.ts`) finds every live proposal whose
+rooms can no longer be honoured, and `lib/notifications.ts` turns each into a feed entry:
+*"Rooms no longer free — E-1042: 7 of 10 Palace deluxe (10 Oct to 12 Oct). Change the dates,
+category or lodge."*
+
+It is **derived, never stored**, like the rest of the feed: a shortfall stops existing the
+moment the booking is trimmed, so the notice clears itself and there is no row to clean up.
+Scoped the way every other queue is — the proposal's owner hears about their own, a Lodge
+Manager about their own lodge, the Auditor about all of it. A Lodge Manager with no lodge
+assigned is given nothing rather than everything.
+
+It catches two cases, not one: rooms taken by an event that committed later, and a room
+**retired** under a booking that was sound when it was made — which no save-time check can
+ever prevent.
+
+**Room dates are bounded by the event.** Check-in may not precede the first function's date,
+and check-out may reach at most the morning after the last — read from `sub_events`, never
+from the `events.first_date` cache, which is only written at confirm and is NULL while a
+proposal is still being built.
+
+**Reconciliation was rewritten to match.** It compared `room_requirements` against
+`room_allocations` — promised vs assigned — and since nothing has written an allocation since
+migration 0009, every event reported `allocated = 0` and a variance of `-promised`. The Lodge
+Manager's sign-off blocks the lock, so it was gating on a figure that was wrong by
+construction. It now answers *can the lodge deliver what was sold?*: promised, capacity, the
+peak held by other committed events, and the shortfall — with `deliverable` as the boolean the
+sign-off actually attests to. The hard cap stops an overbooking at save time; this is the
+re-check at lock, when the answer can have changed.
+
+### F14. A Lodge Manager sees one lodge
+Client, 21 Jul 2026: "the palace lodge manager should see palace data only". `users.lodging_unit_id`
+(migration 0013) carries it, and `lodgeScopeFor` in `lib/auth.ts` applies it to the lodging
+calendar and its day drill-down. The inventory itself stays **single and shared** — only the
+read is filtered.
+
+**NULL is a loud failure, not a wildcard.** A Lodge Manager with no lodge assigned gets a 403
+telling them to ask an Admin, rather than silently widening to all three. Every other role is
+unscoped. The seed matches managers to lodges by the name in their title.
+
+### F15. Increases unlock a segment; the GM hears per function
+Client, 21 Jul 2026. This **supersedes F11's second half** and the lock-time batching of
+migration 0008.
+
+**Increase is not "+1" — it unlocks.** Pressing it on a segment lifts that segment's ceiling
+entirely; from there the manager takes as many dishes as the guest wants. Everything above
+`base_pick` is an extra.
+
+**Extras are dishes, not a count.** `sub_event_menu_selections.is_extra` (migration 0013)
+records which ones, so the picker can colour them apart and the Authority decides on
+"two more starters: paneer tikka, galouti" rather than on "+2 on segment 3". This also
+retires the old partial-approval behaviour of dropping dishes in **alphabetical** order,
+which deleted a guest's choice at random because the snapshot could not say which picks
+were the additions.
+
+Which dishes are extras is decided **positionally** — the tail of the selection array, in
+click order. Selections carry no insertion timestamp, so the read path returns base picks
+first and extras after, and that ordering *is* the record.
+
+**Two free per FUNCTION, not per segment.** Asked explicitly. Per segment was rejected: a
+four-function wedding with five unlocked segments each would give away forty dishes unseen.
+The allowance is derived at read time as `min(2, total extras on the sub-event)` rather than
+stored, so removing an extra hands it back automatically.
+
+**Submission is per function, on a button.** Modelled on the chef delicacy request and
+pre-filled with what has been ticked. `submitted_extra_picks` is the high-water mark, so
+pressing it again after adding more dishes sends only what is new. Increases no longer reach
+the GM at the lock; instead the lock checklist gains a blocking item — *every menu increase
+sent to the Higher Authority* — because an unsubmitted extra is a dish the guest is getting
+that nobody sanctioned. It is not auto-sent: pressing submit is the manager's call, and the
+Authority should not receive a request nobody chose to make.
+
+### F16. The Banquet Manager reads; the Authority decides
+Client, 21 Jul 2026: "the banquet manager does not need to approve anything he will just see
+which event when how many people and what is the menu". Venue/date/time change requests pass
+to the Higher Authority (`lib/change-requests.ts` `DECIDER_ROLES`), and migration 0014 moves
+`calendar:create_edit` and `approvals:create_edit` accordingly.
+
+**One grant deliberately NOT revoked: `billing:create_edit`.** It carries his day-sheet
+sign-off, which is an attestation that he has read the sheet rather than an approval of
+anything — and it is a blocking lock item, so dropping it would stop every event from
+locking. Flagged rather than assumed either way; see question 14 below.
+
+His screen is the new 15-day operations board (`/day-sheet`), which finally gives the day
+sheet the page `docs/UI_BRIEF.md` always specified and the lock checklist always referred to.
+It carries **no money at all**, and that is enforced at the query in `lib/daysheet.ts`, not by
+hiding fields in the UI — the payload is served to roles with no billing grant, so a per-plate
+rate travelling to the browser and being styled away would be a leak with a stylesheet in
+front of it. The Chef reads the same board for a single day.
+
+### F17. The lifecycle had no way to advance
+Not a client instruction — a defect found while mapping the system on 21 Jul 2026.
+
+`transitionEvent` declared eleven legal moves and only five had a caller: **nothing anywhere
+wrote `in_progress` or `completed`**. Since `lockEvent` requires `completed`, sign-offs require
+`in_progress`/`completed`, and the maintenance module only lists events in those states, the
+entire back half of the product was unreachable — an event could be confirmed and then never
+change again. No event could be locked, invoiced or billed.
+
+`advanceEventStatuses` (`lib/events.ts`), run by the daily cron, closes it: an event starts
+when its first function's date arrives and completes once the last has passed. It catches up
+in a single pass when the job has not run for days, and it reads dates from `sub_events`
+rather than the `first_date` cache. PRD §4.1 always implied this ("In Progress: event dates
+have begun"); nothing had implemented it.
+
+### F18. `menu_master` finally does something
+Built 21 Jul 2026 on the client's request for "a master menu for the auditor... in case any
+menu changes in future, prices of per plate changes".
+
+The module was in the permission matrix from the start, seeded to four roles, and
+`requirePermission('menu_master', …)` appeared **nowhere in the codebase** — granting it was
+a no-op. `/admin/menus` and the `/menu/master/*` routes are its first enforcement sites.
+
+**Re-pricing never re-prices a booked event**, and two existing mechanisms already
+guaranteed it — this screen only had to avoid breaking them:
+- `menu_tier_prices` is effective-dated on `(tier_id, effective_from)`, so a new price is a
+  new ROW. History survives, and an old bill can still be explained.
+- `saveSubEventMenu` snapshots the rate onto the sub-event and reads it effective on the
+  **sub-event's own date** — so a rate dated 1 April prices April's weddings and leaves
+  March's alone, with nobody having to time the edit.
+
+The screen states the consequence out loud before the change is made (`priceChangeImpact`)
+rather than leaving a manager to discover it on a bill.
+
+**Dishes are retired, not deleted.** Snapshots copy dishes by name, so deleting one would
+not corrupt a booked menu — but it would erase the dish from the pooled Swap list every
+other tier draws on, with no undo. Segments *can* be deleted, because an empty segment on a
+printed card is a mistake rather than history — and that delete is gated on
+`menu_master:delete`, which makes it **the only place in the system where the `delete`
+action means anything**. Every other DELETE route still asks for `create_edit`.
+
 ---
 
 ## E. Still needed from the client
@@ -797,6 +945,9 @@ Ranked by what they block.
 | 11 | Correct the menu item typos? (B2) | cosmetic |
 | 12 | Turnaround/buffer between back-to-back venue bookings? (D3) — defaulted to none | future |
 | 13 | Per-room discount over cap — firm reject or escalate to exception? (D5) — defaulted to reject per M5 acceptance | M7 |
+| 14 | Does the Banquet Manager keep his day-sheet sign-off now that he approves nothing? (F16) — kept, since it blocks every lock | next |
+| 15 | Residency's real room and category list — still the only invented inventory (F1) | next |
+| 16 | ~~When a booking loses rooms to someone who committed first, who is notified and how?~~ **Built** — see F13 | done |
 
 *Resolved since M0: C8/C9 (venue clash model — client chose time-overlap, see D3);
 the 11 AM handover exceptions question is moot (the 11 AM rule itself was withdrawn).*

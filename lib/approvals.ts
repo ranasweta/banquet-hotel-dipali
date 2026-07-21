@@ -43,22 +43,27 @@ function pgCode(err: unknown): string | undefined {
 function summarize(kind: string, payload: Record<string, unknown>): string {
   switch (kind) {
     case 'menu_increase': {
-      // One batch per proposal (20 Jul 2026). Name the function and the segment for each
-      // increment so the Authority can see exactly what is being asked for and where.
+      // One request per FUNCTION, sent when its submit button is pressed (21 Jul 2026).
+      // Name the segment and the dishes, because that is what is actually being decided —
+      // "two more starters: paneer tikka, galouti" beats "+2 on segment 3".
+      const fn = (payload.subEventName as string | undefined) ?? 'Function'
       const items = (payload.items ?? []) as {
-        subEventName: string; categoryName: string; currentPick: number; requestedPick: number
+        categoryName: string; requesting: number; dishes: string[]
       }[]
       if (items.length === 0) return 'menu increase'
-      const lines = items.map(
-        (i) => `${i.subEventName} · ${i.categoryName} (${i.currentPick} → ${i.requestedPick})`,
-      )
-      const fns = new Set(items.map((i) => i.subEventName)).size
-      return items.length === 1
-        ? lines[0]!
-        : `${items.length} increments across ${fns} function${fns === 1 ? '' : 's'} — ${lines.join('; ')}`
+      const lines = items.map((i) => {
+        const dishes = i.dishes?.length ? ` — ${i.dishes.join(', ')}` : ''
+        return `${i.categoryName} +${i.requesting}${dishes}`
+      })
+      return `${fn} · ${lines.join('; ')}`
     }
-    case 'room_allocation_35plus':
-      return `${payload.requestedCount} room(s) — event total would reach ${Number(payload.existingCount) + Number(payload.requestedCount)}`
+    case 'room_allocation_35plus': {
+      // The bulk shape carries `lines`, not the room-by-room `allocations` the old
+      // allocation path wrote; `existingCount` never existed on it and rendered as NaN.
+      const lines = (payload.lines ?? []) as { roomType: string; count: number }[]
+      const detail = lines.map((l) => `${l.count} × ${l.roomType}`).join(', ')
+      return `${payload.requestedCount} room(s) — over the ${payload.threshold} threshold${detail ? ` (${detail})` : ''}`
+    }
     case 'discount_over_cap':
       return `discount of ₹${(Number(payload.amountPaise) / 100).toLocaleString('en-IN')} over the cap`
     case 'overdue_wedding_balance':
@@ -186,12 +191,17 @@ export async function decideException(
       const payload = exc.payload as Record<string, unknown>
       let applied = 'none'
 
-      // On reject there is nothing to undo — neither deferred change was ever committed
-      // (the pick was never bumped; no rooms were inserted). The exception's rejected
-      // status + remark, still linked from the menu category, surfaces to the requester.
       if (input.action !== 'reject') {
-        applied = await applyDeferred(tx, exc.kind, payload, input.modified, exc.raisedBy, exc.eventId)
+        applied = await applyDeferred(tx, exc.kind, payload, input.modified)
+      } else if (exc.kind === 'menu_increase') {
+        // Menu increases are NOT deferred any more — the picks were applied when the
+        // manager chose them, days before this decision (21 Jul 2026). A rejection therefore
+        // has something real to undo: it is "approve zero", rolling every requested pick
+        // back to what was already sanctioned and dropping the dishes chosen above it.
+        applied = await applyDeferred(tx, exc.kind, payload, { extraPicks: 0 })
       }
+      // Other kinds defer their change until approval, so a rejection has nothing to undo;
+      // the rejected status and remark surface to the requester.
 
       await tx
         .update(schema.exceptions)
@@ -231,63 +241,102 @@ async function applyDeferred(
   kind: string,
   payload: Record<string, unknown>,
   modified: Record<string, unknown> | undefined,
-  raisedBy: string,
-  eventId: string,
 ): Promise<string> {
   switch (kind) {
     case 'menu_increase': {
-      // Apply every increment in the batch. Each segment gets exactly what was asked for
-      // (requested − current), so approving once releases the whole proposal.
+      // The picks are already applied — the manager chose dishes against them over the days
+      // the proposal took to settle. What is decided here is how many of them SURVIVE.
+      //
+      //   approve            every requested pick stands
+      //   approve_modified   only `extraPicks` per segment stands; the rest ROLL OUT, and
+      //                      any dish selected above the new limit rolls out with them
+      //                      (client, 21 Jul 2026: "if he approves partially then that
+      //                      other will roll out")
+      //
+      // A rejection is handled by the caller, which reverses the batch wholesale.
+      const menuId = payload.menuId as string | undefined
       const items = (payload.items ?? []) as {
-        subEventName: string; menuId: string; categoryName: string
-        currentPick: number; requestedPick: number
+        categoryName: string; requesting: number; dishes: string[]
       }[]
-      if (items.length === 0) throw badRequest('This request carries no increments to apply.')
-
-      // "Approve modified" REPLACES the granted delta — the Authority may hand out more than
-      // was asked for ("two extra, not one"), so this is not a cap. Against a batch the one
-      // number applies to every segment; granting different amounts per segment would need
-      // a per-segment control the approvals screen does not have.
-      const override = modified?.extraPicks != null ? Number(modified.extraPicks) : null
-      if (override != null && (!Number.isInteger(override) || override < 1)) {
-        throw badRequest('Modified pick must be a positive whole number')
+      if (!menuId || items.length === 0) {
+        throw badRequest('This request carries no increments to apply.')
       }
 
+      const cap = modified?.extraPicks != null ? Number(modified.extraPicks) : null
+      if (cap != null && (!Number.isInteger(cap) || cap < 0)) {
+        throw badRequest('Modified pick must be a whole number, zero or more')
+      }
+
+      let rolledBack = 0
       for (const i of items) {
-        const delta = override ?? i.requestedPick - i.currentPick
-        if (delta < 1) continue
+        const asked = i.requesting
+        const granted = cap == null ? asked : Math.min(asked, cap)
+        if (granted < asked) rolledBack += asked - granted
+
         await tx.execute(sql`
           UPDATE sub_event_menu_categories
-          SET extra_picks = extra_picks + ${delta}
-          WHERE menu_id = ${i.menuId} AND category_name = ${i.categoryName}
+             SET approved_extra_picks = approved_extra_picks + ${granted}
+           WHERE menu_id = ${menuId} AND category_name = ${i.categoryName}
         `)
-        await tx.execute(sql`UPDATE sub_event_menus SET is_complete = false WHERE id = ${i.menuId}`)
+
+        // Drop the dishes this decision refused. The request carries the dish names it is
+        // about, so a partial approval removes the last ones asked for rather than the
+        // alphabetically-last ones — which used to delete a guest's choice at random
+        // because the snapshot could not say which picks were the additions.
+        const refused = i.dishes.slice(granted)
+        if (refused.length) {
+          await tx.execute(sql`
+            DELETE FROM sub_event_menu_selections
+             WHERE menu_id = ${menuId}
+               AND category_name = ${i.categoryName}
+               AND item_name IN (${sql.join(refused.map((d) => sql`${d}`), sql`, `)})
+          `)
+          // extra_picks is derived from the surviving selections on the next save; bring it
+          // down now so the figures agree before then.
+          await tx.execute(sql`
+            UPDATE sub_event_menu_categories
+               SET extra_picks = GREATEST(extra_picks - ${refused.length}, approved_extra_picks),
+                   submitted_extra_picks = LEAST(submitted_extra_picks, GREATEST(extra_picks - ${refused.length}, approved_extra_picks))
+             WHERE menu_id = ${menuId} AND category_name = ${i.categoryName}
+          `)
+        }
       }
-      const fns = new Set(items.map((i) => i.subEventName)).size
-      return `${items.length} increment(s) across ${fns} function(s)`
+      // Recompute completeness rather than forcing it false. Rolling out a refused EXTRA
+      // leaves the base picks untouched, so the menu is usually still complete — and
+      // blanking the flag left it blocking the lock checklist until somebody re-saved every
+      // menu by hand, with nothing on screen to say why.
+      await tx.execute(sql`
+        UPDATE sub_event_menus m
+           SET is_complete = NOT EXISTS (
+             SELECT 1
+               FROM sub_event_menu_categories c
+              WHERE c.menu_id = m.id
+                AND c.base_pick IS NOT NULL
+                AND (SELECT count(*) FROM sub_event_menu_selections s
+                      WHERE s.menu_id = c.menu_id AND s.category_name = c.category_name) < c.base_pick
+           )
+         WHERE m.id = ${menuId}
+      `)
+
+      const name = (payload.subEventName as string | undefined) ?? 'function'
+      return rolledBack === 0
+        ? `${items.length} segment(s) in ${name}`
+        : `${items.length} segment(s) in ${name}; ${rolledBack} dish(es) rolled out`
     }
     case 'room_allocation_35plus': {
-      // Insert the held rooms now. A subset may be chosen on approve_modified.
-      const all = (payload.allocations ?? []) as {
-        roomId: string; checkIn: string; checkOut: string; ratePaise: number; discountPaise: number; overrideNote: string | null
-      }[]
-      const only = modified?.roomIds as string[] | undefined
-      const toInsert = only ? all.filter((a) => only.includes(a.roomId)) : all
-      if (toInsert.length === 0) throw badRequest('No rooms to allocate')
-      // One multi-row insert, not 35 round trips — the exclusion constraint still checks
-      // every row (against existing rows and each other) in the single statement.
-      await tx.execute(sql`
-        INSERT INTO room_allocations (event_id, room_id, stay, rate_paise, discount_paise, override_note, allocated_by)
-        VALUES ${sql.join(
-          toInsert.map(
-            (a) => sql`(${eventId}, ${a.roomId},
-                        daterange(${a.checkIn}::date, ${a.checkOut}::date, '[)'),
-                        ${a.ratePaise}, ${a.discountPaise}, ${a.overrideNote}, ${raisedBy})`,
-          ),
-          sql`, `,
-        )}
-      `)
-      return `allocated ${toInsert.length} room(s)`
+      // There is nothing to insert. Rooms are booked in bulk on the proposal (migration
+      // 0009) and `room_requirements` is written the moment the manager saves, threshold
+      // crossed or not — the request gates CONFIRM and the lock, it does not hold the rooms.
+      //
+      // This arm used to read `payload.allocations` and insert into `room_allocations`,
+      // neither of which the bulk path produces: the raise side writes `lines`, and nothing
+      // has written an allocation since 21 Jul. Every approval therefore died on
+      // "No rooms to allocate", which is the one outcome the Authority cannot work around.
+      const lines = (payload.lines ?? []) as { roomType: string; count: number }[]
+      const rooms = lines.reduce((n, l) => n + Number(l.count ?? 0), 0)
+      return lines.length
+        ? `${rooms} room(s) across ${lines.length} line(s) approved`
+        : 'approved'
     }
     default:
       // discount_over_cap / overdue_wedding_balance carry no deferred insert to apply in M6.

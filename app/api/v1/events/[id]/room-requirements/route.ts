@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
-import { saveRoomRequirements } from '@/lib/rooms'
+import { listRoomRequirements, saveRoomRequirements } from '@/lib/rooms'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -51,4 +51,11 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
 
   // 202 when the Authority has to decide first, mirroring the other deferral paths.
   return ok(result, result.deferred ? 202 : 200)
+})
+
+/** GET /events/:id/room-requirements — the rooms on this booking, for the event's panel. */
+export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await requirePermission('bookings', 'view')
+  const { id } = await ctx.params
+  return ok({ requirements: await listRoomRequirements(id) })
 })

@@ -21,7 +21,10 @@ const REQUESTABLE = new Set(['confirmed', 'in_progress'])
  * also scopes visibility: the queue belongs to whoever decides it, so everyone else sees only
  * the moves they asked for themselves.
  */
-export const DECIDER_ROLES = new Set(['banquet_manager', 'auditor'])
+// Client, 21 Jul 2026: the Banquet Manager approves nothing — he reads the book. Venue,
+// date and time moves are the Higher Authority's call now, alongside menu increases,
+// 35+ room requests and over-cap discounts.
+export const DECIDER_ROLES = new Set(['higher_authority', 'auditor'])
 const EXCLUSION_VIOLATION = '23P01'
 
 function pgCode(err: unknown): string | undefined {
@@ -112,7 +115,7 @@ export type DecideChangeInput = { action: 'approve' | 'reject'; remark?: string 
 
 /** The Banquet Manager decides a change request; approval re-books the venue slot. */
 export async function decideChange(actor: Actor, crId: string, input: DecideChangeInput): Promise<{ status: string }> {
-  if (!DECIDER_ROLES.has(actor.roleName)) throw forbidden('Only the Banquet Manager can decide venue/timing changes.')
+  if (!DECIDER_ROLES.has(actor.roleName)) throw forbidden('Only the Higher Authority can decide venue/timing changes.')
   if (input.action === 'reject' && !input.remark?.trim()) throw badRequest('A remark is required when rejecting.')
 
   try {
@@ -187,6 +190,7 @@ export async function changePax(actor: Actor, subEventId: string, pax: number, o
 export type ChangeRequestRow = {
   id: string; summary: string; status: string; reason: string | null; remark: string | null
   eventId: string; eventCode: string; guestName: string; requestedByName: string; requestedAt: string
+  decidedAt: string | null
 }
 
 /** Lists change requests with event + requester context (pending-first). */
@@ -201,7 +205,8 @@ export async function listChangeRequests(
   const where = conds.length ? sql`WHERE ${sql.join(conds, sql` AND `)}` : sql``
   return (await db.execute(sql`
     SELECT c.id, c.summary, c.status, c.reason, c.remark, c.event_id AS "eventId",
-           e.code AS "eventCode", e.guest_name AS "guestName", u.full_name AS "requestedByName", c.requested_at AS "requestedAt"
+           e.code AS "eventCode", e.guest_name AS "guestName", u.full_name AS "requestedByName",
+           c.requested_at AS "requestedAt", c.decided_at AS "decidedAt"
     FROM change_requests c JOIN events e ON e.id = c.event_id JOIN users u ON u.id = c.requested_by
     ${where}
     ORDER BY (c.status = 'pending') DESC, c.requested_at DESC

@@ -26,11 +26,11 @@ import { recomputeProposalTotal } from '@/lib/pricing'
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 const LOCKED_STATES = new Set(['locked', 'billed', 'closed'])
-// BR-M2, amended 20 Jul 2026: two extra dishes may be taken without Higher Authority
-// approval (was one). Anything beyond that is still allowed to be picked, but joins
-// the proposal's approval batch. Scoped per sub-event on one eligible category, as
-// before — see SEED_ASSUMPTIONS §F11 for the open question on that scope.
-const FREE_INCREASE_MAX = 2
+// BR-M2, amended 21 Jul 2026: two extra dishes per FUNCTION may be taken without Higher
+// Authority approval, shared across every segment rather than tied to one eligible
+// category. Per segment was considered and rejected by the client — a four-function
+// wedding with five segments each would give away forty dishes unseen.
+const FREE_EXTRAS_PER_FUNCTION = 2
 
 function assertEditable(status: string): void {
   if (LOCKED_STATES.has(status)) {
@@ -175,6 +175,10 @@ export type MenuCategorySnapshot = {
   exceptionStatus: string | null
   exceptionRemark: string | null
   selected: string[]
+  /** Increase pressed here: picking is unbounded and the tail of `selected` are extras. */
+  increaseUnlocked: boolean
+  /** Which of `selected` are extras — the picker colours these apart. */
+  extras: string[]
   /** itemName -> preference note ("dal spicy"). Free text, never priced. */
   notes: Record<string, string>
   complete: boolean
@@ -232,10 +236,18 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
       .select()
       .from(schema.subEventMenuCategories)
       .where(eq(schema.subEventMenuCategories.menuId, menu.id)),
+    // Base picks first, extras after, so the array the picker sends back reproduces the
+    // same split on the next save. Selections carry no insertion timestamp, so this
+    // ordering IS the record of which dishes were the additions.
     db
       .select()
       .from(schema.subEventMenuSelections)
-      .where(eq(schema.subEventMenuSelections.menuId, menu.id)),
+      .where(eq(schema.subEventMenuSelections.menuId, menu.id))
+      .orderBy(
+        asc(schema.subEventMenuSelections.categoryName),
+        asc(schema.subEventMenuSelections.isExtra),
+        asc(schema.subEventMenuSelections.itemName),
+      ),
     menu.freeIncreaseCategory
       ? db
           .select({ name: schema.menuCategories.name })
@@ -263,11 +275,13 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
   }
 
   const selByCat = new Map<string, string[]>()
+  const extraByCat = new Map<string, string[]>()
   const notesByCat = new Map<string, Record<string, string>>()
   for (const s of sels) {
     const list = selByCat.get(s.categoryName) ?? []
     list.push(s.itemName)
     selByCat.set(s.categoryName, list)
+    if (s.isExtra) extraByCat.set(s.categoryName, [...(extraByCat.get(s.categoryName) ?? []), s.itemName])
     if (s.note) {
       const notes = notesByCat.get(s.categoryName) ?? {}
       notes[s.itemName] = s.note
@@ -290,6 +304,8 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
       exceptionStatus: exc?.status ?? null,
       exceptionRemark: exc?.status === 'rejected' ? exc.remark : null,
       selected,
+      increaseUnlocked: c.increaseUnlocked,
+      extras: extraByCat.get(c.categoryName) ?? [],
       notes: notesByCat.get(c.categoryName) ?? {},
       complete,
     }
@@ -415,31 +431,56 @@ export async function saveSubEventMenu(
       .where(eq(schema.subEventMenus.subEventId, subEventId))
       .limit(1)
     const tierChanged = existing != null && existing.tierId !== input.tierId
-    const prevOverlay = new Map<string, { extraPicks: number; exceptionId: string | null }>()
+    type Overlay = {
+      unlocked: boolean
+      submittedExtraPicks: number
+      approvedExtraPicks: number
+      exceptionId: string | null
+    }
+    const prevOverlay = new Map<string, Overlay>()
     if (existing && !tierChanged) {
       const prev = await tx
         .select()
         .from(schema.subEventMenuCategories)
         .where(eq(schema.subEventMenuCategories.menuId, existing.id))
       for (const p of prev) {
-        prevOverlay.set(p.categoryName, { extraPicks: p.extraPicks, exceptionId: p.exceptionId })
+        // Every counter is carried, not just extraPicks. Dropping approved/submitted here
+        // was silently un-approving picks the Authority had already sanctioned, and the
+        // picker autosaves, so it happened within seconds of every decision.
+        prevOverlay.set(p.categoryName, {
+          unlocked: p.increaseUnlocked,
+          submittedExtraPicks: p.submittedExtraPicks,
+          approvedExtraPicks: p.approvedExtraPicks,
+          exceptionId: p.exceptionId,
+        })
       }
     }
 
-    // Build the validated per-category snapshot: base_pick from the master now, the extra
+    // Build the validated per-category snapshot: base_pick from the master now, the increase
     // overlay carried across a same-tier save, all-included categories forced to the full list.
+    //
+    // Extras are positional (client, 21 Jul 2026): pressing Increase unlocks a segment, and
+    // everything picked beyond base_pick from then on is an extra. The picker appends on
+    // click, so the tail of the array IS the list of additions — which is what gives the
+    // Authority dish names instead of a bare count, and what lets a base pick be dropped
+    // without orphaning the extras above it.
     type CatWrite = {
       categoryName: string
       basePick: number | null
       extraPicks: number
+      submittedExtraPicks: number
+      approvedExtraPicks: number
+      unlocked: boolean
       exceptionId: string | null
       selected: string[]
+      /** Indices at and beyond this are the extras. */
+      extraFrom: number
     }
     const writes: CatWrite[] = []
     let allComplete = true
     for (const mc of masterCats) {
       const overlay = tierChanged ? undefined : prevOverlay.get(mc.name)
-      const extraPicks = overlay?.extraPicks ?? 0
+      const unlocked = overlay?.unlocked ?? false
       const exceptionId = overlay?.exceptionId ?? null
 
       let selected: string[]
@@ -453,19 +494,37 @@ export async function saveSubEventMenu(
         for (const item of requested) {
           if (!allowed.has(item)) throw badRequest(`"${item}" is not on any ${mc.name} list`)
         }
-        const ceiling = mc.pickCount + extraPicks
-        if (requested.length > ceiling) {
+        // Unlocked means unlimited: the guest may take as much of this segment as they
+        // like, and the overflow becomes the Authority's decision rather than a refusal.
+        if (!unlocked && requested.length > mc.pickCount) {
           throw badRequest(
-            `Select at most ${ceiling} in ${mc.name}. Request a menu increase to add more.`,
+            `Select at most ${mc.pickCount} in ${mc.name}. Press Increase to add more.`,
           )
         }
         selected = requested
       }
 
-      const effectivePick = mc.pickCount == null ? null : mc.pickCount + extraPicks
-      const complete = effectivePick == null || selected.length >= effectivePick
+      const basePick = mc.pickCount
+      const extraFrom = basePick ?? selected.length
+      const extraPicks = basePick == null ? 0 : Math.max(0, selected.length - basePick)
+      // Removing an extra hands its allowance back, so the bookkeeping clamps down with it.
+      const submittedExtraPicks = Math.min(overlay?.submittedExtraPicks ?? 0, extraPicks)
+      const approvedExtraPicks = Math.min(overlay?.approvedExtraPicks ?? 0, submittedExtraPicks)
+
+      // Extras never bear on completeness — a segment is complete once its base picks are in.
+      const complete = basePick == null || selected.length >= basePick
       if (!complete) allComplete = false
-      writes.push({ categoryName: mc.name, basePick: mc.pickCount, extraPicks, exceptionId, selected })
+      writes.push({
+        categoryName: mc.name,
+        basePick,
+        extraPicks,
+        submittedExtraPicks,
+        approvedExtraPicks,
+        unlocked,
+        exceptionId,
+        selected,
+        extraFrom,
+      })
     }
 
     // Upsert the menu header. A tier change drops the used free increase.
@@ -510,16 +569,21 @@ export async function saveSubEventMenu(
         categoryName: w.categoryName,
         basePick: w.basePick,
         extraPicks: w.extraPicks,
+        submittedExtraPicks: w.submittedExtraPicks,
+        approvedExtraPicks: w.approvedExtraPicks,
+        increaseUnlocked: w.unlocked,
         exceptionId: w.exceptionId,
       })),
     )
     const selectionRows = writes.flatMap((w) =>
-      w.selected.map((itemName) => ({
+      w.selected.map((itemName, i) => ({
         menuId,
         categoryName: w.categoryName,
         itemName,
         // Preference notes ride along with the snapshot so the day sheet shows them.
         note: input.notes?.[w.categoryName]?.[itemName]?.trim() || null,
+        // Beyond base_pick, by click order — see the CatWrite comment above.
+        isExtra: i >= w.extraFrom,
       })),
     )
     if (selectionRows.length > 0) await tx.insert(schema.subEventMenuSelections).values(selectionRows)
@@ -541,18 +605,30 @@ export async function saveSubEventMenu(
   })
 }
 
-// ── Increase (free / exception) ──────────────────────────────────────────────
+// ── Increase — unlocks a segment for unlimited picking ───────────────────────
 
-export type IncreaseResult =
-  | { applied: 'free'; categoryName: string; effectivePick: number }
-  | { applied: 'exception'; categoryName: string; exceptionId: string }
+export type IncreaseResult = {
+  categoryName: string
+  /** Base picks the segment came with; everything above this is an extra. */
+  basePick: number
+  /** Extras already taken in this segment. */
+  extraPicks: number
+  /** Of the two free per function, how many are still unspent. */
+  freeRemaining: number
+}
 
 /**
- * Requests +1 on a category (FR-3.4/3.5). If the category is one of the four eligible
- * heads and the sub-event's single free increase is unused, it applies immediately
- * (BR-M2). Otherwise — a second increase anywhere, or any increase on an ineligible
- * category — it raises a pending Exception and leaves the pick unchanged until an
- * Authority approves it (BR-M3). All-included categories can't be increased at all.
+ * Presses Increase on one segment (client, 21 Jul 2026). It does not grant "+1" — it
+ * UNLOCKS the segment, and from then on the manager takes as many dishes from it as the
+ * guest wants. Everything above base_pick is an extra, coloured apart in the picker and
+ * remembered by name.
+ *
+ * Nothing reaches the Authority here. Extras beyond the free allowance — TWO PER FUNCTION,
+ * shared across every segment — go out when the function's submit button is pressed, the
+ * same shape as a chef delicacy request. A wedding menu is settled over days, and none of
+ * it is the Authority's business until the function is done.
+ *
+ * All-included segments (base_pick NULL) can't be increased: everything is already on.
  */
 export async function increaseCategory(
   actor: Actor,
@@ -584,118 +660,20 @@ export async function increaseCategory(
     if (cat.basePick == null) {
       throw badRequest(`Every item in ${categoryName} is already included — there is nothing to increase.`)
     }
-    // Master category → is it free-eligible, and its id for the free-increase marker.
-    const [masterCat] = await tx
-      .select({
-        id: schema.menuCategories.id,
-        freeIncreaseEligible: schema.menuCategories.freeIncreaseEligible,
-      })
-      .from(schema.menuCategories)
-      .where(and(eq(schema.menuCategories.tierId, menu.tierId), eq(schema.menuCategories.name, categoryName)))
-      .limit(1)
-
-    const freeUsed = menu.freeIncreaseCategory != null
-    const canBeFree = Boolean(masterCat?.freeIncreaseEligible) && !freeUsed
-
-    if (canBeFree) {
-      const newExtra = cat.extraPicks + FREE_INCREASE_MAX
-      await tx
-        .update(schema.subEventMenuCategories)
-        .set({ extraPicks: newExtra })
-        .where(
-          and(
-            eq(schema.subEventMenuCategories.menuId, menu.id),
-            eq(schema.subEventMenuCategories.categoryName, categoryName),
-          ),
-        )
-      await tx
-        .update(schema.subEventMenus)
-        .set({ freeIncreaseCategory: masterCat!.id, isComplete: false })
-        .where(eq(schema.subEventMenus.id, menu.id))
-
-      await audit(tx, actor, {
-        entity: 'sub_event_menu_categories',
-        entityId: menu.id,
-        eventId: ctx.eventId,
-        action: 'update',
-        field: 'free_increase',
-        oldValue: categoryName,
-        newValue: String(cat.basePick + newExtra),
-      })
-      return { applied: 'free', categoryName, effectivePick: cat.basePick + newExtra }
-    }
-
-    // Exception path (BR-M3, amended 20 Jul 2026): increases are batched into ONE pending
-    // request per PROPOSAL rather than one per segment. The manager keeps picking; the
-    // Higher Authority sees a single item per proposal listing every increment, labelled by
-    // function and by menu segment, and approving it releases the lock (FR-3.7 unchanged).
-    const reason = freeUsed ? 'free_increase_already_used' : 'category_not_free_eligible'
-
-    const [open] = await tx
-      .select({ id: schema.exceptions.id, payload: schema.exceptions.payload })
-      .from(schema.exceptions)
-      .where(
-        and(
-          eq(schema.exceptions.eventId, ctx.eventId),
-          eq(schema.exceptions.kind, 'menu_increase'),
-          eq(schema.exceptions.status, 'pending'),
-        ),
-      )
-      .limit(1)
-
-    type BatchItem = {
-      subEventId: string
-      subEventName: string
-      menuId: string
-      categoryName: string
-      currentPick: number
-      requestedPick: number
-      reason: string
-    }
-    const existing = (open?.payload as { items?: BatchItem[] } | null)?.items ?? []
-    const idx = existing.findIndex((i) => i.menuId === menu.id && i.categoryName === categoryName)
-
-    // A second press on the same segment raises that segment's ask rather than adding a row,
-    // so the Authority reads "Soup 1 → 3", not two separate "+1" lines.
-    const items = [...existing]
-    if (idx >= 0) {
-      items[idx] = { ...items[idx]!, requestedPick: items[idx]!.requestedPick + 1 }
-    } else {
-      items.push({
-        subEventId,
-        subEventName: ctx.name,
-        menuId: menu.id,
+    if (cat.increaseUnlocked) {
+      // Idempotent: pressing it twice is not an error, it is a manager double-checking.
+      const used = await totalExtras(tx, menu.id)
+      return {
         categoryName,
-        currentPick: cat.basePick + cat.extraPicks,
-        requestedPick: cat.basePick + cat.extraPicks + 1,
-        reason,
-      })
-    }
-
-    let exceptionId: string
-    if (open) {
-      await tx
-        .update(schema.exceptions)
-        .set({ payload: { items } })
-        .where(eq(schema.exceptions.id, open.id))
-      exceptionId = open.id
-    } else {
-      const [created] = await tx
-        .insert(schema.exceptions)
-        .values({
-          eventId: ctx.eventId,
-          kind: 'menu_increase',
-          status: 'pending',
-          payload: { items },
-          raisedBy: actor.id,
-        })
-        .returning({ id: schema.exceptions.id })
-      exceptionId = created!.id
+        basePick: cat.basePick,
+        extraPicks: cat.extraPicks,
+        freeRemaining: Math.max(0, FREE_EXTRAS_PER_FUNCTION - used),
+      }
     }
 
     await tx
       .update(schema.subEventMenuCategories)
-      .set({ exceptionId })
+      .set({ increaseUnlocked: true })
       .where(
         and(
           eq(schema.subEventMenuCategories.menuId, menu.id),
@@ -704,15 +682,209 @@ export async function increaseCategory(
       )
 
     await audit(tx, actor, {
-      entity: 'exceptions',
-      entityId: exceptionId,
+      entity: 'sub_event_menu_categories',
+      entityId: menu.id,
       eventId: ctx.eventId,
       action: 'update',
-      field: 'menu_increase',
-      newValue: `${ctx.name} · ${categoryName} (${items.length} increment(s) in batch)`,
+      field: 'increase_unlocked',
+      oldValue: categoryName,
+      newValue: 'unlimited',
     })
-    return { applied: 'exception', categoryName, exceptionId }
+
+    const used = await totalExtras(tx, menu.id)
+    return {
+      categoryName,
+      basePick: cat.basePick,
+      extraPicks: cat.extraPicks,
+      freeRemaining: Math.max(0, FREE_EXTRAS_PER_FUNCTION - used),
+    }
   })
+}
+
+/** Extras taken across every segment of one function — the free allowance is shared. */
+async function totalExtras(tx: Tx, menuId: string): Promise<number> {
+  const [row] = (await tx.execute(sql`
+    SELECT COALESCE(sum(extra_picks), 0)::int AS total
+    FROM sub_event_menu_categories WHERE menu_id = ${menuId}
+  `)) as unknown as { total: number }[]
+  return row?.total ?? 0
+}
+
+// ── Submitting a function's increases to the Authority ───────────────────────
+
+export type PendingIncrease = {
+  categoryName: string
+  basePick: number
+  extraPicks: number
+  submitted: number
+  /** The extra dishes themselves, in the order they were taken. */
+  items: string[]
+}
+export type IncreaseSummary = {
+  subEventId: string
+  subEventName: string
+  totalExtras: number
+  freeCovered: number
+  /** Extras above the free two that have not yet gone to the Authority. */
+  awaitingSubmission: number
+  alreadySubmitted: number
+  segments: PendingIncrease[]
+}
+
+/**
+ * What this function's submit button would carry: every extra above the free two, by
+ * segment, with the dish names already ticked. Pre-fills the confirmation the same way a
+ * chef delicacy request is pre-filled.
+ */
+export async function getIncreaseSummary(
+  subEventId: string,
+  // Defaults to the pool for plain reads. `submitIncreases` passes its own transaction:
+  // calling this on a second connection from inside one would wait on locks the
+  // transaction itself holds, and the request hangs until it times out.
+  exec: Tx | typeof db = db,
+): Promise<IncreaseSummary | null> {
+  const [menu] = await exec
+    .select({ id: schema.subEventMenus.id })
+    .from(schema.subEventMenus)
+    .where(eq(schema.subEventMenus.subEventId, subEventId))
+    .limit(1)
+  if (!menu) return null
+
+  const [sub] = await exec
+    .select({ name: schema.subEvents.name })
+    .from(schema.subEvents)
+    .where(eq(schema.subEvents.id, subEventId))
+    .limit(1)
+
+  const rows = (await exec.execute(sql`
+    SELECT c.category_name AS "categoryName", c.base_pick AS "basePick",
+           c.extra_picks AS "extraPicks", c.submitted_extra_picks AS "submitted",
+           COALESCE(
+             array_agg(s.item_name ORDER BY s.item_name) FILTER (WHERE s.is_extra), '{}'
+           ) AS items
+    FROM sub_event_menu_categories c
+    LEFT JOIN sub_event_menu_selections s
+      ON s.menu_id = c.menu_id AND s.category_name = c.category_name
+    WHERE c.menu_id = ${menu.id} AND c.extra_picks > 0
+    GROUP BY 1, 2, 3, 4
+    ORDER BY 1
+  `)) as unknown as PendingIncrease[]
+
+  const total = rows.reduce((n, r) => n + r.extraPicks, 0)
+  const alreadySubmitted = rows.reduce((n, r) => n + r.submitted, 0)
+  const freeCovered = Math.min(FREE_EXTRAS_PER_FUNCTION, total)
+
+  return {
+    subEventId,
+    subEventName: sub?.name ?? 'Function',
+    totalExtras: total,
+    freeCovered,
+    awaitingSubmission: Math.max(0, total - freeCovered - alreadySubmitted),
+    alreadySubmitted,
+    segments: rows,
+  }
+}
+
+/**
+ * Sends this function's outstanding extras to the Authority as one request, itemised by
+ * segment and dish. Pressed per function while the proposal is still being built, so the
+ * Authority is fed as the work happens rather than in one batch at the lock.
+ *
+ * The free two are covered off the top and never appear. Re-pressing after adding more
+ * dishes sends only what is new — `submitted_extra_picks` is the high-water mark.
+ */
+export async function submitIncreases(
+  actor: Actor,
+  subEventId: string,
+): Promise<{ exceptionId: string | null; submitted: number }> {
+  return db.transaction(async (tx) => {
+    const ctx = await loadSubEventContext(tx, subEventId)
+    assertEditable(ctx.status)
+
+    const summary = await getIncreaseSummary(subEventId, tx)
+    if (!summary || summary.awaitingSubmission === 0) {
+      return { exceptionId: null, submitted: 0 }
+    }
+
+    // Walk the segments in order, spending the free allowance first, and record what each
+    // one still owes the Authority. The dish names come along so the decision is made on
+    // "two more starters: paneer tikka, galouti" rather than on a bare count.
+    let freeLeft = summary.freeCovered
+    const items: {
+      categoryName: string
+      basePick: number
+      alreadySubmitted: number
+      requesting: number
+      dishes: string[]
+    }[] = []
+
+    for (const seg of summary.segments) {
+      const covered = Math.min(freeLeft, seg.extraPicks)
+      freeLeft -= covered
+      const chargeable = seg.extraPicks - covered
+      const requesting = chargeable - seg.submitted
+      if (requesting <= 0) continue
+      items.push({
+        categoryName: seg.categoryName,
+        basePick: seg.basePick,
+        alreadySubmitted: seg.submitted,
+        requesting,
+        // The dishes this request is actually about: the tail of the extras.
+        dishes: seg.items.slice(seg.items.length - requesting),
+      })
+    }
+    if (!items.length) return { exceptionId: null, submitted: 0 }
+
+    const menuId = await menuIdFor(tx, subEventId)
+    if (!menuId) return { exceptionId: null, submitted: 0 }
+
+    const [exc] = await tx
+      .insert(schema.exceptions)
+      .values({
+        eventId: ctx.eventId,
+        kind: 'menu_increase',
+        status: 'pending',
+        payload: { subEventId, subEventName: summary.subEventName, menuId, items },
+        raisedBy: actor.id,
+      })
+      .returning({ id: schema.exceptions.id })
+
+    // Mark them sent. Everything chargeable in this function is now submitted.
+    for (const it of items) {
+      await tx
+        .update(schema.subEventMenuCategories)
+        .set({
+          submittedExtraPicks: it.alreadySubmitted + it.requesting,
+          exceptionId: exc!.id,
+        })
+        .where(
+          and(
+            eq(schema.subEventMenuCategories.menuId, menuId),
+            eq(schema.subEventMenuCategories.categoryName, it.categoryName),
+          ),
+        )
+    }
+
+    await audit(tx, actor, {
+      entity: 'exceptions',
+      entityId: exc!.id,
+      eventId: ctx.eventId,
+      action: 'insert',
+      field: 'menu_increase',
+      newValue: `${summary.subEventName}: ${items.reduce((n, i) => n + i.requesting, 0)} extra dish(es) across ${items.length} segment(s)`,
+    })
+
+    return { exceptionId: exc!.id, submitted: items.reduce((n, i) => n + i.requesting, 0) }
+  })
+}
+
+async function menuIdFor(tx: Tx, subEventId: string): Promise<string | undefined> {
+  const [m] = await tx
+    .select({ id: schema.subEventMenus.id })
+    .from(schema.subEventMenus)
+    .where(eq(schema.subEventMenus.subEventId, subEventId))
+    .limit(1)
+  return m?.id
 }
 
 // ── Add-ons (FR-3.6) ─────────────────────────────────────────────────────────

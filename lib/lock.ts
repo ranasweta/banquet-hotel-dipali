@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
 import { transitionEvent } from '@/lib/events'
 import { draftInvoice } from '@/lib/invoice'
 
+
 /**
  * Lock checklist, sign-offs and the lock transaction (M9, FR-7.1/7.2). Lock is the terminal
  * editing state: the Auditor may lock only a Completed event with every checklist item green,
@@ -14,6 +15,9 @@ import { draftInvoice } from '@/lib/invoice'
  */
 
 const SIGNOFF_STATES = new Set(['in_progress', 'completed'])
+// Must match lib/menus.ts — the checklist nets the free allowance off before deciding
+// whether anything is still owed to the Authority.
+const FREE_EXTRAS_PER_FUNCTION = 2
 type Designation = 'banquet_manager' | 'lodge_manager' | 'maintenance' | 'booking_manager'
 const DESIGNATIONS = new Set<Designation>(['banquet_manager', 'lodge_manager', 'maintenance', 'booking_manager'])
 
@@ -21,8 +25,13 @@ export type ChecklistItem = { key: string; label: string; done: boolean; blockin
 export type Checklist = { status: string; canLock: boolean; hasRooms: boolean; items: ChecklistItem[] }
 
 /** Computes the lock-checklist item states for an event (FR-7.1). */
-export async function lockChecklist(eventId: string): Promise<Checklist> {
-  const [row] = (await db.execute(sql`
+export async function lockChecklist(
+  eventId: string,
+  // Defaults to the pooled handle for plain reads. The lock passes its own transaction so
+  // the checklist it gates on is read under the same FOR UPDATE that took the event.
+  exec: Pick<typeof db, 'execute'> = db,
+): Promise<Checklist> {
+  const [row] = (await exec.execute(sql`
     SELECT e.status::text AS status,
       (SELECT count(*)::int FROM sub_events WHERE event_id = e.id) AS "subCount",
       (SELECT count(*)::int FROM sub_events se JOIN sub_event_menus m ON m.sub_event_id = se.id WHERE se.event_id = e.id AND m.is_complete) AS "menuComplete",
@@ -31,17 +40,42 @@ export async function lockChecklist(eventId: string): Promise<Checklist> {
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'banquet_manager') AS banquet,
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'lodge_manager') AS lodge,
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'maintenance') AS maint,
-      (EXISTS (SELECT 1 FROM room_requirements WHERE event_id = e.id) OR EXISTS (SELECT 1 FROM room_allocations WHERE event_id = e.id)) AS "hasRooms",
+      EXISTS (SELECT 1 FROM room_requirements WHERE event_id = e.id) AS "hasRooms",
+      -- Extras the guest has taken that no submit button has sent on. Not auto-sent here:
+      -- pressing submit is the manager's call (21 Jul 2026).
+      --
+      -- Netted against the free allowance FIRST, and per function, because that is how the
+      -- allowance works: two extras a function never reach the Authority, so they are never
+      -- "submitted" and a bare extra_picks - submitted_extra_picks counts them as outstanding
+      -- forever. That made every event with a free increase unlockable.
+      (SELECT COALESCE(sum(GREATEST(fn.extras - LEAST(${FREE_EXTRAS_PER_FUNCTION}, fn.extras) - fn.submitted, 0)), 0)::int
+         FROM (
+           SELECT m.id,
+                  COALESCE(sum(c.extra_picks), 0)::int AS extras,
+                  COALESCE(sum(c.submitted_extra_picks), 0)::int AS submitted
+             FROM sub_event_menus m
+             JOIN sub_events se2 ON se2.id = m.sub_event_id
+             LEFT JOIN sub_event_menu_categories c ON c.menu_id = m.id
+            WHERE se2.event_id = e.id
+            GROUP BY m.id
+         ) fn) AS "unsubmittedExtras",
       COALESCE((SELECT sum(CASE WHEN kind = 'refund' THEN -amount_paise ELSE amount_paise END) FROM payments WHERE event_id = e.id), 0)::bigint AS paid
     FROM events e WHERE e.id = ${eventId}
   `)) as unknown as {
     status: string; subCount: number; menuComplete: number; pendingExc: number; pendingCr: number
-    banquet: boolean; lodge: boolean; maint: boolean; hasRooms: boolean; paid: number
+    banquet: boolean; lodge: boolean; maint: boolean; hasRooms: boolean
+    unsubmittedExtras: number; paid: number
   }[]
   if (!row) throw notFound('Event not found')
 
   const items: ChecklistItem[] = [
     { key: 'menus', label: 'All function menus complete', done: row.subCount > 0 && row.menuComplete === row.subCount, blocking: true },
+    {
+      key: 'increases',
+      label: 'Every menu increase sent to the Higher Authority',
+      done: row.unsubmittedExtras === 0,
+      blocking: true,
+    },
     { key: 'exceptions', label: 'No approvals pending', done: row.pendingExc === 0, blocking: true },
     { key: 'changes', label: 'No change requests pending', done: row.pendingCr === 0, blocking: true },
     { key: 'banquet', label: 'Banquet Manager day-sheet sign-off', done: row.banquet, blocking: true },
@@ -74,6 +108,7 @@ export async function signoff(actor: Actor, eventId: string, designation: string
 }
 
 /** Locks a Completed event whose checklist is green and drafts its invoice (Auditor only). */
+
 export async function lockEvent(actor: Actor, eventId: string): Promise<{ locked: true }> {
   if (actor.roleName !== 'auditor') throw forbidden('Only the Auditor may lock an event (FR-7.2).')
   return db.transaction(async (tx) => {
@@ -82,7 +117,12 @@ export async function lockEvent(actor: Actor, eventId: string): Promise<{ locked
     if (ev.status === 'locked' || ev.status === 'billed' || ev.status === 'closed') throw conflict(`This event is already ${ev.status}.`)
     if (ev.status !== 'completed') throw conflict('Only a Completed event can be locked.')
 
-    const checklist = await lockChecklist(eventId)
+    // Increases no longer wait for the lock — each function sends its own (21 Jul 2026, see
+    // lib/menus.ts submitIncreases). What is checked here is that none were left behind: an
+    // unsubmitted extra is a dish the guest is getting that nobody sanctioned. It reads as a
+    // checklist blocker rather than being auto-sent, because pressing submit is the
+    // manager's call and the Authority should not receive a request nobody chose to make.
+    const checklist = await lockChecklist(eventId, tx)
     const blockers = checklist.items.filter((i) => i.blocking && !i.done)
     if (blockers.length > 0) throw conflict(`Cannot lock — pending: ${blockers.map((b) => b.label).join('; ')}.`)
 

@@ -309,6 +309,19 @@ export async function seed(
         role_id = EXCLUDED.role_id`
     counts.users = USERS.length
 
+    // Attach each Lodge Manager to the lodge in their title (client, 21 Jul 2026: "the
+    // palace lodge manager should see palace data only"). Matched on the name rather than
+    // held as a column on USERS, because the lodging units are seeded in the same run and
+    // their ids are not known until now. A manager with no match stays NULL and sees no
+    // rooms, which is the loud failure the column was designed for.
+    await tx`
+      UPDATE users u
+         SET lodging_unit_id = lu.id
+        FROM lodging_units lu, roles r
+       WHERE r.id = u.role_id
+         AND r.name = 'lodge_manager'
+         AND u.full_name LIKE '%' || lu.name || '%'`
+
     // --- Settings ---------------------------------------------------------
     await tx`
       INSERT INTO settings ${tx(SETTINGS, 'key', 'value')}

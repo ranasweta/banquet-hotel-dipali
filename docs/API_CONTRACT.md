@@ -41,7 +41,36 @@ races return 409 with a human-readable message.
   returned (FR-2.5, amended 17 Jul 2026); slot contention surfaces via `/availability`,
   which still returns `open_enquiries`.
 - `GET /calendar/day-sheet/:date` — consolidated ops/kitchen order (printable)
+- `GET /calendar/horizon?from=&days=` — the operations board (client, 21 Jul 2026). Every
+  function over a window with venue, timing, pax, the full menu including per-dish
+  preferences and priced chef delicacies, and add-ons. **No money in the payload at all** —
+  omitted at the query, not hidden in the UI, because it is served to roles with no billing
+  grant. 15 days by default (the Banquet Manager's board), capped at 31; the Chef reads the
+  same shape with `days=1`. Returns `{ from, to, days[] }`, each day flagged `isToday`.
 - `GET|POST /change-requests`, `POST /change-requests/:id/decide`
+
+## Menu master (module: menu_master — the catalog itself, not any event's copy)
+- `GET  /menu/master` — every tier with its FULL price history, segments and dishes
+  (including retired ones). Distinct from `/menu/catalog`, which is the picker's view:
+  gated on `menus`, current rate only, retired dishes hidden.
+- `POST /menu/master/tiers` { name, effective_from, base_rate_paise, wedding_surcharge_paise? }
+  — a tier and its opening rate. The rate is part of creation: a tier with no price cannot
+  be saved onto a sub-event, so a priceless one would appear in the picker and fail on save.
+- `PUT  /menu/master/tiers/:id` { name } — rename. Saved menus keep their own `tier_name`
+  snapshot, so an event booked as "Silver" still reads Silver on its bill.
+- `GET  /menu/master/tiers/:id/price?effective_from=` — what a re-price would touch, asked
+  BEFORE it is made: `{ savedMenus, upcomingUnbilled }`.
+- `PUT  /menu/master/tiers/:id/price` { effective_from, base_rate_paise, wedding_surcharge_paise }
+  — records a dated rate. **A new date is a new row, never an edit to the old one**, so what
+  a tier cost last March stays on record and last March's bill can still be explained.
+  Re-sending an existing date corrects that row; the screen only offers today and later.
+- `POST /menu/master/categories` | `PUT /menu/master/categories/:id` — segments: name,
+  `pick_count` (null = all included), `free_increase_eligible`, `sort_order`.
+- `DELETE /menu/master/categories/:id` — requires **`menu_master:delete`**, the only place in
+  the system where the `delete` action means anything. Cascades to the segment's dishes.
+- `POST /menu/master/items` | `PUT /menu/master/items/:id` { name?, is_active? } — dishes are
+  RETIRED via `is_active`, not deleted: snapshots copy by name so a delete would not corrupt
+  a booked menu, but it would erase the dish from every tier's pooled Swap list with no undo.
 
 ## Menus (module: menus)
 - `GET  /menu/catalog` — every tier → categories → items, for the dish picker (menus:view;
@@ -49,25 +78,48 @@ races return 409 with a human-readable message.
 - `GET  /sub-events/:id/menu` — snapshot + completion state
 - `PUT  /sub-events/:id/menu` — save tier + selections (tentative allowed);
   applies wedding surcharge; enforces pick-counts
-- `POST /sub-events/:id/menu/increase` { category } — free bump if eligible
-  and unused, else auto-raises exception → 202 { exception_id }
+- `POST /sub-events/:id/menu/increase` { category } — **unlocks** the segment (21 Jul 2026).
+  Not a "+1": from here the segment has no ceiling and every pick beyond `base_pick` is an
+  extra. Always 200; nothing reaches the Authority here. Returns
+  `{ categoryName, basePick, extraPicks, freeRemaining }`.
+- `GET  /sub-events/:id/menu/increase/submit` — what the submit button would carry: extras
+  above the free two, by segment, with the dish names already ticked.
+- `POST /sub-events/:id/menu/increase/submit` — sends this function's outstanding extras to
+  the Authority as ONE request. Per function and on demand, not batched at the lock. Two
+  extras per function are free; re-pressing sends only what is new. Returns
+  `{ exceptionId, submitted }`, with `exceptionId: null` when nothing was outstanding.
 - `POST /sub-events/:id/addons` | `DELETE /addons/:id`
 
-## Rooms (module: rooms)
-- `GET  /events/:id/room-requirements` | `POST` (from wizard step 4)
+## Rooms (module: rooms; booking a room is a `bookings` concern — see below)
+- `GET  /events/:id/room-requirements` | `POST` (from wizard step 4). **This is the booking**
+  (migration 0009): lodge + category + count + dates. Gated on `bookings:create_edit`, not
+  `rooms`. Refuses more than the lodge has free (409) and dates outside the event's own span
+  (400); ≥35 rooms still raises the BR-L2 request, which is an approval and not a limit.
+- `POST /rooms/availability` { event_id?, lines[] } — how many of each category a lodge has
+  free over a range, measured per night and reported at the tightest one. Drives the ceiling
+  the form shows before a save; the same numbers are re-checked inside the save transaction,
+  which is what actually binds. `event_id` excludes an event's own rows so editing does not
+  count against itself. `bookings:view`.
 - `GET  /rooms/units` — lodging units + room counts, for the board's unit selector
 - `GET  /rooms/board?unit_id=&from=&to=` — availability grid
-- `DELETE /room-allocations/:id` — un-assign a room
-- `POST /events/:id/room-allocations` — bulk allocate; ≥35 rooms auto-raises
-  exception (202); overlap → 409; non-Palace for lawn wedding needs override_note
-- `GET  /events/:id/rooms/reconciliation` — promised vs allocated vs occupied
+- `DELETE /room-allocations/:id` — un-assign a room. **Retired**: rooms are booked in bulk on
+  the proposal and nothing writes `room_allocations` any more. Live but unreferenced by any UI.
+- `POST /events/:id/room-allocations` — bulk allocate; overlap → 409; non-Palace for lawn
+  wedding needs override_note. **Retired**, as above.
+- `GET  /events/:id/rooms/reconciliation` — **can the lodge deliver what was sold?** Per line:
+  promised, the lodge's capacity for that category, the peak held by other committed events
+  over the same nights, and the shortfall. `deliverable` is the Lodge Manager's sign-off in one
+  boolean. Excludes the event itself and measures at the tightest night.
 - `GET  /rooms/calendar?from=&to=` — the Lodge Manager's 30-day board: cumulative counts per
   date × unit × room category, never room numbers. Both ends inclusive (unlike `/rooms/board`,
   which is half-open). Defaults to the next 30 days; span capped at 92 server-side. Returns
   `{ from, to, windowDays, inventory[], occupancy[] }` — `occupancy` carries only non-empty
   cells, each split `locked | confirmed | pending`; the client fills the rest from `inventory`.
-  `pending` counts rooms inside an undecided 35+ exception (BR-L2), which write nothing to
-  `room_allocations` and would otherwise read as free.
+  `pending` is now always 0 and the field is kept only for shape: it used to count rooms held
+  inside an undecided 35+ exception, back when a deferred allocation wrote nothing.
+  Requirements ARE the booking today and are saved whether or not the Authority has ruled, so
+  counting them again there booked the same room twice. Enquiries hold nothing.
+  A Lodge Manager sees only their own lodge (migration 0013); every other role sees all three.
 - `GET  /rooms/calendar/:date` — that date drilled down: `{ date, inventory[], holders[] }`,
   each holder being an event, its category, its count and its state.
 

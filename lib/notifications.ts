@@ -1,9 +1,11 @@
 import 'server-only'
 import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
-import { listExceptions } from '@/lib/approvals'
-import { listChangeRequests } from '@/lib/change-requests'
+import { listExceptions, DECIDER_ROLES as EXCEPTION_DECIDERS } from '@/lib/approvals'
+import { listChangeRequests, DECIDER_ROLES as CHANGE_DECIDERS } from '@/lib/change-requests'
+import { PRICER_ROLES as DELICACY_PRICERS } from '@/lib/chef'
 import { pendingReminders, listStaleEnquiries } from '@/lib/reminders'
+import { listRoomShortfalls } from '@/lib/rooms'
 import { formatPaise } from '@/lib/money'
 
 /**
@@ -19,14 +21,16 @@ import { formatPaise } from '@/lib/money'
  *    clicked, so something they've dealt with stops following them around.
  */
 
-const EXCEPTION_DECIDERS = new Set(['higher_authority', 'auditor'])
-const CHANGE_DECIDERS = new Set(['banquet_manager', 'auditor'])
-const DELICACY_PRICERS = new Set(['chef', 'auditor'])
+// The decider sets are imported, not re-declared: they were three separate literals here
+// and the feed silently disagreed with the routes the moment one of them moved — which is
+// exactly what happened when change requests passed from the Banquet Manager to the GM.
 const MAINTENANCE_ROLES = new Set(['maintenance', 'auditor'])
 
 export type Notification = { id: string; kind: string; message: string; href: string; at: string }
 
-export async function notificationsFor(user: { id: string; roleName: string }): Promise<Notification[]> {
+export async function notificationsFor(
+  user: { id: string; roleName: string; lodgingUnitId?: string | null },
+): Promise<Notification[]> {
   const today = new Date().toISOString().slice(0, 10)
   const items: Notification[] = []
 
@@ -51,6 +55,19 @@ export async function notificationsFor(user: { id: string; roleName: string }): 
   if (CHANGE_DECIDERS.has(user.roleName)) {
     for (const c of await listChangeRequests({ status: 'pending' })) {
       items.push({ id: `cr:${c.id}`, kind: 'change_request', message: `Change request — ${c.eventCode}: ${c.summary}`, href: '/change-requests', at: c.requestedAt })
+    }
+  } else {
+    // The raiser hears the outcome, the same way they do for an exception or a delicacy.
+    // Without this branch a Booking Manager whose venue move was refused was never told.
+    for (const c of await listChangeRequests({ mineId: user.id })) {
+      if (c.status === 'pending') continue
+      items.push({
+        id: `cr-done:${c.id}`,
+        kind: 'change_request',
+        message: `Your change request was ${c.status} — ${c.eventCode}: ${c.summary}`,
+        href: '/change-requests',
+        at: c.decidedAt ?? c.requestedAt,
+      })
     }
   }
 
@@ -94,6 +111,39 @@ export async function notificationsFor(user: { id: string; roleName: string }): 
     `)) as unknown as { id: string; code: string; at: string }[]
     for (const r of rows) {
       items.push({ id: `maint:${r.id}`, kind: 'maintenance', message: `Close maintenance — ${r.code} is completed`, href: '/maintenance', at: r.at })
+    }
+  }
+
+  // Rooms that have gone to someone who committed first (client, 21 Jul 2026). Enquiries
+  // hold nothing, so the loser is told rather than blocked in advance: "change the booking
+  // room dates or category or anything". The same entry catches a room retired under a
+  // booking that was sound when it was made.
+  //
+  // Scoped the way every other queue is — the proposal's owner hears about their own, a
+  // Lodge Manager about their own lodge, and the Auditor about all of it. A shortfall is
+  // derived live, so fixing the booking makes the notice disappear on its own.
+  const shortfallScope =
+    user.roleName === 'auditor'
+      ? {}
+      : user.roleName === 'lodge_manager'
+        ? { unitId: user.lodgingUnitId ?? undefined }
+        : { ownerId: user.id }
+  // A Lodge Manager with no lodge assigned would otherwise read as "every lodge".
+  if (!(user.roleName === 'lodge_manager' && !user.lodgingUnitId)) {
+    for (const sf of await listRoomShortfalls(shortfallScope)) {
+      const stay = `${sf.checkIn} to ${sf.checkOut}`
+      items.push({
+        // Keyed on the requirement row: a proposal can hold two lines of the same category
+        // and check-in that differ only in check-out, so the shape of the line is not unique.
+        id: `rooms-short:${sf.requirementId}`,
+        kind: 'rooms',
+        message:
+          `Rooms no longer free — ${sf.eventCode}: ${sf.shortfall} of ${sf.promised} ` +
+          `${sf.unitName} ${sf.roomType.replace(/_/g, ' ')} (${stay}). ` +
+          `Change the dates, category or lodge.`,
+        href: `/bookings/${sf.eventId}`,
+        at: today,
+      })
     }
   }
 

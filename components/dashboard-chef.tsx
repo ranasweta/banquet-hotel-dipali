@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ChefHat, CalendarDays, UtensilsCrossed, Users, Clock, MapPin, CircleCheck } from 'lucide-react'
 import type { ChefDashboard as ChefData } from '@/lib/dashboard'
 import { Hero, KpiTile, SectionCard, EmptyState, AgendaList, formatDay, formatTimeRange } from '@/components/dashboard-shared'
+import { OperationsBoard } from '@/components/operations-board'
 
 /**
  * Chef home: the kitchen's own board. What is waiting on a price from them, what they cook
@@ -124,6 +125,14 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
             )}
           </SectionCard>
         </div>
+      </div>
+
+      {/* Today's kitchen order in full (client, 21 Jul 2026): the Chef sees the same menu
+          the Banquet Manager does — every dish, its preferences, and the delicacies he has
+          priced himself. No money on it. */}
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Today&apos;s menus</h2>
+        <OperationsBoard days={1} />
       </div>
     </div>
   )

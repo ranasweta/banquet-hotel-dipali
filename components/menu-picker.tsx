@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeftRight, Check, ChefHat, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
@@ -40,8 +40,23 @@ type MenuCategorySnapshot = {
   exceptionStatus: string | null
   exceptionRemark: string | null
   selected: string[]
+  /** Increase pressed here: picking is unbounded and the tail of `selected` are extras. */
+  increaseUnlocked: boolean
+  /** Which of `selected` are extras — rendered apart. */
+  extras: string[]
   notes: Record<string, string>
   complete: boolean
+}
+
+/** What this function's submit button would carry to the Higher Authority. */
+type IncreaseSummary = {
+  subEventId: string
+  subEventName?: string
+  totalExtras: number
+  freeCovered?: number
+  awaitingSubmission: number
+  alreadySubmitted?: number
+  segments: { categoryName: string; basePick: number; extraPicks: number; submitted: number; items: string[] }[]
 }
 type MenuSnapshot = {
   tierId: string
@@ -86,19 +101,46 @@ export function MenuPicker({
 }) {
   const [resp, setResp] = useState<MenuResponse | null>(null)
   const [tierId, setTierId] = useState('')
-  const [selected, setSelected] = useState<Record<string, Set<string>>>({})
+  // Ordered, not a Set: everything picked beyond a segment's base count is an extra, and
+  // which dishes those are is decided by the order they were clicked in (see lib/menus.ts).
+  const [selected, setSelected] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [swapOpen, setSwapOpen] = useState<string | null>(null)
   // categoryName -> itemName -> preference note ("dal spicy"). Free text, never priced.
   const [notes, setNotes] = useState<Record<string, Record<string, string>>>({})
+  const [increases, setIncreases] = useState<IncreaseSummary | null>(null)
   const [delicacy, setDelicacy] = useState('')
   const [delicacies, setDelicacies] = useState<ChefRequestRow[]>([])
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
+  /**
+   * Every local edit bumps `revision`. A save against a remote database takes seconds, and
+   * the manager keeps clicking through them: without this, the server snapshot that arrives
+   * afterwards overwrites everything picked in the meantime, and the dishes visibly roll
+   * back. The ref is what `save` reads (it must not close over a stale render); the state
+   * is what restarts the debounce.
+   */
+  const [revision, setRevision] = useState(0)
+  const revisionRef = useRef(0)
+  const selectedRef = useRef(selected)
+  const notesRef = useRef(notes)
+  const savingRef = useRef(false)
+  const pendingRef = useRef(false)
+
+  useEffect(() => { selectedRef.current = selected }, [selected])
+  useEffect(() => { notesRef.current = notes }, [notes])
+
+  /** Marks the menu edited: restarts the debounce and invalidates any save in flight. */
+  const touch = useCallback(() => {
+    revisionRef.current += 1
+    setRevision(revisionRef.current)
+    setDirty(true)
+  }, [])
+
   /** Snapshot taken before a tier switch, so the wipe it causes can be undone. */
   const [undoTier, setUndoTier] = useState<
-    { tierId: string; selected: Record<string, Set<string>>; notes: Record<string, Record<string, string>> } | null
+    { tierId: string; selected: Record<string, string[]>; notes: Record<string, Record<string, string>> } | null
   >(null)
 
   const loadDelicacies = useCallback(async () => {
@@ -106,20 +148,30 @@ export function MenuPicker({
     setDelicacies(r.requests)
   }, [subEventId])
 
+  const loadIncreases = useCallback(async () => {
+    const r = await api<IncreaseSummary>(`/sub-events/${subEventId}/menu/increase/submit`)
+    setIncreases(r)
+  }, [subEventId])
+
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDelicacies().catch(() => setDelicacies([]))
   }, [loadDelicacies])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadIncreases().catch(() => setIncreases(null))
+  }, [loadIncreases])
 
   const load = useCallback(async () => {
     const data = await api<MenuResponse>(`/sub-events/${subEventId}/menu`)
     setResp(data)
     if (data.menu) {
       setTierId(data.menu.tierId)
-      const next: Record<string, Set<string>> = {}
+      const next: Record<string, string[]> = {}
       const nextNotes: Record<string, Record<string, string>> = {}
       for (const c of data.menu.categories) {
-        next[c.categoryName] = new Set(c.selected)
+        next[c.categoryName] = [...c.selected]
         if (c.notes && Object.keys(c.notes).length) nextNotes[c.categoryName] = { ...c.notes }
       }
       setSelected(next)
@@ -137,6 +189,10 @@ export function MenuPicker({
 
   const tier = useMemo(() => tiers.find((t) => t.id === tierId), [tiers, tierId])
   const savedForThisTier = resp?.menu?.tierId === tierId ? resp!.menu : null
+  /** Has Increase been pressed on this segment? Unlocked segments have no ceiling. */
+  const isUnlocked = (categoryName: string): boolean =>
+    savedForThisTier?.categories.find((c) => c.categoryName === categoryName)?.increaseUnlocked ?? false
+
   const editable = canEdit && (resp?.subEvent.editable ?? false)
   const pax = resp?.subEvent.pax ?? 0
 
@@ -151,7 +207,7 @@ export function MenuPicker({
     if (id === tierId) return
     // Switching tiers starts a fresh selection, so keep the old one to hand: with auto-save
     // on, an accidental switch would otherwise wipe a menu that took days to assemble.
-    const hadChoices = Object.values(selected).some((s) => s.size > 0)
+    const hadChoices = Object.values(selected).some((s) => s.length > 0)
     if (hadChoices) {
       setUndoTier({ tierId, selected, notes })
       toast('Menu tier changed — the previous choices were cleared.', {
@@ -162,17 +218,17 @@ export function MenuPicker({
 
     setTierId(id)
     const existing = resp?.menu?.tierId === id ? resp!.menu : null
-    const next: Record<string, Set<string>> = {}
+    const next: Record<string, string[]> = {}
     const nextNotes: Record<string, Record<string, string>> = {}
     if (existing) {
       for (const c of existing.categories) {
-        next[c.categoryName] = new Set(c.selected)
+        next[c.categoryName] = [...c.selected]
         if (c.notes && Object.keys(c.notes).length) nextNotes[c.categoryName] = { ...c.notes }
       }
     }
     setSelected(next)
     setNotes(nextNotes)
-    setDirty(true)
+    touch()
   }
 
   /** Puts back the tier and the choices that were cleared by the last switch. */
@@ -182,24 +238,24 @@ export function MenuPicker({
       setTierId(prev.tierId)
       setSelected(prev.selected)
       setNotes(prev.notes)
-      setDirty(true)
+      touch()
       return null
     })
   }
 
   function toggleItem(cat: CatalogCategory, item: string, on: boolean) {
     setSelected((prev) => {
-      const set = new Set(prev[cat.name] ?? [])
-      const cap = effectivePick(cat)
+      const list = prev[cat.name] ?? []
       if (on) {
-        if (cap != null && set.size >= cap) return prev // at ceiling; ignore
-        set.add(item)
-      } else {
-        set.delete(item)
+        if (list.includes(item)) return prev
+        // An unlocked segment has no ceiling — that is what Increase buys. A locked one
+        // still stops at its printed count.
+        if (!isUnlocked(cat.name) && cat.pickCount != null && list.length >= cat.pickCount) return prev
+        return { ...prev, [cat.name]: [...list, item] }
       }
-      return { ...prev, [cat.name]: set }
+      return { ...prev, [cat.name]: list.filter((i) => i !== item) }
     })
-    setDirty(true)
+    touch()
   }
 
   /** A preference note on one dish — "dal spicy". Kitchen instruction only, never a charge. */
@@ -210,33 +266,59 @@ export function MenuPicker({
       else delete forCat[item]
       return { ...prev, [categoryName]: forCat }
     })
-    setDirty(true)
+    touch()
   }
 
   const save = useCallback(async () => {
     if (!tier) return
+    // One save at a time. Two overlapping PUTs can land out of order, and the older payload
+    // would win — silently dropping whatever was picked in between.
+    if (savingRef.current) {
+      pendingRef.current = true
+      return
+    }
+    savingRef.current = true
     setSaving(true)
     try {
-      const selections: Record<string, string[]> = {}
-      for (const c of tier.categories) {
-        if (c.pickCount == null) continue // all-included: server fills the full list
-        selections[c.name] = [...(selected[c.name] ?? [])]
+      // Keep sending until what we sent IS what is on screen. A save takes seconds against a
+      // remote database and the manager carries on clicking; adopting the server's snapshot
+      // after that would roll their choices back.
+      for (;;) {
+        pendingRef.current = false
+        const rev = revisionRef.current
+        const snapSelected = selectedRef.current
+        const snapNotes = notesRef.current
+
+        const selections: Record<string, string[]> = {}
+        for (const c of tier.categories) {
+          if (c.pickCount == null) continue // all-included: server fills the full list
+          selections[c.name] = [...(snapSelected[c.name] ?? [])]
+        }
+        await api(`/sub-events/${subEventId}/menu`, {
+          method: 'PUT',
+          body: JSON.stringify({ tier_id: tier.id, selections, notes: snapNotes }),
+        })
+
+        // Edited while that was in flight — go round again rather than overwrite them.
+        if (revisionRef.current !== rev || pendingRef.current) continue
+
+        // Settled: the server's snapshot is now authoritative. Both reads in parallel —
+        // sequentially they doubled the wait after every single click.
+        await Promise.all([load(), loadIncreases()])
+        setSavedAt(new Date())
+        onChanged?.()
+        break
       }
-      await api(`/sub-events/${subEventId}/menu`, {
-        method: 'PUT',
-        body: JSON.stringify({ tier_id: tier.id, selections, notes }),
-      })
-      await load()
-      onChanged?.()
-      setSavedAt(new Date())
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
-    // `load` and `onChanged` are stable; selected/notes/tier drive the payload.
+    // Reads its payload from refs, so it never closes over a stale render and stays stable
+    // across edits — the debounce below is what re-triggers it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tier, selected, notes, subEventId])
+  }, [tier, subEventId])
 
   /**
    * Auto-save. Picking a menu can span days, so nothing waits on a Save button — every
@@ -244,9 +326,11 @@ export function MenuPicker({
    */
   useEffect(() => {
     if (!dirty || !editable || !tier) return
+    // `revision` is in the deps so each click restarts the 700ms window instead of firing
+    // one save from the first click of a burst.
     const t = setTimeout(() => { void save() }, 700)
     return () => clearTimeout(t)
-  }, [dirty, editable, tier, save])
+  }, [dirty, revision, editable, tier, save])
 
   /**
    * The other kind of increase: instead of one more pick from the printed list, the guest
@@ -271,18 +355,50 @@ export function MenuPicker({
     }
   }
 
+  /**
+   * Increase does not add "+1". It UNLOCKS the segment: from here the guest may take as
+   * many dishes from it as they like, and everything past the printed count shows as an
+   * extra. Two extras per FUNCTION are free; the rest go to the GM when this function's
+   * submit button is pressed.
+   */
   async function increase(category: string) {
     setBusy(true)
     try {
-      const res = await api<{ applied: 'free' | 'exception' }>(
+      const res = await api<{ freeRemaining: number }>(
         `/sub-events/${subEventId}/menu/increase`,
         { method: 'POST', body: JSON.stringify({ category }) },
       )
       await load()
-      if (res.applied === 'free') toast.success(`Free extra choice added to ${category}`)
-      else toast.info(`${category} increase sent to the GM for approval`)
+      await loadIncreases()
+      toast.success(
+        res.freeRemaining > 0
+          ? `${category} unlocked — ${res.freeRemaining} free extra${res.freeRemaining === 1 ? '' : 's'} left on this function`
+          : `${category} unlocked — further dishes will need the GM's approval`,
+      )
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not request increase')
+      toast.error(e instanceof Error ? e.message : 'Could not unlock the segment')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** Sends this function's extras beyond the free two to the Higher Authority. */
+  async function submitIncreases() {
+    setBusy(true)
+    try {
+      const res = await api<{ submitted: number }>(
+        `/sub-events/${subEventId}/menu/increase/submit`,
+        { method: 'POST' },
+      )
+      await load()
+      await loadIncreases()
+      toast.success(
+        res.submitted > 0
+          ? `${res.submitted} extra dish${res.submitted === 1 ? '' : 'es'} sent to the GM`
+          : 'Nothing outstanding — everything is inside the free allowance',
+      )
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not send the increases')
     } finally {
       setBusy(false)
     }
@@ -335,11 +451,15 @@ export function MenuPicker({
         <div className="space-y-3">
           {tier.categories.map((cat) => {
             const cap = effectivePick(cat)
-            const chosen = selected[cat.name] ?? new Set<string>()
+            const chosen = selected[cat.name] ?? []
             const allIncluded = cat.pickCount == null
-            const count = allIncluded ? cat.items.length : chosen.size
+            const unlocked = isUnlocked(cat.name)
+            // Extras are the picks past the printed count — the tail of the array.
+            const base = cat.pickCount ?? 0
+            const extraCount = allIncluded ? 0 : Math.max(0, chosen.length - base)
+            const count = allIncluded ? cat.items.length : chosen.length
             const need = allIncluded ? cat.items.length : cap ?? 0
-            const complete = allIncluded || chosen.size >= (cap ?? 0)
+            const complete = allIncluded || chosen.length >= base
             const snap = savedForThisTier?.categories.find((c) => c.categoryName === cat.name)
             return (
               <div key={cat.id} className="rounded-lg border p-3">
@@ -351,7 +471,18 @@ export function MenuPicker({
                     ) : (
                       <Badge variant="outline">pick {cap}</Badge>
                     )}
-                    {cat.freeIncreaseEligible && !allIncluded && (
+                    {/* Only the count of extras taken, never the word "unlimited" — a guest
+                        reading it over the manager's shoulder would take that as "free",
+                        when everything past the free two is the Authority's to price. */}
+                    {unlocked && extraCount > 0 && (
+                      <Badge
+                        variant="outline"
+                        className="border-violet-400 text-violet-700 dark:border-violet-600 dark:text-violet-300"
+                      >
+                        +{extraCount}
+                      </Badge>
+                    )}
+                    {cat.freeIncreaseEligible && !allIncluded && !unlocked && (
                       <Sparkles className="size-3.5 text-amber-500" aria-label="free increase eligible" />
                     )}
                     {snap?.exceptionPending && (
@@ -375,7 +506,7 @@ export function MenuPicker({
                       )}
                     >
                       {complete && <Check className="mr-0.5 inline size-3" />}
-                      {count} / {need}
+                      {unlocked ? `${count} picked` : `${count} / ${need}`}
                     </span>
                     {editable && !allIncluded && (
                       <Button
@@ -387,7 +518,7 @@ export function MenuPicker({
                         <ArrowLeftRight className="size-3" /> swap
                       </Button>
                     )}
-                    {editable && !allIncluded && savedForThisTier && (
+                    {editable && !allIncluded && savedForThisTier && !unlocked && (
                       <Button
                         size="xs"
                         variant="ghost"
@@ -401,8 +532,12 @@ export function MenuPicker({
                 </div>
                 <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                   {cat.items.map((item) => {
-                    const isChecked = allIncluded || chosen.has(item)
-                    const atCeiling = !allIncluded && cap != null && chosen.size >= cap && !chosen.has(item)
+                    const isChecked = allIncluded || chosen.includes(item)
+                    // An unlocked segment has no ceiling; a locked one stops at its count.
+                    const atCeiling =
+                      !allIncluded && !unlocked && chosen.length >= base && !chosen.includes(item)
+                    // Picked past the printed count — the guest's addition, coloured apart.
+                    const isExtra = !allIncluded && chosen.indexOf(item) >= base
                     return (
                       <div key={item}>
                         <label
@@ -417,7 +552,11 @@ export function MenuPicker({
                             disabled={!editable || allIncluded || atCeiling}
                             onCheckedChange={(v) => toggleItem(cat, item, Boolean(v))}
                           />
-                          <span>{item}</span>
+                          {/* Extras read apart from the base picks, so it is obvious at a
+                              glance what the guest has added beyond the tier. */}
+                          <span className={cn(isExtra && 'font-medium text-violet-700 dark:text-violet-400')}>
+                            {item}
+                          </span>
                         </label>
                         {isChecked && (
                           <ItemNote
@@ -459,7 +598,7 @@ export function MenuPicker({
                     pool={pools.find((p) => p.categoryName === cat.name)?.items ?? []}
                     ownItems={cat.items}
                     chosen={chosen}
-                    atCeiling={cap != null && chosen.size >= cap}
+                    atCeiling={!unlocked && chosen.length >= base}
                     onPick={(item) => toggleItem(cat, item, true)}
                     onClose={() => setSwapOpen(null)}
                   />
@@ -467,6 +606,55 @@ export function MenuPicker({
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Extra dishes — the same shape as a chef delicacy request, and pressed the same way:
+          when this function is finished, not when the event locks. Pre-filled with what has
+          actually been ticked, so the GM decides on dishes rather than on a number. */}
+      {tier && increases && increases.totalExtras > 0 && (
+        <div className="rounded-lg border border-violet-300 p-3 dark:border-violet-800">
+          <div className="mb-1 flex items-center gap-2 text-sm font-medium">
+            <Plus className="size-4 text-violet-600 dark:text-violet-400" aria-hidden />
+            Extra dishes
+            <span className="text-xs font-normal text-muted-foreground">
+              two per function are free — the rest need the GM
+            </span>
+          </div>
+
+          <ul className="mb-2 space-y-1 text-sm">
+            {increases.segments.map((seg) => (
+              <li key={seg.categoryName} className="flex items-baseline justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="text-muted-foreground">{seg.categoryName}</span>{' '}
+                  <span className="text-violet-700 dark:text-violet-400">{seg.items.join(', ')}</span>
+                </span>
+                {seg.submitted > 0 && (
+                  <span className="shrink-0 text-xs text-muted-foreground">{seg.submitted} sent</span>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              {increases.totalExtras} extra{increases.totalExtras === 1 ? '' : 's'} ·{' '}
+              {increases.freeCovered ?? 0} free
+              {increases.awaitingSubmission > 0
+                ? ` · ${increases.awaitingSubmission} awaiting the GM`
+                : ' · nothing outstanding'}
+            </p>
+            {editable && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || increases.awaitingSubmission === 0}
+                onClick={submitIncreases}
+              >
+                Send {increases.awaitingSubmission > 0 ? increases.awaitingSubmission : ''} to the GM
+              </Button>
+            )}
+          </div>
         </div>
       )}
 
@@ -675,7 +863,7 @@ function SwapPanel({
 }: {
   pool: string[]
   ownItems: string[]
-  chosen: Set<string>
+  chosen: string[]
   atCeiling: boolean
   onPick: (item: string) => void
   onClose: () => void
@@ -713,9 +901,9 @@ function SwapPanel({
               key={item}
               size="xs"
               variant="outline"
-              disabled={atCeiling || chosen.has(item)}
+              disabled={atCeiling || chosen.includes(item)}
               onClick={() => onPick(item)}
-              title={chosen.has(item) ? 'Already chosen' : 'Uses one pick'}
+              title={chosen.includes(item) ? 'Already chosen' : 'Uses one pick'}
             >
               {item}
             </Button>

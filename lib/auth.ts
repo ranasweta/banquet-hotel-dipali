@@ -15,6 +15,8 @@ export type CurrentUser = {
   email: string | null
   roleId: string
   roleName: string
+  /** The lodge a Lodge Manager is responsible for; NULL for every other role (mig 0013). */
+  lodgingUnitId: string | null
 }
 
 /**
@@ -34,6 +36,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       email: schema.users.email,
       roleId: schema.users.roleId,
       roleName: schema.roles.name,
+      lodgingUnitId: schema.users.lodgingUnitId,
     })
     .from(schema.users)
     .innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId))
@@ -41,6 +44,22 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     .limit(1)
 
   return row ?? null
+}
+
+/**
+ * Which lodge a user's room views are limited to; null means all of them.
+ *
+ * A Lodge Manager is responsible for exactly one lodge (client, 21 Jul 2026). Everyone
+ * else who can read rooms — Booking, Banquet, the Authority, the Auditor — sees all three.
+ * A Lodge Manager with no lodge set is a configuration mistake, and it fails loudly here
+ * rather than quietly widening to every lodge.
+ */
+export function lodgeScopeFor(user: CurrentUser): string | null {
+  if (user.roleName !== 'lodge_manager') return null
+  if (!user.lodgingUnitId) {
+    throw forbidden('No lodge is assigned to your account — ask an Admin to set one.')
+  }
+  return user.lodgingUnitId
 }
 
 /** The signed-in user, or a 401. */

@@ -1,15 +1,12 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Loader2, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
-import { formatPaise, rupeesToPaise } from '@/lib/money'
+import { formatPaise } from '@/lib/money'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Select,
   SelectContent,
@@ -17,67 +14,61 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 
-type Unit = { id: string; name: string; roomCount: number }
-type BoardRoom = {
-  id: string
-  roomNo: string
-  block: string | null
-  roomType: string
-  beds: number
-  rackRatePaise: number
-  allocations: { id: string; code: string; guestName: string; checkIn: string; checkOut: string }[]
-}
-type Reconciliation = {
-  byType: { roomType: string; promised: number; allocated: number; occupied: number; variance: number }[]
-  totals: { promised: number; allocated: number; occupied: number; variance: number }
-  allocations: {
-    id: string; roomNo: string; unitName: string; roomType: string
-    checkIn: string; checkOut: string; ratePaise: number; discountPaise: number; overrideNote: string | null
-  }[]
+/**
+ * Rooms on a booking. Bulk only: lodge + category + how many + which dates. That IS the
+ * booking (client, 21 Jul 2026) — which actual room a guest gets is the reception desk's
+ * call and is deliberately not recorded here.
+ *
+ * This replaces the room-by-room allocation panel, which picked specific room numbers and
+ * no longer had anything to write to. Rooms stay editable until the event locks, because a
+ * guest's lodging keeps changing after the booking is confirmed.
+ */
+
+type Unit = { id: string; name: string }
+type RoomRate = { unitId: string; roomType: string; rackRatePaise: number }
+type Requirement = {
+  unit_id: string
+  room_type: string
+  count: number
+  check_in: string
+  check_out: string
 }
 
 const label = (t: string) => t.replace(/_/g, ' ')
 
-export function EventRooms({
-  eventId,
-  editable,
-}: {
-  eventId: string
-  editable: boolean
-}) {
-  const [rec, setRec] = useState<Reconciliation | null>(null)
+function nights(checkIn: string, checkOut: string): number {
+  if (!checkIn || !checkOut) return 0
+  const [ay, am, ad] = checkIn.split('-').map(Number)
+  const [by, bm, bd] = checkOut.split('-').map(Number)
+  const d = Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000)
+  return d > 0 ? d : 0
+}
+
+export function EventRooms({ eventId, editable }: { eventId: string; editable: boolean }) {
+  const [rows, setRows] = useState<Requirement[] | null>(null)
   const [units, setUnits] = useState<Unit[]>([])
+  const [roomTypes, setRoomTypes] = useState<string[]>([])
+  const [rates, setRates] = useState<RoomRate[]>([])
+  const [busy, setBusy] = useState(false)
 
-  const loadRec = useCallback(async () => {
-    const r = await api<Reconciliation>(`/events/${eventId}/rooms/reconciliation`)
-    setRec(r)
-  }, [eventId])
-
-  const loadAll = useCallback(async () => {
-    const [r, u] = await Promise.all([
-      api<Reconciliation>(`/events/${eventId}/rooms/reconciliation`),
-      api<{ units: Unit[] }>('/rooms/units'),
+  const load = useCallback(async () => {
+    const [reqs, opts] = await Promise.all([
+      api<{ requirements: Requirement[] }>(`/events/${eventId}/room-requirements`),
+      api<{ lodgingUnits?: Unit[]; roomTypes: string[]; roomRates: RoomRate[] }>('/booking-options'),
     ])
-    setRec(r)
-    setUnits(u.units)
+    setRows(reqs.requirements)
+    setUnits(opts.lodgingUnits ?? [])
+    setRoomTypes(opts.roomTypes)
+    setRates(opts.roomRates ?? [])
   }, [eventId])
 
   useEffect(() => {
-    // Async fetch seeds state after the await; the rule can't see past the promise.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadAll().catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load rooms'))
-  }, [loadAll])
+    load().catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load rooms'))
+  }, [load])
 
-  if (!rec) {
+  if (!rows) {
     return (
       <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" /> Loading rooms…
@@ -85,271 +76,166 @@ export function EventRooms({
     )
   }
 
-  return (
-    <div className="space-y-6">
-      {/* Reconciliation (FR-4.5) */}
-      <div>
-        <h3 className="mb-2 text-sm font-medium">Reconciliation — promised vs allocated</h3>
-        {rec.byType.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No room requirements or allocations yet.</p>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Room type</TableHead>
-                  <TableHead className="text-right">Promised</TableHead>
-                  <TableHead className="text-right">Allocated</TableHead>
-                  <TableHead className="text-right">Occupied</TableHead>
-                  <TableHead className="text-right">Variance</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rec.byType.map((r) => (
-                  <TableRow key={r.roomType}>
-                    <TableCell className="capitalize">{label(r.roomType)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{r.promised}</TableCell>
-                    <TableCell className="text-right tabular-nums">{r.allocated}</TableCell>
-                    <TableCell className="text-right tabular-nums">{r.occupied}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {r.variance === 0 ? (
-                        <span className="text-emerald-600">0</span>
-                      ) : (
-                        <span className="text-amber-600">{r.variance > 0 ? `+${r.variance}` : r.variance}</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-        {rec.totals.variance !== 0 && (
-          <p className="mt-1 text-xs text-amber-600">
-            Variance outstanding — this blocks the Lodge Manager’s lock sign-off (FR-4.5).
-          </p>
-        )}
-      </div>
+  const rateOf = (r: Requirement) =>
+    rates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
+  const lineOf = (r: Requirement) => rateOf(r) * Math.max(0, r.count) * nights(r.check_in, r.check_out)
+  const roomsTotal = rows.reduce((n, r) => n + lineOf(r), 0)
+  const totalRooms = rows.reduce((n, r) => n + Math.max(0, r.count), 0)
 
-      {/* Current allocations */}
-      {rec.allocations.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-sm font-medium">Allocated rooms</h3>
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Room</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Stay</TableHead>
-                  <TableHead className="text-right">Rate</TableHead>
-                  <TableHead className="text-right">Disc.</TableHead>
-                  {editable && <TableHead />}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rec.allocations.map((a) => (
-                  <TableRow key={a.id}>
-                    <TableCell className="font-medium">
-                      {a.unitName} {a.roomNo}
-                      {a.overrideNote && (
-                        <Badge variant="outline" className="ml-2 text-amber-600" title={a.overrideNote}>override</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="capitalize">{label(a.roomType)}</TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">{a.checkIn} → {a.checkOut}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatPaise(a.ratePaise)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{a.discountPaise ? `−${formatPaise(a.discountPaise)}` : '—'}</TableCell>
+  const update = (i: number, patch: Partial<Requirement>) =>
+    setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const add = () =>
+    setRows([
+      ...rows,
+      { unit_id: units[0]?.id ?? '', room_type: roomTypes[0] ?? 'deluxe', count: 1, check_in: '', check_out: '' },
+    ])
+  const remove = (i: number) => setRows(rows.filter((_, j) => j !== i))
+
+  async function save() {
+    for (const r of rows!) {
+      if (!r.unit_id || !r.room_type) return toast.error('Every line needs a lodge and a category')
+      if (nights(r.check_in, r.check_out) === 0) {
+        return toast.error('Check-out must be after check-in on every line')
+      }
+    }
+    setBusy(true)
+    try {
+      const res = await api<{ totalRooms: number; deferred: boolean }>(
+        `/events/${eventId}/room-requirements`,
+        { method: 'POST', body: JSON.stringify({ requirements: rows }) },
+      )
+      toast[res.deferred ? 'info' : 'success'](
+        res.deferred
+          ? `${res.totalRooms} rooms — sent to the GM for approval (35 or more).`
+          : 'Rooms saved',
+      )
+      await load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save rooms')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {rows.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No rooms on this booking. Add a line if the guest needs lodging.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[720px] text-sm">
+            <thead>
+              <tr className="border-b text-left text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                <th className="px-3 py-2.5 font-semibold">Lodge</th>
+                <th className="px-3 py-2.5 font-semibold">Category</th>
+                <th className="px-3 py-2.5 font-semibold">Rooms</th>
+                <th className="px-3 py-2.5 font-semibold">Check-in</th>
+                <th className="px-3 py-2.5 font-semibold">Check-out</th>
+                <th className="px-3 py-2.5 text-right font-semibold">Estimate</th>
+                <th className="px-3 py-2.5" />
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td className="px-3 py-2">
+                    <Select
+                      items={units.map((u) => ({ value: u.id, label: u.name }))}
+                      value={r.unit_id}
+                      onValueChange={(v) => update(i, { unit_id: v ?? '' })}
+                      disabled={!editable}
+                    >
+                      <SelectTrigger className="min-w-32"><SelectValue placeholder="Lodge" /></SelectTrigger>
+                      <SelectContent>
+                        {units.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <Select
+                      items={roomTypes.map((t) => ({ value: t, label: label(t) }))}
+                      value={r.room_type}
+                      onValueChange={(v) => update(i, { room_type: v ?? '' })}
+                      disabled={!editable}
+                    >
+                      <SelectTrigger className="min-w-36 capitalize"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {roomTypes.map((t) => (
+                          <SelectItem key={t} value={t} className="capitalize">{label(t)}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      className="w-20"
+                      value={r.count}
+                      disabled={!editable}
+                      onChange={(e) => update(i, { count: Number(e.target.value) })}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <Input
+                      type="date"
+                      value={r.check_in}
+                      disabled={!editable}
+                      onChange={(e) => update(i, { check_in: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <Input
+                      type="date"
+                      value={r.check_out}
+                      disabled={!editable}
+                      onChange={(e) => update(i, { check_out: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {nights(r.check_in, r.check_out) > 0 ? formatPaise(lineOf(r)) : '—'}
+                  </td>
+                  <td className="px-3 py-2">
                     {editable && (
-                      <TableCell className="text-right">
-                        <DeleteAllocation id={a.id} onDone={loadRec} />
-                      </TableCell>
+                      <Button variant="ghost" size="icon" onClick={() => remove(i)} aria-label="Remove line">
+                        <Trash2 className="size-4" />
+                      </Button>
                     )}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {editable && <AllocateForm eventId={eventId} units={units} onAllocated={loadRec} />}
-    </div>
-  )
-}
-
-function DeleteAllocation({ id, onDone }: { id: string; onDone: () => Promise<void> }) {
-  const [busy, setBusy] = useState(false)
-  return (
-    <Button
-      size="icon-xs"
-      variant="ghost"
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true)
-        try {
-          await api(`/room-allocations/${id}`, { method: 'DELETE' })
-          await onDone()
-        } catch (e) {
-          toast.error(e instanceof Error ? e.message : 'Could not remove')
-        } finally {
-          setBusy(false)
-        }
-      }}
-    >
-      <Trash2 className="size-3" />
-    </Button>
-  )
-}
-
-function AllocateForm({
-  eventId,
-  units,
-  onAllocated,
-}: {
-  eventId: string
-  units: Unit[]
-  onAllocated: () => Promise<void>
-}) {
-  const [unitId, setUnitId] = useState('')
-  const [checkIn, setCheckIn] = useState('')
-  const [checkOut, setCheckOut] = useState('')
-  const [discount, setDiscount] = useState('')
-  const [note, setNote] = useState('')
-  const [board, setBoard] = useState<BoardRoom[] | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [busy, setBusy] = useState(false)
-
-  const canLoad = Boolean(unitId && checkIn && checkOut && checkOut > checkIn)
-
-  async function loadBoard() {
-    if (!canLoad) return
-    setBusy(true)
-    try {
-      const b = await api<{ rooms: BoardRoom[] }>(
-        `/rooms/board?unit_id=${unitId}&from=${checkIn}&to=${checkOut}`,
-      )
-      setBoard(b.rooms)
-      setSelected(new Set())
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not load rooms')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  function toggle(id: string, on: boolean) {
-    setSelected((prev) => {
-      const s = new Set(prev)
-      if (on) s.add(id)
-      else s.delete(id)
-      return s
-    })
-  }
-
-  async function allocate() {
-    if (selected.size === 0) return
-    setBusy(true)
-    try {
-      const discountPaise = discount.trim() ? rupeesToPaise(Number(discount)) : undefined
-      const res = await api<{ deferred: boolean }>(`/events/${eventId}/room-allocations`, {
-        method: 'POST',
-        body: JSON.stringify({
-          allocations: [...selected].map((room_id) => ({
-            room_id,
-            check_in: checkIn,
-            check_out: checkOut,
-            discount_paise: discountPaise,
-            override_note: note.trim() || undefined,
-          })),
-        }),
-      })
-      if (res.deferred) {
-        toast.info('35+ rooms — sent to the GM for approval; nothing is booked until approved.')
-      } else {
-        toast.success(`${selected.size} room(s) allocated`)
-      }
-      setBoard(null)
-      setSelected(new Set())
-      setDiscount('')
-      setNote('')
-      await onAllocated()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Allocation failed')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const freeRooms = useMemo(() => board?.filter((r) => r.allocations.length === 0) ?? [], [board])
-  const takenCount = (board?.length ?? 0) - freeRooms.length
-
-  return (
-    <div className="rounded-lg border border-dashed p-4">
-      <h3 className="mb-3 text-sm font-medium">Allocate rooms</h3>
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="w-48 space-y-1.5">
-          <Label className="text-xs">Lodging unit</Label>
-          <Select value={unitId} onValueChange={(v) => { if (v) setUnitId(v) }} items={units.map((u) => ({ value: u.id, label: u.name }))}>
-            <SelectTrigger><SelectValue placeholder="Choose a unit" /></SelectTrigger>
-            <SelectContent>
-              {units.map((u) => (
-                <SelectItem key={u.id} value={u.id}>{u.name} ({u.roomCount})</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Check-in</Label>
-          <Input type="date" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} className="w-40" />
-        </div>
-        <div className="space-y-1.5">
-          <Label className="text-xs">Check-out</Label>
-          <Input type="date" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} className="w-40" />
-        </div>
-        <Button variant="outline" onClick={loadBoard} disabled={!canLoad || busy}>
-          {busy && <Loader2 className="size-4 animate-spin" />} Show free rooms
-        </Button>
-      </div>
-
-      {board && (
-        <div className="mt-4 space-y-3">
-          {freeRooms.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No free rooms in this unit for these dates.</p>
-          ) : (
-            <>
-              <div className="text-xs text-muted-foreground">
-                {freeRooms.length} free{takenCount > 0 ? ` · ${takenCount} already booked (hidden)` : ''}
-              </div>
-              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4">
-                {freeRooms.map((r) => (
-                  <label key={r.id} className="flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 text-sm hover:bg-muted/50">
-                    <Checkbox checked={selected.has(r.id)} onCheckedChange={(v) => toggle(r.id, Boolean(v))} />
-                    <span className="flex-1">
-                      <span className="font-medium">{r.roomNo}</span>
-                      <span className="block text-xs capitalize text-muted-foreground">{label(r.roomType)} · {formatPaise(r.rackRatePaise)}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Discount / room (₹, optional)</Label>
-                  <Input inputMode="decimal" placeholder="0" value={discount} onChange={(e) => setDiscount(e.target.value)} className="w-36" />
-                </div>
-                <div className="grow space-y-1.5">
-                  <Label className="text-xs">Override note (if not the preferred unit)</Label>
-                  <Input placeholder="Reason for a non-preferred unit…" value={note} onChange={(e) => setNote(e.target.value)} />
-                </div>
-                <Button onClick={allocate} disabled={busy || selected.size === 0}>
-                  {busy && <Loader2 className="size-4 animate-spin" />} Allocate {selected.size || ''}
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Caps: ₹500/room, ₹1,000 for suites. 35+ rooms in total need GM approval.
-              </p>
-            </>
+      {rows.length > 0 && (
+        <div className="ml-auto max-w-xs space-y-1 text-sm">
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{totalRooms} room(s), rack-rate estimate</span>
+            <span className="tabular-nums">{formatPaise(roomsTotal)}</span>
+          </div>
+          {totalRooms >= 35 && (
+            <p className="text-xs text-amber-600">
+              35 or more rooms — saving sends this to the Higher Authority (BR-L2).
+            </p>
           )}
+        </div>
+      )}
+
+      {editable && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={add}>
+            <Plus className="size-4" /> Add rooms
+          </Button>
+          <Button size="sm" onClick={save} disabled={busy}>
+            {busy ? 'Saving…' : 'Save rooms'}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Room numbers are assigned at reception — this records the lodge, category and dates only.
+          </p>
         </div>
       )}
     </div>

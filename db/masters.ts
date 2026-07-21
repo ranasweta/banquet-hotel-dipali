@@ -263,7 +263,10 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   // `billing` stays (no tab, but it carries their lock sign-off). Departs from PRD §2.1,
   // which gives them bookings/calendar/approvals — recorded in SEED_ASSUMPTIONS §F6.
   bookings:    { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
-  calendar:    { booking_manager: 'view', banquet_manager: 'edit', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'view' },
+  // Client, 21 Jul 2026: the Banquet Manager approves nothing — he reads which event, when,
+  // how many people and what the menu is. Venue/date/time moves passed to the Authority,
+  // which is why `calendar` drops to view for him and rises to edit for them.
+  calendar:    { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   // The Chef reads menus to price a delicacy request, but never edits a guest's menu.
   menus:       { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   menu_master: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
@@ -275,7 +278,9 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   maintenance: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none' },
   // `view`, not `edit`: the Lodge Manager must see the outcome of the 35+ room exceptions
   // they raise (BR-L2), but deciding one is the Higher Authority's call, not theirs.
-  approvals:   { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'view', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  // `view` for the Banquet Manager, not `edit`: he sees the outcome of what he is reading
+  // around, but deciding is the Authority's (client, 21 Jul 2026).
+  approvals:   { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'view', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   billing:     { booking_manager: 'none', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
   audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },

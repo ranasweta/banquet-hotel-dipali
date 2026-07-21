@@ -161,78 +161,166 @@ d('wedding surcharge (BR-M5)', () => {
   })
 })
 
-d('increases (BR-M2 free, BR-M3 exception)', () => {
-  it('applies the free increase on an eligible category, bumping its effective pick by two', async () => {
-    // BR-M2 amended 20 Jul 2026: two dishes are free of Authority approval, not one.
+d('increases — unlock, colour, and the per-function list (21 Jul 2026)', () => {
+  const silver = async () => tierId('Silver')
+
+  it('refuses picks beyond the base count until Increase is pressed', async () => {
     const sub = await makeSubEvent()
-    await menus.saveSubEventMenu(actor, sub, { tierId: await tierId('Silver'), selections: { Soup: ['Hot & Sour Soup'] } })
+    await expect(
+      menus.saveSubEventMenu(actor, sub, {
+        tierId: await silver(),
+        selections: { Soup: ['Hot & Sour Soup', 'Sweet Corn Soup'] }, // base is 1
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('unlocks a segment for unlimited picking, and marks the overflow as extra', async () => {
+    const sub = await makeSubEvent()
+    await menus.saveSubEventMenu(actor, sub, { tierId: await silver(), selections: { Soup: ['Hot & Sour Soup'] } })
+
     const res = await menus.increaseCategory(actor, sub, 'Soup')
-    expect(res).toMatchObject({ applied: 'free', effectivePick: 3 }) // base 1 + 2 free
+    expect(res).toMatchObject({ categoryName: 'Soup', basePick: 1, freeRemaining: 2 })
 
-    const snap = await menus.getSubEventMenu(sub)
-    expect(snap.menu!.freeIncreaseUsed).toBe(true)
-    expect(snap.menu!.freeIncreaseCategoryName).toBe('Soup')
-    const soup = snap.menu!.categories.find((c) => c.categoryName === 'Soup')!
-    expect(soup.effectivePick).toBe(3)
-  })
-
-  it('raises a deferred exception on the SECOND increase (202)', async () => {
-    const sub = await makeSubEvent()
-    await menus.saveSubEventMenu(actor, sub, { tierId: await tierId('Silver'), selections: { Soup: ['Hot & Sour Soup'], Salad: ['Green Salad'] } })
-    await menus.increaseCategory(actor, sub, 'Soup') // free
-    const second = await menus.increaseCategory(actor, sub, 'Salad') // eligible but free already used
-    expect(second.applied).toBe('exception')
-
-    // A pending menu_increase exception exists, and the category pick is NOT yet bumped.
-    const eid = await eventIdOf(sub)
-    const [exc] = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eid))
-    expect(exc!.kind).toBe('menu_increase')
-    expect(exc!.status).toBe('pending')
-    const snap = await menus.getSubEventMenu(sub)
-    const salad = snap.menu!.categories.find((c) => c.categoryName === 'Salad')!
-    expect(salad.effectivePick).toBe(3) // unchanged until approved
-    expect(salad.exceptionPending).toBe(true)
-  })
-
-  it('raises an exception for an ineligible category even as the first increase', async () => {
-    const sub = await makeSubEvent()
-    await menus.saveSubEventMenu(actor, sub, { tierId: await tierId('Silver'), selections: { 'Paneer Main Course': ['Kadai Paneer'] } })
-    const res = await menus.increaseCategory(actor, sub, 'Paneer Main Course')
-    expect(res.applied).toBe('exception')
-    // The one free increase is still available (it was not consumed by the exception path).
-    const snap = await menus.getSubEventMenu(sub)
-    expect(snap.menu!.freeIncreaseUsed).toBe(false)
-  })
-
-  it('batches every increment into ONE pending request per proposal', async () => {
-    // BR-M3 amended 20 Jul 2026: the manager keeps picking and the Authority sees a single
-    // item per proposal, labelled by function and segment — not one row per increment.
-    const sub = await makeSubEvent()
-    const eid = await eventIdOf(sub)
+    // Four soups on a base of one: three extras, and no ceiling refused them.
     await menus.saveSubEventMenu(actor, sub, {
-      tierId: await tierId('Silver'),
-      selections: { Dal: ['Dal Tadka'], 'Paneer Main Course': ['Kadai Paneer'] },
+      tierId: await silver(),
+      selections: { Soup: ['Hot & Sour Soup', 'Sweet Corn Soup', 'Cream of Tomato', 'Veg Manchow Soup'] },
     })
 
-    const first = await menus.increaseCategory(actor, sub, 'Dal')
-    const second = await menus.increaseCategory(actor, sub, 'Paneer Main Course')
-    const third = await menus.increaseCategory(actor, sub, 'Dal') // same segment again
+    const [row] = (await db.execute(sql`
+      SELECT c.extra_picks AS "extra", c.increase_unlocked AS "unlocked",
+             count(*) FILTER (WHERE s.is_extra)::int AS "flagged"
+        FROM sub_event_menu_categories c
+        JOIN sub_event_menus m ON m.id = c.menu_id
+        LEFT JOIN sub_event_menu_selections s
+          ON s.menu_id = c.menu_id AND s.category_name = c.category_name
+       WHERE m.sub_event_id = ${sub} AND c.category_name = 'Soup'
+       GROUP BY 1, 2
+    `)) as unknown as { extra: number; unlocked: boolean; flagged: number }[]
+    // The count and the flags agree — the picker colours exactly what the GM will see.
+    expect(row).toEqual({ extra: 3, unlocked: true, flagged: 3 })
+  })
 
-    // All three land on the same exception.
-    expect(second).toMatchObject({ applied: 'exception', exceptionId: (first as { exceptionId: string }).exceptionId })
-    expect(third).toMatchObject({ applied: 'exception', exceptionId: (first as { exceptionId: string }).exceptionId })
+  it('keeps the first two extras of a FUNCTION free, across segments', async () => {
+    const sub = await makeSubEvent()
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await silver(),
+      selections: { Soup: ['Hot & Sour Soup'], Salad: ['Green Salad', 'Russian Salad', 'Kachumber Salad'] },
+    })
+    await menus.increaseCategory(actor, sub, 'Soup')
+    await menus.increaseCategory(actor, sub, 'Salad')
 
-    const rows = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eid))
-    const pending = rows.filter((r) => r.kind === 'menu_increase' && r.status === 'pending')
-    expect(pending).toHaveLength(1)
+    // One extra soup, one extra salad — two in the function, both free.
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await silver(),
+      selections: {
+        Soup: ['Hot & Sour Soup', 'Sweet Corn Soup'],
+        Salad: ['Green Salad', 'Russian Salad', 'Kachumber Salad', 'Pasta Salad'],
+      },
+    })
 
-    const items = (pending[0]!.payload as { items: { categoryName: string; subEventName: string; currentPick: number; requestedPick: number }[] }).items
-    expect(items).toHaveLength(2) // two segments, not three requests
-    expect(items.every((i) => typeof i.subEventName === 'string' && i.subEventName.length > 0)).toBe(true)
+    const summary = (await menus.getIncreaseSummary(sub))!
+    expect(summary.totalExtras).toBe(2)
+    expect(summary.freeCovered).toBe(2)
+    expect(summary.awaitingSubmission).toBe(0)
 
-    // Pressing Dal twice raises Dal's ask rather than adding a second row.
-    const dal = items.find((i) => i.categoryName === 'Dal')!
-    expect(dal.requestedPick - dal.currentPick).toBe(2)
+    // Nothing to send while the guest is inside the allowance.
+    const sent = await menus.submitIncreases(actor, sub)
+    expect(sent).toEqual({ exceptionId: null, submitted: 0 })
+  }, 120_000)
+
+  it('sends only what is beyond the free two, itemised by dish', async () => {
+    const sub = await makeSubEvent()
+    const eid = await eventIdOf(sub)
+    await menus.saveSubEventMenu(actor, sub, { tierId: await silver(), selections: { Soup: ['Hot & Sour Soup'] } })
+    await menus.increaseCategory(actor, sub, 'Soup')
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await silver(),
+      selections: { Soup: ['Hot & Sour Soup', 'Sweet Corn Soup', 'Cream of Tomato', 'Veg Manchow Soup'] },
+    })
+
+    const summary = (await menus.getIncreaseSummary(sub))!
+    expect(summary.totalExtras).toBe(3)
+    expect(summary.awaitingSubmission).toBe(1) // 3 extras − 2 free
+
+    const { exceptionId, submitted } = await menus.submitIncreases(actor, sub)
+    expect(submitted).toBe(1)
+
+    const [exc] = await db.select().from(schema.exceptions).where(eq(schema.exceptions.id, exceptionId!))
+    const payload = exc!.payload as { subEventName: string; items: { categoryName: string; requesting: number; dishes: string[] }[] }
+    expect(payload.items).toHaveLength(1)
+    expect(payload.items[0]!.categoryName).toBe('Soup')
+    expect(payload.items[0]!.requesting).toBe(1)
+    // The GM decides on a dish, not on a number.
+    expect(payload.items[0]!.dishes).toHaveLength(1)
+
+    // It is one request per function, and pressing again sends nothing new.
+    const again = await menus.submitIncreases(actor, sub)
+    expect(again.submitted).toBe(0)
+    const all = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eid))
+    expect(all.filter((e) => e.kind === 'menu_increase')).toHaveLength(1)
+  }, 120_000)
+
+  it('does not un-approve sanctioned picks when the menu is next saved', async () => {
+    // The picker autosaves, so a snapshot rewrite used to wipe approved_extra_picks and
+    // re-ask the Authority for a decision it had already made.
+    const sub = await makeSubEvent()
+    await menus.saveSubEventMenu(actor, sub, { tierId: await silver(), selections: { Soup: ['Hot & Sour Soup'] } })
+    await menus.increaseCategory(actor, sub, 'Soup')
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await silver(),
+      selections: { Soup: ['Hot & Sour Soup', 'Sweet Corn Soup', 'Cream of Tomato', 'Veg Manchow Soup'] },
+    })
+    await menus.submitIncreases(actor, sub)
+
+    const read = async () => {
+      const [r] = (await db.execute(sql`
+        SELECT c.submitted_extra_picks AS "submitted"
+          FROM sub_event_menu_categories c
+          JOIN sub_event_menus m ON m.id = c.menu_id
+         WHERE m.sub_event_id = ${sub} AND c.category_name = 'Soup'
+      `)) as unknown as { submitted: number }[]
+      return r!.submitted
+    }
+    expect(await read()).toBe(1)
+
+    // An unrelated autosave must not disturb it.
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await silver(),
+      selections: { Soup: ['Hot & Sour Soup', 'Sweet Corn Soup', 'Cream of Tomato', 'Veg Manchow Soup'] },
+    })
+    expect(await read()).toBe(1)
+  }, 120_000)
+
+  it('hands the allowance back when an extra is removed', async () => {
+    const sub = await makeSubEvent()
+    await menus.saveSubEventMenu(actor, sub, { tierId: await silver(), selections: { Soup: ['Hot & Sour Soup'] } })
+    await menus.increaseCategory(actor, sub, 'Soup')
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await silver(),
+      selections: { Soup: ['Hot & Sour Soup', 'Sweet Corn Soup', 'Cream of Tomato', 'Veg Manchow Soup'] },
+    })
+    await menus.submitIncreases(actor, sub)
+
+    // The guest drops back to one extra: inside the free two, nothing outstanding.
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await silver(),
+      selections: { Soup: ['Hot & Sour Soup', 'Sweet Corn Soup'] },
+    })
+    const summary = (await menus.getIncreaseSummary(sub))!
+    expect(summary.totalExtras).toBe(1)
+    expect(summary.awaitingSubmission).toBe(0)
+  }, 120_000)
+
+  it('still refuses to increase an all-included segment', async () => {
+    const sub = await makeSubEvent()
+    await menus.saveSubEventMenu(actor, sub, { tierId: await silver(), selections: {} })
+    const allIncluded = (await menus.getSubEventMenu(sub)).menu!.categories.find((c) => c.basePick == null)
+    if (allIncluded) {
+      await expect(
+        menus.increaseCategory(actor, sub, allIncluded.categoryName),
+      ).rejects.toMatchObject({ status: 400 })
+    }
   })
 })
 

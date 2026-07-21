@@ -10,6 +10,7 @@ import {
   formatDay,
   formatTimeRange,
 } from '@/components/dashboard-shared'
+import { OperationsBoard } from '@/components/operations-board'
 
 /**
  * Banquet Manager home: the floor & kitchen view. Today's functions with their menu state, the
@@ -140,6 +141,14 @@ export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user:
             )}
           </SectionCard>
         </div>
+      </div>
+
+      {/* The Banquet Manager's main view (client, 21 Jul 2026): the next fifteen days, with
+          today highlighted, carrying every detail except money. He decides nothing here —
+          he reads which event, when, how many people, and what the menu is. */}
+      <div className="space-y-3">
+        <h2 className="text-lg font-semibold">Next 15 days</h2>
+        <OperationsBoard days={15} />
       </div>
     </div>
   )

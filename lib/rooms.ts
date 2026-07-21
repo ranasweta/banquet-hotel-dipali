@@ -155,12 +155,19 @@ export type LodgingCalendar = {
   occupancy: LodgingCell[]
 }
 
-/** Active room counts per unit per category — the denominator for every "how many left". */
-async function getInventory(): Promise<LodgingInventory[]> {
+/**
+ * Active room counts per unit per category — the denominator for every "how many left".
+ *
+ * `scopeUnitId` narrows the read to one lodge. A Lodge Manager is responsible for exactly
+ * one (client, 21 Jul 2026: "the palace lodge manager should see palace data only"), and
+ * the inventory itself stays single and shared — only the read is filtered.
+ */
+async function getInventory(scopeUnitId?: string | null): Promise<LodgingInventory[]> {
   return (await db.execute(sql`
     SELECT u.id AS "unitId", u.name AS "unitName", r.room_type AS "roomType", count(*)::int AS total
     FROM lodging_units u
     JOIN rooms r ON r.unit_id = u.id AND r.is_active
+    WHERE (${scopeUnitId ?? null}::uuid IS NULL OR u.id = ${scopeUnitId ?? null}::uuid)
     GROUP BY u.id, u.name, r.room_type
     ORDER BY u.name, r.room_type
   `)) as unknown as LodgingInventory[]
@@ -171,9 +178,13 @@ async function getInventory(): Promise<LodgingInventory[]> {
  * day list (note `/rooms/board` uses a half-open range instead; these are different shapes).
  * Only non-empty cells come back; the client fills the rest from `inventory`.
  */
-export async function getLodgingCalendar(from: string, to: string): Promise<LodgingCalendar> {
+export async function getLodgingCalendar(
+  from: string,
+  to: string,
+  scopeUnitId?: string | null,
+): Promise<LodgingCalendar> {
   const [inventory, occupancy] = await Promise.all([
-    getInventory(),
+    getInventory(scopeUnitId),
     db.execute(sql`
       WITH days AS (
         SELECT gs::date AS date
@@ -190,27 +201,20 @@ export async function getLodgingCalendar(from: string, to: string): Promise<Lodg
         FROM days d
         JOIN room_requirements rr
           ON d.date >= rr.check_in AND d.date < rr.check_out AND rr.unit_id IS NOT NULL
+         AND (${scopeUnitId ?? null}::uuid IS NULL OR rr.unit_id = ${scopeUnitId ?? null}::uuid)
         JOIN events e ON e.id = rr.event_id AND e.status IN ${OCCUPIED_STATES}
         GROUP BY 1, 2, 3
-      ),
-      pend AS (
-        SELECT d.date, r.unit_id AS "unitId", r.room_type AS "roomType", count(*)::int AS pending
-        FROM exceptions x
-        JOIN events e ON e.id = x.event_id AND e.status IN ${OCCUPIED_STATES}
-        CROSS JOIN LATERAL jsonb_array_elements(x.payload->'allocations') AS el
-        JOIN rooms r ON r.id = (el->>'roomId')::uuid AND r.is_active
-        JOIN days d ON d.date >= (el->>'checkIn')::date AND d.date < (el->>'checkOut')::date
-        WHERE x.kind = 'room_allocation_35plus' AND x.status = 'pending'
-        GROUP BY 1, 2, 3
       )
+      -- pending is always 0 now; the column stays so the calendar's three-state shape
+      -- survives. It used to count rooms held inside an undecided 35+ exception, back when
+      -- a deferred allocation wrote nothing and the calendar would otherwise paint them
+      -- free. Requirements ARE the booking today and are saved whether or not the Authority
+      -- has ruled, so alloc already carries them — counting them again here booked the same
+      -- room twice. Enquiries hold nothing (client, 21 Jul 2026), which is what the status
+      -- filter on alloc enforces.
       SELECT date::text AS date, "unitId", "roomType",
-             sum(locked)::int AS locked, sum(confirmed)::int AS confirmed, sum(pending)::int AS pending
-      FROM (
-        SELECT date, "unitId", "roomType", locked, confirmed, 0 AS pending FROM alloc
-        UNION ALL
-        SELECT date, "unitId", "roomType", 0, 0, pending FROM pend
-      ) t
-      GROUP BY 1, 2, 3
+             locked, confirmed, 0 AS pending
+      FROM alloc
       ORDER BY 1, 2, 3
     `) as unknown as Promise<LodgingCell[]>,
   ])
@@ -230,9 +234,9 @@ export type LodgingHolder = {
 export type LodgingDay = { date: string; inventory: LodgingInventory[]; holders: LodgingHolder[] }
 
 /** One date drilled down: who holds how many of which category, and therefore what is left. */
-export async function getLodgingDay(date: string): Promise<LodgingDay> {
+export async function getLodgingDay(date: string, scopeUnitId?: string | null): Promise<LodgingDay> {
   const [inventory, holders] = await Promise.all([
-    getInventory(),
+    getInventory(scopeUnitId),
     db.execute(sql`
       SELECT rr.unit_id AS "unitId", rr.room_type AS "roomType", e.id AS "eventId", e.code,
              e.guest_name AS "guestName", e.status,
@@ -241,27 +245,212 @@ export async function getLodgingDay(date: string): Promise<LodgingDay> {
       FROM room_requirements rr
       JOIN events e ON e.id = rr.event_id AND e.status IN ${OCCUPIED_STATES}
       WHERE rr.unit_id IS NOT NULL
+        AND (${scopeUnitId ?? null}::uuid IS NULL OR rr.unit_id = ${scopeUnitId ?? null}::uuid)
         AND ${date}::date >= rr.check_in AND ${date}::date < rr.check_out
       GROUP BY 1, 2, 3, 4, 5, 6
-
-      UNION ALL
-
-      SELECT r.unit_id, r.room_type, e.id, e.code, e.guest_name, e.status, 'pending', count(*)::int
-      FROM exceptions x
-      JOIN events e ON e.id = x.event_id AND e.status IN ${OCCUPIED_STATES}
-      CROSS JOIN LATERAL jsonb_array_elements(x.payload->'allocations') AS el
-      JOIN rooms r ON r.id = (el->>'roomId')::uuid AND r.is_active
-      WHERE x.kind = 'room_allocation_35plus' AND x.status = 'pending'
-        AND ${date}::date >= (el->>'checkIn')::date
-        AND ${date}::date <  (el->>'checkOut')::date
-      GROUP BY 1, 2, 3, 4, 5, 6
-
+      -- No 'pending' arm: see getLodgingCalendar. Requirements are saved whether or not a
+      -- 35+ request has been decided, so the first arm already holds them.
       ORDER BY 1, 2, 5
     `) as unknown as Promise<LodgingHolder[]>,
   ])
   return { date, inventory, holders }
 }
 
+
+// ── Room availability — the hard inventory cap ───────────────────────────────
+
+/**
+ * How many rooms of a category a lodge actually has free over a date range (client,
+ * 21 Jul 2026). This is a PHYSICAL ceiling and is not the same thing as BR-L2: the 35+
+ * rule sends a large booking to the Authority, this one refuses a booking the hotel
+ * cannot honour. They stack — 40 rooms when 27 exist is blocked outright; 36 rooms that
+ * do exist is allowed but escalated.
+ *
+ * Measured per NIGHT and reported at the tightest one. A stay of 1-5 Jul where nights
+ * 1-2 have 20 of 27 taken and night 3 has 25 has two rooms free, not seven: the binding
+ * constraint is the worst night in the range, and quoting anything else would promise a
+ * room that vanishes mid-stay.
+ *
+ * Enquiries hold nothing (client, same conversation): only committed events count against
+ * the inventory, so two managers can both be drafting the same rooms and whoever confirms
+ * first takes them. `excludeEventId` keeps an event from competing with its own existing
+ * rows when its requirements are re-saved.
+ */
+export type AvailabilityRequest = {
+  unitId: string
+  roomType: string
+  checkIn: string
+  checkOut: string
+}
+export type AvailabilityLine = AvailabilityRequest & {
+  total: number
+  peakBooked: number
+  available: number
+}
+
+export async function getRoomAvailability(
+  requests: AvailabilityRequest[],
+  excludeEventId?: string,
+  exec: Pick<typeof db, 'execute'> = db,
+): Promise<AvailabilityLine[]> {
+  if (!requests.length) return []
+
+  const values = sql.join(
+    requests.map(
+      (r, i) =>
+        sql`(${i}::int, ${r.unitId}::uuid, ${r.roomType}::text, ${r.checkIn}::date, ${r.checkOut}::date)`,
+    ),
+    sql`, `,
+  )
+
+  const rows = (await exec.execute(sql`
+    WITH req(idx, unit_id, room_type, check_in, check_out) AS (VALUES ${values}),
+    -- One row per requested night. check_out is the morning of departure, so the last
+    -- occupied night is check_out - 1.
+    nights AS (
+      SELECT q.idx, q.unit_id, q.room_type, gs::date AS d
+      FROM req q, generate_series(q.check_in, q.check_out - 1, interval '1 day') gs
+    ),
+    taken AS (
+      SELECT n.idx, n.unit_id, n.room_type, n.d,
+             COALESCE(sum(rr.count), 0)::int AS booked
+      FROM nights n
+      LEFT JOIN room_requirements rr
+        ON rr.unit_id = n.unit_id
+       AND rr.room_type = n.room_type
+       AND n.d >= rr.check_in AND n.d < rr.check_out
+       AND (${excludeEventId ?? null}::uuid IS NULL OR rr.event_id <> ${excludeEventId ?? null}::uuid)
+      LEFT JOIN events e ON e.id = rr.event_id
+      -- rr.event_id IS NULL keeps nights nobody has booked; the status filter drops
+      -- enquiries, which hold no inventory.
+      WHERE rr.event_id IS NULL OR e.status IN ${OCCUPIED_STATES}
+      GROUP BY 1, 2, 3, 4
+    ),
+    inv AS (
+      SELECT unit_id, room_type, count(*)::int AS total
+      FROM rooms WHERE is_active GROUP BY 1, 2
+    )
+    SELECT q.idx,
+           q.unit_id::text  AS "unitId",
+           q.room_type      AS "roomType",
+           q.check_in::text  AS "checkIn",
+           q.check_out::text AS "checkOut",
+           COALESCE(inv.total, 0)                    AS total,
+           COALESCE(max(t.booked), 0)::int           AS "peakBooked",
+           GREATEST(COALESCE(inv.total, 0) - COALESCE(max(t.booked), 0), 0)::int AS available
+    FROM req q
+    LEFT JOIN inv ON inv.unit_id = q.unit_id AND inv.room_type = q.room_type
+    LEFT JOIN taken t ON t.idx = q.idx
+    GROUP BY q.idx, q.unit_id, q.room_type, q.check_in, q.check_out, inv.total
+    ORDER BY q.idx
+  `)) as unknown as (AvailabilityLine & { idx: number })[]
+
+  // `idx` exists only to keep the VALUES list and the result rows in step.
+  return rows.map((r) => ({
+    unitId: r.unitId,
+    roomType: r.roomType,
+    checkIn: r.checkIn,
+    checkOut: r.checkOut,
+    total: Number(r.total),
+    peakBooked: Number(r.peakBooked),
+    available: Number(r.available),
+  }))
+}
+
+// ── Room shortfalls — proposals whose rooms have been taken ──────────────────
+
+/**
+ * Live proposals that can no longer be honoured (client, 21 Jul 2026).
+ *
+ * Enquiries hold no inventory, so two managers may both be drafting the same rooms and
+ * whoever commits first takes them. The loser is not blocked in advance — they are TOLD, so
+ * they can change the dates, the category or the lodge. This is the detection behind that
+ * notification.
+ *
+ * The same query also catches a room being retired under a booking that was fine when it was
+ * made, which is the case no save-time check can ever prevent.
+ *
+ * Reads live rather than being stored: a shortfall stops existing the moment the booking is
+ * changed, and a notification that has to be cleaned up would outlive the problem.
+ */
+export type RoomShortfall = {
+  /**
+   * The `room_requirements` row. Nothing else about a shortfall is unique: a proposal may
+   * legitimately hold two lines of the same category in the same lodge from the same
+   * check-in, differing only in check-out, and no constraint forbids two identical lines.
+   * The feed keys its entries on this.
+   */
+  requirementId: string
+  eventId: string
+  eventCode: string
+  guestName: string
+  status: string
+  createdBy: string
+  unitId: string
+  unitName: string
+  roomType: string
+  checkIn: string
+  checkOut: string
+  promised: number
+  available: number
+  shortfall: number
+}
+
+export async function listRoomShortfalls(
+  opts: { ownerId?: string; unitId?: string } = {},
+): Promise<RoomShortfall[]> {
+  return (await db.execute(sql`
+    WITH live AS (
+      SELECT rr.id, rr.event_id, rr.unit_id, rr.room_type, rr.count, rr.check_in, rr.check_out
+      FROM room_requirements rr
+      JOIN events e ON e.id = rr.event_id
+      -- Locked and beyond is settled; cancelled is gone. Everything still moving is in scope,
+      -- including enquiries — an enquiry is exactly who needs to hear that its rooms went.
+      WHERE rr.unit_id IS NOT NULL
+        AND e.status IN ('enquiry','confirmed','in_progress','completed')
+        AND (${opts.ownerId ?? null}::uuid IS NULL OR e.created_by = ${opts.ownerId ?? null}::uuid)
+        AND (${opts.unitId ?? null}::uuid  IS NULL OR rr.unit_id = ${opts.unitId ?? null}::uuid)
+    ),
+    nights AS (
+      SELECT l.id, l.event_id, l.unit_id, l.room_type, gs::date AS d
+      FROM live l, generate_series(l.check_in, l.check_out - 1, interval '1 day') gs
+    ),
+    taken AS (
+      SELECT n.id, n.d, COALESCE(sum(o.count), 0)::int AS booked
+      FROM nights n
+      LEFT JOIN room_requirements o
+        ON o.unit_id = n.unit_id AND o.room_type = n.room_type
+       AND n.d >= o.check_in AND n.d < o.check_out
+       AND o.event_id <> n.event_id
+      LEFT JOIN events oe ON oe.id = o.event_id
+      -- Only committed events take inventory; an enquiry competing for the same rooms is
+      -- not yet a reason to tell anyone anything.
+      WHERE o.event_id IS NULL OR oe.status IN ${OCCUPIED_STATES}
+      GROUP BY n.id, n.d
+    ),
+    inv AS (
+      SELECT unit_id, room_type, count(*)::int AS total
+      FROM rooms WHERE is_active GROUP BY 1, 2
+    )
+    SELECT l.id::text AS "requirementId",
+           l.event_id::text AS "eventId", e.code AS "eventCode", e.guest_name AS "guestName",
+           e.status::text AS status, e.created_by::text AS "createdBy",
+           l.unit_id::text AS "unitId", u.name AS "unitName", l.room_type AS "roomType",
+           l.check_in::text AS "checkIn", l.check_out::text AS "checkOut",
+           l.count::int AS promised,
+           GREATEST(COALESCE(inv.total, 0) - COALESCE(max(t.booked), 0), 0)::int AS available,
+           (l.count - GREATEST(COALESCE(inv.total, 0) - COALESCE(max(t.booked), 0), 0))::int AS shortfall
+    FROM live l
+    JOIN events e ON e.id = l.event_id
+    JOIN lodging_units u ON u.id = l.unit_id
+    LEFT JOIN inv ON inv.unit_id = l.unit_id AND inv.room_type = l.room_type
+    LEFT JOIN taken t ON t.id = l.id
+    GROUP BY l.id, l.event_id, e.code, e.guest_name, e.status, e.created_by,
+             l.unit_id, u.name, l.room_type, l.check_in, l.check_out, l.count, inv.total
+    HAVING l.count > GREATEST(COALESCE(inv.total, 0) - COALESCE(max(t.booked), 0), 0)
+    ORDER BY e.code, u.name, l.room_type
+  `)) as unknown as RoomShortfall[]
+}
 
 // ── Bulk room booking on the proposal (BR-L2) ────────────────────────────────
 
@@ -275,18 +464,19 @@ export type RoomRequirementInput = {
 export type SaveRequirementsResult = { lines: number; totalRooms: number; deferred: boolean }
 
 /**
- * Replaces an enquiry's room requirements. Rooms are taken in bulk here — lodge + category
+ * Replaces an event's room requirements. Rooms are taken in bulk here — lodge + category
  * + count + dates IS the booking (client, 21 Jul 2026) — and this is what the lodging
- * calendar reads.
+ * calendar reads. Editable until the event locks, because lodging keeps changing after a
+ * booking is confirmed.
  *
  * BR-L2, rewired the same day: the 35+ rule used to count rows in `room_allocations`, which
  * nothing writes any more. It now counts the rooms asked for, and raises ONE pending request
  * per proposal listing every line, so the Authority tracks proposals rather than lines.
  *
- * The requirements are still saved when the threshold is crossed. An enquiry occupies
- * nothing — the calendar counts confirmed events only — so the gate that matters is
- * CONFIRM, which refuses while the request is pending (see lib/confirm.ts). Saving a
- * smaller set clears the pending request, because the reason for it is gone.
+ * The requirements are still saved when the threshold is crossed. Confirm refuses while the
+ * request is pending (lib/confirm.ts), and for an already-confirmed event the lock
+ * checklist does the same — it blocks on any pending approval. Saving a smaller set clears
+ * the request, because the reason for it is gone.
  */
 export async function saveRoomRequirements(
   actor: Actor,
@@ -305,8 +495,62 @@ export async function saveRoomRequirements(
       .where(eq(schema.events.id, eventId))
       .limit(1)
     if (!event) throw notFound('Event not found')
-    if (event.status !== 'enquiry') {
-      throw badRequest('Room requirements can only be set on an enquiry')
+    // Rooms stay editable after confirmation (client, 21 Jul 2026: "old proposal can be
+    // updated with rooms and all"). A guest's lodging changes right up to the event, and
+    // the proposal is the only place rooms are recorded now. Locked is still locked.
+    if (LOCKED_STATES.has(event.status)) {
+      throw conflict('This event is locked — its rooms can no longer be changed.')
+    }
+    if (event.status === 'cancelled') {
+      throw badRequest('This event is cancelled.')
+    }
+
+    if (requirements.length) {
+      // Rooms are bounded by the event's own dates (client, 21 Jul 2026): the from/to
+      // captured at the top of the wizard. Read from sub_events rather than the
+      // events.first_date/last_date cache, which is only written at confirm and is NULL
+      // for a proposal still being built.
+      const [span] = (await tx.execute(sql`
+        SELECT min(event_date)::text AS "firstDate", max(event_date)::text AS "lastDate"
+        FROM sub_events WHERE event_id = ${eventId}
+      `)) as unknown as { firstDate: string | null; lastDate: string | null }[]
+
+      if (span?.firstDate && span.lastDate) {
+        // Departure is the morning after the last function, so check-out may reach one
+        // day past the event's last date.
+        const latestCheckOut = new Date(`${span.lastDate}T00:00:00Z`)
+        latestCheckOut.setUTCDate(latestCheckOut.getUTCDate() + 1)
+        const maxOut = latestCheckOut.toISOString().slice(0, 10)
+
+        for (const r of requirements) {
+          if (r.checkIn < span.firstDate) {
+            throw badRequest(
+              `Check-in ${r.checkIn} is before the event starts on ${span.firstDate}.`,
+            )
+          }
+          if (r.checkOut > maxOut) {
+            throw badRequest(
+              `Check-out ${r.checkOut} is after the event ends on ${span.lastDate} — the latest is ${maxOut}.`,
+            )
+          }
+        }
+      }
+
+      // The hard inventory cap. Runs inside this transaction so the count it reads is the
+      // one the insert lands against.
+      const availability = await getRoomAvailability(requirements, eventId, tx)
+      const over = requirements
+        .map((r, i) => ({ r, a: availability[i]! }))
+        .filter(({ r, a }) => r.count > a.available)
+      if (over.length) {
+        const detail = over
+          .map(
+            ({ r, a }) =>
+              `${r.count} × ${r.roomType} (only ${a.available} of ${a.total} free ${r.checkIn}–${r.checkOut})`,
+          )
+          .join('; ')
+        throw conflict(`More rooms than the lodge has free — ${detail}.`)
+      }
     }
 
     await tx.delete(schema.roomRequirements).where(eq(schema.roomRequirements.eventId, eventId))
@@ -375,6 +619,19 @@ export async function saveRoomRequirements(
 
     return { lines: requirements.length, totalRooms, deferred }
   })
+}
+
+/** An event's booked rooms, in the shape the proposal and the event panel both edit. */
+export async function listRoomRequirements(eventId: string): Promise<
+  { unit_id: string; room_type: string; count: number; check_in: string; check_out: string }[]
+> {
+  return (await db.execute(sql`
+    SELECT rr.unit_id AS unit_id, rr.room_type AS room_type, rr.count::int AS count,
+           rr.check_in::text AS check_in, rr.check_out::text AS check_out
+    FROM room_requirements rr
+    WHERE rr.event_id = ${eventId}
+    ORDER BY rr.check_in, rr.room_type
+  `)) as unknown as { unit_id: string; room_type: string; count: number; check_in: string; check_out: string }[]
 }
 
 // ── Allocation ───────────────────────────────────────────────────────────────
@@ -568,64 +825,100 @@ export async function deallocateRoom(actor: Actor, allocationId: string): Promis
 
 // ── Reconciliation (FR-4.5) ──────────────────────────────────────────────────
 
-export type Reconciliation = {
-  byType: { roomType: string; promised: number; allocated: number; occupied: number; variance: number }[]
-  totals: { promised: number; allocated: number; occupied: number; variance: number }
-  allocations: {
-    id: string; roomNo: string; unitName: string; roomType: string
-    checkIn: string; checkOut: string; ratePaise: number; discountPaise: number; overrideNote: string | null
-  }[]
+export type ReconciliationLine = {
+  unitId: string
+  unitName: string
+  roomType: string
+  checkIn: string
+  checkOut: string
+  /** What the proposal sold. */
+  promised: number
+  /** Active rooms of this category in this lodge. */
+  capacity: number
+  /** Peak held by OTHER committed events over these nights. */
+  takenByOthers: number
+  /** capacity - takenByOthers: what is actually left for this event. */
+  available: number
+  /** How many of `promised` cannot be honoured. Zero is the goal. */
+  shortfall: number
 }
+export type Reconciliation = {
+  lines: ReconciliationLine[]
+  totals: { promised: number; shortfall: number }
+  /** Every line can be honoured — what the Lodge Manager's sign-off attests to. */
+  deliverable: boolean
+}
+
 
 /**
  * Promised (room requirements) vs allocated (assigned rooms) vs occupied (allocations whose
  * stay covers today), per room type, with the variance the Lodge Manager must resolve
  * before their lock sign-off (FR-4.5).
  */
+/**
+ * Can the lodge actually deliver what the proposal sold? (FR-4.5, rewritten 21 Jul 2026.)
+ *
+ * It used to compare `room_requirements` against `room_allocations` — promised vs assigned.
+ * Rooms stopped being assigned room-by-room when booking moved onto the proposal (migration
+ * 0009), so nothing has written an allocation since: every event reported `allocated = 0`
+ * and a variance of `-promised`, which is the one answer that is never informative. The
+ * Lodge Manager's sign-off blocks the lock, and it was being asked to confirm a number that
+ * was wrong by construction.
+ *
+ * The useful question under bulk booking is deliverability. The hard cap already stops an
+ * overbooking at save time; this re-asks at lock, when the answer can have changed — another
+ * event confirmed over the same nights, or rooms were deactivated. Measured against the
+ * tightest night of each stay, and excluding this event so it never competes with itself.
+ */
 export async function getReconciliation(eventId: string): Promise<Reconciliation> {
   const [ev] = await db.select({ id: schema.events.id }).from(schema.events).where(eq(schema.events.id, eventId)).limit(1)
   if (!ev) throw notFound('Event not found')
 
-  const promised = (await db.execute(sql`
-    SELECT room_type AS "roomType", COALESCE(sum(count), 0)::int AS n
-    FROM room_requirements WHERE event_id = ${eventId} GROUP BY room_type
-  `)) as unknown as { roomType: string; n: number }[]
+  const reqs = (await db.execute(sql`
+    SELECT rr.unit_id AS "unitId", COALESCE(u.name, 'Unassigned lodge') AS "unitName",
+           rr.room_type AS "roomType", rr.count::int AS promised,
+           rr.check_in::text AS "checkIn", rr.check_out::text AS "checkOut"
+    FROM room_requirements rr
+    LEFT JOIN lodging_units u ON u.id = rr.unit_id
+    WHERE rr.event_id = ${eventId}
+    ORDER BY u.name, rr.room_type, rr.check_in
+  `)) as unknown as {
+    unitId: string | null; unitName: string; roomType: string
+    promised: number; checkIn: string; checkOut: string
+  }[]
 
-  const allocated = (await db.execute(sql`
-    SELECT r.room_type AS "roomType",
-           count(*)::int AS n,
-           count(*) FILTER (WHERE a.stay @> CURRENT_DATE)::int AS occupied
-    FROM room_allocations a JOIN rooms r ON r.id = a.room_id
-    WHERE a.event_id = ${eventId} GROUP BY r.room_type
-  `)) as unknown as { roomType: string; n: number; occupied: number }[]
-
-  const list = (await db.execute(sql`
-    SELECT a.id, r.room_no AS "roomNo", u.name AS "unitName", r.room_type AS "roomType",
-           lower(a.stay)::text AS "checkIn", upper(a.stay)::text AS "checkOut",
-           a.rate_paise AS "ratePaise", a.discount_paise AS "discountPaise", a.override_note AS "overrideNote"
-    FROM room_allocations a JOIN rooms r ON r.id = a.room_id JOIN lodging_units u ON u.id = r.unit_id
-    WHERE a.event_id = ${eventId}
-    ORDER BY u.name, r.room_no
-  `)) as unknown as Reconciliation['allocations']
-
-  const types = new Set<string>([...promised.map((p) => p.roomType), ...allocated.map((a) => a.roomType)])
-  const pMap = new Map(promised.map((p) => [p.roomType, p.n]))
-  const aMap = new Map(allocated.map((a) => [a.roomType, a]))
-  const byType = [...types].sort().map((t) => {
-    const p = pMap.get(t) ?? 0
-    const a = aMap.get(t)
-    const alloc = a?.n ?? 0
-    const occ = a?.occupied ?? 0
-    return { roomType: t, promised: p, allocated: alloc, occupied: occ, variance: alloc - p }
-  })
-  const totals = byType.reduce(
-    (acc, r) => ({
-      promised: acc.promised + r.promised,
-      allocated: acc.allocated + r.allocated,
-      occupied: acc.occupied + r.occupied,
-      variance: acc.variance + r.variance,
-    }),
-    { promised: 0, allocated: 0, occupied: 0, variance: 0 },
+  // Rows captured before migration 0009 carry no lodge and cannot be measured against one.
+  // They are reported with a zero capacity rather than silently attributed somewhere.
+  const measurable = reqs.filter((r) => r.unitId != null)
+  const availability = await getRoomAvailability(
+    measurable.map((r) => ({ unitId: r.unitId!, roomType: r.roomType, checkIn: r.checkIn, checkOut: r.checkOut })),
+    eventId,
   )
-  return { byType, totals, allocations: list }
+  const availByIdx = new Map(measurable.map((r, i) => [r, availability[i]!]))
+
+  const lines: ReconciliationLine[] = reqs.map((r) => {
+    const a = availByIdx.get(r)
+    const capacity = a?.total ?? 0
+    const takenByOthers = a?.peakBooked ?? 0
+    const available = a?.available ?? 0
+    return {
+      unitId: r.unitId ?? '',
+      unitName: r.unitName,
+      roomType: r.roomType,
+      checkIn: r.checkIn,
+      checkOut: r.checkOut,
+      promised: r.promised,
+      capacity,
+      takenByOthers,
+      available,
+      shortfall: Math.max(0, r.promised - available),
+    }
+  })
+
+  const totals = lines.reduce(
+    (acc, l) => ({ promised: acc.promised + l.promised, shortfall: acc.shortfall + l.shortfall }),
+    { promised: 0, shortfall: 0 },
+  )
+  return { lines, totals, deliverable: totals.shortfall === 0 }
 }
+

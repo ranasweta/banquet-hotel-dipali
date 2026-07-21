@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { z } from 'zod'
-import { requirePermission } from '@/lib/auth'
+import { lodgeScopeFor, requirePermission } from '@/lib/auth'
 import { badRequest, ok, route } from '@/lib/api'
 import { getLodgingCalendar } from '@/lib/rooms'
 import { nextDay } from '@/lib/occupancy'
@@ -32,7 +32,8 @@ const querySchema = z.object({
  * Both ends inclusive. Defaults to the next 30 days from today.
  */
 export const GET = route(async (req: NextRequest) => {
-  await requirePermission('lodging_calendar', 'view')
+  const user = await requirePermission('lodging_calendar', 'view')
+  const scope = lodgeScopeFor(user)
   const parsed = querySchema.safeParse(Object.fromEntries(new URL(req.url).searchParams))
   if (!parsed.success) throw badRequest('from/to must be YYYY-MM-DD')
 
@@ -44,5 +45,5 @@ export const GET = route(async (req: NextRequest) => {
   const maxTo = addDays(from, MAX_SPAN_DAYS - 1)
   if (to > maxTo) to = maxTo
 
-  return ok({ ...(await getLodgingCalendar(from, to)), windowDays: WINDOW_DAYS })
+  return ok({ ...(await getLodgingCalendar(from, to, scope)), windowDays: WINDOW_DAYS })
 })

@@ -26,6 +26,7 @@ type Invoice = {
   id: string; invoiceNo: string | null; finalised: boolean
   grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number; advancesPaise: number; balancePaise: number
   lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number }[]
+  payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string }[]
 }
 
 const SIGNOFF_LABEL: Record<string, string> = { banquet_manager: 'Banquet Manager', lodge_manager: 'Lodge Manager' }
@@ -132,6 +133,22 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
             <Row label="Tax — 5% on rooms only" value={`+ ${formatPaise(invoice.taxPaise)}`} />
             <Row label="Amount payable" value={formatPaise(invoice.netPaise)} bold />
             <Row label="Received so far" value={`− ${formatPaise(invoice.advancesPaise)}`} />
+            {/* The instalments behind that figure. A wedding is often settled in pieces over
+                months, and one total hides who paid what and when (client, 21 Jul 2026). */}
+            {invoice.payments?.length > 0 && (
+              <ul className="ml-2 space-y-0.5 border-l pl-3 text-xs text-muted-foreground">
+                {invoice.payments.map((p) => (
+                  <li key={p.id} className="flex justify-between gap-3">
+                    <span className="tabular-nums">
+                      {p.receivedOn} · <span className="capitalize">{p.kind.replace(/_/g, ' ')}</span> · {p.mode} · {p.receiptNo}
+                    </span>
+                    <span className="tabular-nums">
+                      {p.kind === 'refund' ? '+' : '−'} {formatPaise(Math.abs(p.amountPaise))}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
             <Row label="Balance due" value={formatPaise(invoice.balancePaise)} bold accent={invoice.balancePaise > 0 ? 'text-amber-600' : 'text-emerald-600'} />
           </dl>
 

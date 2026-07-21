@@ -1,9 +1,9 @@
 # Hotel Dipali Banquet Management System
 
-Multi-property banquet/event management web app. Six roles, clash-proof venue
-calendar, menu snapshots, GM approvals, consolidated GST billing, append-only
-audit trail. This file is the source of truth for conventions; read the docs
-below before implementing any feature.
+Multi-property banquet/event management web app. Seven roles (the Chef was added
+19 Jul 2026), clash-proof venue calendar, menu snapshots, GM approvals,
+consolidated GST billing, append-only audit trail. This file is the source of
+truth for conventions; read the docs below before implementing any feature.
 
 ## Authoritative documents (read in this order)
 1. `docs/PRD.md` — every functional requirement (FR-x.y) and business rule (BR-*).
@@ -73,8 +73,10 @@ clarifying questions arriving before implementation rather than after mistakes.
      allowed. A window with end_time ≤ start_time runs past midnight into the next day.
      Rely on the `venue_bookings` GiST exclusion to win races; no fixed slots, no 11 AM
      rule. Booking a bundle inserts one `venue_bookings` row per member venue.
-   - Confirm requires recorded advance ≥ 25% of `proposal_total_paise`
-     BEFORE inserting `venue_bookings` rows (BR-P1).
+   - Confirm requires recorded advance ≥ 25% BEFORE inserting `venue_bookings`
+     rows (BR-P1). The base is `proposal_total_paise` **plus the room estimate and
+     its tax** (client, 20 Jul 2026) — rooms are deliberately outside
+     `proposal_total_paise` because that column is BR-D2's denominator.
    - Combined discounts ≤ 10% of proposal total unless an approved exception
      exists (BR-D2); per-room caps Rs. 500 / Rs. 1,000 for suites (BR-D1).
    Each runs in ONE db transaction; rely on the PK/exclusion constraints to
@@ -89,7 +91,26 @@ clarifying questions arriving before implementation rather than after mistakes.
    encrypted at rest, referenced by `guest_documents.file_key`. Never log
    Aadhaar data; never return file bytes without a permission check.
 8. Event status transitions only via the state machine in PRD §4.1 — one
-   `transitionEvent(eventId, to)` service, never ad-hoc status updates.
+   `transitionEvent(eventId, to)` service, never ad-hoc status updates. Two of
+   the moves belong to the calendar, not a person: `advanceEventStatuses` (run by
+   the daily cron) starts an event when its first function's date arrives and
+   completes it once the last has passed. Without it nothing reaches `completed`,
+   and nothing can be locked, invoiced or billed.
+9. **Rooms are booked in bulk, and bounded twice** (client, 21 Jul 2026). The
+   proposal states lodge + category + count + dates, and that IS the booking —
+   `room_requirements`, not `room_allocations`, which nothing writes any more.
+   Two independent limits apply: a **hard inventory cap** (never more of a
+   category than the lodge physically has free on the tightest night of the stay)
+   and the **35+ rule** (BR-L2), which is an Authority approval, not a limit.
+   Enquiries hold nothing — whoever commits first takes the rooms. Room dates must
+   fall inside the event's own span, check-out reaching at most the morning after
+   the last function.
+10. **Menu increases unlock, they do not increment** (client, 21 Jul 2026).
+   Pressing Increase on a segment lifts its ceiling; every pick beyond
+   `base_pick` is an extra, flagged on the selection so the picker can colour it
+   and the Authority can be told which *dish* is in question. Two extras per
+   FUNCTION are free (not per segment); the rest go to the GM when that
+   function's submit button is pressed — not batched at the lock.
 
 ## UI conventions
 - Use the ui-ux-pro-max skill for design decisions and the Magic MCP (`/ui`)

@@ -36,7 +36,12 @@ const LOCKED_PLUS = new Set(['locked', 'billed', 'closed'])
 
 const taxOf = (amountPaise: number, bp: number) => Math.round((amountPaise * bp) / 10000)
 
-export type LineSpec = { section: string; description: string; sacHsn?: string | null; qty: number; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number }
+export type LineSpec = {
+  section: string; description: string; sacHsn?: string | null; qty: number
+  ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number
+  /** The function this line belongs to; NULL for event-level lines (see migration 0015). */
+  functionLabel?: string | null
+}
 
 /**
  * Computes the venue / food / rooms / maintenance bill lines from an event's snapshots.
@@ -44,9 +49,19 @@ export type LineSpec = { section: string; description: string; sacHsn?: string |
  */
 export async function computeBillLines(exec: Exec, eventId: string): Promise<LineSpec[]> {
   const lines: LineSpec[] = []
-  const push = (section: string, description: string, qty: number, ratePaise: number, amountPaise: number) => {
+  // `functionLabel` groups the printed bill the way the hotel counts — venue, menu and any
+  // extras under each function in turn. `section` still decides the tax rate, so the
+  // arithmetic is untouched by the grouping.
+  const push = (
+    section: string,
+    description: string,
+    qty: number,
+    ratePaise: number,
+    amountPaise: number,
+    functionLabel: string | null = null,
+  ) => {
     const bp = GST_BP[section] ?? 0
-    lines.push({ section, description, qty, ratePaise, gstRateBp: bp, amountPaise, taxPaise: taxOf(amountPaise, bp) })
+    lines.push({ section, description, qty, ratePaise, gstRateBp: bp, amountPaise, taxPaise: taxOf(amountPaise, bp), functionLabel })
   }
 
   // Venue — the rate-card snapshot on each sub-event (set at confirm).
@@ -56,7 +71,7 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     WHERE se.event_id = ${eventId} AND se.venue_rate_paise > 0
     ORDER BY se.event_date, se.start_time
   `)) as unknown as { name: string; ratePaise: number; venueName: string }[]
-  for (const v of venues) push('venue', `${v.venueName} — ${v.name}`, 1, Number(v.ratePaise), Number(v.ratePaise))
+  for (const v of venues) push('venue', v.venueName, 1, Number(v.ratePaise), Number(v.ratePaise), v.name)
 
   // Food — pax × snapshotted per-plate, per sub-event with a saved menu.
   const food = (await exec.execute(sql`
@@ -65,7 +80,7 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     WHERE se.event_id = ${eventId}
     ORDER BY se.event_date, se.start_time
   `)) as unknown as { name: string; pax: number; tierName: string; perPlate: number }[]
-  for (const f of food) push('food', `${f.tierName} × ${f.pax} pax — ${f.name}`, f.pax, Number(f.perPlate), f.pax * Number(f.perPlate))
+  for (const f of food) push('food', `${f.tierName} × ${f.pax} pax`, f.pax, Number(f.perPlate), f.pax * Number(f.perPlate), f.name)
 
   // Add-ons — separate food lines (FR-3.6).
   const addons = (await exec.execute(sql`
@@ -75,15 +90,27 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   `)) as unknown as { description: string; qty: number; ratePaise: number }[]
   for (const a of addons) push('food', `Add-on: ${a.description}`, a.qty, Number(a.ratePaise), a.qty * Number(a.ratePaise))
 
-  // Rooms — nights × snapshotted rate (per-room discounts appear in the invoice discount total).
+  // Rooms — count × nights × the lodge's rate for that category. Read from the bulk booking
+  // on the proposal, NOT from room_allocations: rooms stopped being assigned room-by-room on
+  // 21 Jul 2026 and nothing writes that table any more, so billing off it would have put
+  // ZERO room charges on every bill. Room numbers are the reception desk's business and
+  // never appear here.
   const rooms = (await exec.execute(sql`
-    SELECT u.name AS "unitName", r.room_no AS "roomNo",
-           (upper(a.stay) - lower(a.stay)) AS nights, a.rate_paise AS "ratePaise"
-    FROM room_allocations a JOIN rooms r ON r.id = a.room_id JOIN lodging_units u ON u.id = r.unit_id
-    WHERE a.event_id = ${eventId}
-    ORDER BY u.name, r.room_no
-  `)) as unknown as { unitName: string; roomNo: string; nights: number; ratePaise: number }[]
-  for (const rm of rooms) push('rooms', `${rm.unitName} ${rm.roomNo} × ${rm.nights} night(s)`, rm.nights, Number(rm.ratePaise), rm.nights * Number(rm.ratePaise))
+    SELECT u.name AS "unitName", rr.room_type AS "roomType", rr.count::int AS count,
+           (rr.check_out - rr.check_in)::int AS nights,
+           COALESCE((SELECT min(r.rack_rate_paise) FROM rooms r
+                      WHERE r.room_type = rr.room_type AND r.is_active
+                        AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)::bigint AS "ratePaise"
+    FROM room_requirements rr
+    LEFT JOIN lodging_units u ON u.id = rr.unit_id
+    WHERE rr.event_id = ${eventId}
+    ORDER BY u.name, rr.room_type
+  `)) as unknown as { unitName: string | null; roomType: string; count: number; nights: number; ratePaise: number }[]
+  for (const rm of rooms) {
+    const qty = rm.count * rm.nights
+    const label = `${rm.unitName ?? 'Lodging'} — ${rm.roomType.replace(/_/g, ' ')} × ${rm.count} room(s) × ${rm.nights} night(s)`
+    push('rooms', label, qty, Number(rm.ratePaise), qty * Number(rm.ratePaise))
+  }
 
   // Maintenance — closed entries only (FR-5.3).
   const maint = (await exec.execute(sql`
@@ -94,6 +121,25 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   for (const m of maint) push('maintenance', m.item, Number(m.qty), Number(m.ratePaise), Number(m.amountPaise))
 
   return lines
+}
+
+/**
+ * Every payment against the event, oldest first — the instalment trail. A wedding is
+ * frequently settled in pieces over months, and "Received so far: one number" hides who
+ * paid what and when. Refunds are included (negative), so the trail always reconciles to
+ * the advances figure beside it.
+ */
+export type PaymentTrailRow = {
+  id: string; kind: string; amountPaise: number; mode: string
+  receiptNo: string; receivedOn: string
+}
+async function paymentTrail(exec: Exec, eventId: string): Promise<PaymentTrailRow[]> {
+  return (await exec.execute(sql`
+    SELECT id, kind::text AS kind, amount_paise AS "amountPaise", mode,
+           receipt_no AS "receiptNo", received_on::text AS "receivedOn"
+    FROM payments WHERE event_id = ${eventId}
+    ORDER BY received_on, receipt_no
+  `)) as unknown as PaymentTrailRow[]
 }
 
 /** Net advances = payments received less refunds. */
@@ -134,7 +180,7 @@ export async function draftInvoice(tx: Tx, actor: Actor, eventId: string): Promi
     .values({ eventId, grossPaise: gross, discountPaise: discount, taxPaise: tax, netPaise: net, advancesPaise: advances, balancePaise: net - advances, tncSnapshot: tnc?.value ?? '' })
     .returning({ id: schema.invoices.id })
   if (specs.length > 0) {
-    await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })))
+    await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null })))
   }
   await audit(tx, actor, { entity: 'invoices', entityId: inv!.id, eventId, action: 'insert', field: 'draft', newValue: `net ${net}` })
 }
@@ -142,8 +188,9 @@ export async function draftInvoice(tx: Tx, actor: Actor, eventId: string): Promi
 export type InvoiceView = {
   id: string; invoiceNo: string | null; finalised: boolean
   grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number; advancesPaise: number; balancePaise: number
+  payments: PaymentTrailRow[]
   tncSnapshot: string
-  lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number }[]
+  lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number; functionLabel: string | null }[]
 }
 
 export async function getInvoice(eventId: string): Promise<InvoiceView | null> {
@@ -153,8 +200,9 @@ export async function getInvoice(eventId: string): Promise<InvoiceView | null> {
   return {
     id: inv.id, invoiceNo: inv.invoiceNo, finalised: Boolean(inv.finalisedAt),
     grossPaise: inv.grossPaise, discountPaise: inv.discountPaise, taxPaise: inv.taxPaise, netPaise: inv.netPaise, advancesPaise: inv.advancesPaise, balancePaise: inv.balancePaise,
+    payments: await paymentTrail(db, eventId),
     tncSnapshot: inv.tncSnapshot,
-    lines: lines.map((l) => ({ id: l.id, section: l.section, description: l.description, qty: l.qty, ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
+    lines: lines.map((l) => ({ id: l.id, section: l.section, description: l.description, functionLabel: l.functionLabel, qty: l.qty, ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
   }
 }
 
@@ -256,9 +304,10 @@ export async function proformaData(eventId: string) {
     taxPaise: tax,
     netPaise: net,
     advancesPaise: advances,
+    payments: await paymentTrail(db, eventId),
     balancePaise: net - advances,
     tncSnapshot: tnc?.value ?? '',
-    lines: specs.map((l, i) => ({ id: `p${i}`, section: l.section, description: l.description, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
+    lines: specs.map((l, i) => ({ id: `p${i}`, section: l.section, description: l.description, functionLabel: l.functionLabel ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
   }
   return { event, contacts, invoice, signoffs: [] as { designation: string; signedBy: string; signedAt: string }[], lockedPlus: false, proforma: true }
 }

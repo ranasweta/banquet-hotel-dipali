@@ -157,4 +157,16 @@
   .tabular-nums, table {
     font-variant-numeric: tabular-nums;
   }
+
+  /* Chrome paints autofilled inputs its own pale blue, which overrides the theme on the
+     one screen every user meets. The inset shadow trick is the only way to repaint the
+     background; -webkit-text-fill-color is needed because `color` alone is ignored. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--foreground);
+    -webkit-box-shadow: 0 0 0 1000px var(--card) inset;
+    caret-color: var(--foreground);
+    transition: background-color 9999s ease-in-out 0s;
+  }
 }

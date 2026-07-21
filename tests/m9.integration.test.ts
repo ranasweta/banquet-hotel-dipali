@@ -55,9 +55,12 @@ async function buildLockable(): Promise<{ eventId: string; subId: string }> {
   const [sub] = await db.insert(schema.subEvents).values({ eventId, name: 'Reception', eventDate: '2026-09-01', startTime: '19:00', endTime: '23:00', venueId: await idOf('venues', 'Crystal'), pax: 100, venueRatePaise: 1_500_000 }).returning({ id: schema.subEvents.id })
   const subId = sub!.id
   await db.insert(schema.subEventMenus).values({ subEventId: subId, tierId: await idOf('menuTiers', 'Silver'), tierName: 'Silver', baseRatePaise: 65_000, surchargePaise: 0, isComplete: true })
+  // Rooms are booked in bulk on the proposal (21 Jul 2026): one Palace deluxe for two
+  // nights at Rs. 5,000, which is what the bill reads. room_allocations is not used.
   await db.execute(sql`
-    INSERT INTO room_allocations (event_id, room_id, stay, rate_paise, discount_paise, allocated_by)
-    VALUES (${eventId}, ${await deluxeRoom()}, daterange('2026-09-01','2026-09-03','[)'), 500000, 0, ${bm.id})
+    INSERT INTO room_requirements (event_id, unit_id, room_type, count, check_in, check_out)
+    VALUES (${eventId}, (SELECT id FROM lodging_units WHERE name = 'Palace'),
+            'deluxe', 1, '2026-09-01', '2026-09-03')
   `)
   await db.insert(schema.maintenanceEntries).values({ eventId, item: 'Generator', qty: '3', unit: 'hrs', ratePaise: 100_000, amountPaise: 300_000, createdBy: auditor.id, isClosed: true })
   await db.insert(schema.payments).values({ eventId, kind: 'advance_block', amountPaise: 2_500_000, mode: 'upi', receiptNo: receipt(), receivedOn: '2026-08-01', recordedBy: bm.id })

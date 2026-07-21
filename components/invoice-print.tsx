@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
  * what a human reads changes.
  */
 
-type Line = { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number }
+type Line = { id: string; section: string; description: string; functionLabel: string | null; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number }
 type PrintData = {
   event: { code: string; guestName: string; eventType: string; firstDate: string | null; lastDate: string | null } | null
   contacts: { phone: string; label: string | null }[]
@@ -25,6 +25,7 @@ type PrintData = {
     invoiceNo: string | null; finalised: boolean
     grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number; advancesPaise: number; balancePaise: number
     tncSnapshot: string; lines: Line[]
+    payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string }[]
   }
   signoffs: { designation: string; signedBy: string; signedAt: string }[]
 }
@@ -54,15 +55,40 @@ export function InvoicePrint({ eventId, proforma = false }: { eventId: string; p
   const isDraft2 = !proforma && inv.finalised
   const docName = isDraft2 ? 'DRAFT 2' : 'DRAFT'
 
-  const groups = SECTIONS.map((s) => {
-    const lines = inv.lines.filter((l) => l.section === s.key)
+  // Grouped the way the hotel counts a proposal: each function with its own venue and food
+  // beneath it, then the event-level heads. Lines that belong to no single function —
+  // rooms are booked across dates that span several, and maintenance and adjustments are
+  // event-wide — keep their section heading and follow the functions.
+  const total = (ls: Line[], f: (l: Line) => number) => ls.reduce((n, l) => n + f(l), 0)
+
+  const functionNames: string[] = []
+  for (const l of inv.lines) {
+    if (l.functionLabel && !functionNames.includes(l.functionLabel)) functionNames.push(l.functionLabel)
+  }
+
+  const functionGroups = functionNames.map((name) => {
+    const lines = inv.lines.filter((l) => l.functionLabel === name)
     return {
-      ...s,
+      key: `fn:${name}`,
+      label: name,
       lines,
-      subtotalPaise: lines.reduce((n, l) => n + l.amountPaise, 0),
-      taxPaise: lines.reduce((n, l) => n + l.taxPaise, 0),
+      subtotalPaise: total(lines, (l) => l.amountPaise),
+      taxPaise: total(lines, (l) => l.taxPaise),
+    }
+  })
+
+  const eventLevel = SECTIONS.map((sec) => {
+    const lines = inv.lines.filter((l) => !l.functionLabel && l.section === sec.key)
+    return {
+      key: sec.key,
+      label: sec.label,
+      lines,
+      subtotalPaise: total(lines, (l) => l.amountPaise),
+      taxPaise: total(lines, (l) => l.taxPaise),
     }
   }).filter((g) => g.lines.length > 0)
+
+  const groups = [...functionGroups, ...eventLevel]
 
   return (
     <div className="relative mx-auto max-w-3xl space-y-6 p-2">
@@ -145,6 +171,17 @@ export function InvoicePrint({ eventId, proforma = false }: { eventId: string; p
           <Line2 label="Amount payable" value={formatPaise(inv.netPaise)} bold />
         </div>
         <Line2 label="Received so far" value={`− ${formatPaise(inv.advancesPaise)}`} />
+        {/* Instalments, so the guest can see the payments this figure is made of. */}
+        {inv.payments?.map((p) => (
+          <div key={p.id} className="flex justify-between gap-6 pl-3 text-xs text-muted-foreground">
+            <span className="tabular-nums">
+              {p.receivedOn} · {p.mode} · {p.receiptNo}
+            </span>
+            <span className="tabular-nums">
+              {p.kind === 'refund' ? '+' : '−'} {formatPaise(Math.abs(p.amountPaise))}
+            </span>
+          </div>
+        ))}
         <div className="border-t pt-1">
           <Line2 label="Balance due" value={formatPaise(inv.balancePaise)} bold />
         </div>

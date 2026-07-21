@@ -40,13 +40,6 @@ async function userId(role: string): Promise<string> {
   const [u] = await db.select({ id: schema.users.id }).from(schema.users).innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId)).where(eq(schema.roles.name, role)).limit(1)
   return u!.id
 }
-async function regencyRooms(n: number): Promise<string[]> {
-  const rows = (await db.execute(sql`
-    SELECT r.id FROM rooms r JOIN lodging_units u ON u.id = r.unit_id
-    WHERE u.name = 'Regency' AND r.is_active ORDER BY r.room_no LIMIT ${n}
-  `)) as unknown as { id: string }[]
-  return rows.map((r) => r.id)
-}
 
 async function makeSubEvent(): Promise<{ eventId: string; subId: string }> {
   const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
@@ -54,13 +47,27 @@ async function makeSubEvent(): Promise<{ eventId: string; subId: string }> {
   const [sub] = await db.insert(schema.subEvents).values({ eventId: event!.id, name: 'Function', eventDate: '2026-09-01', startTime: '19:00', endTime: '23:00', venueId: await venueId('Crystal'), pax: 200 }).returning({ id: schema.subEvents.id })
   return { eventId: event!.id, subId: sub!.id }
 }
-/** A saved menu with a pending increase exception on an ineligible category (paneer). */
+/**
+ * A proposal whose menu increases have been submitted for approval. Increases unlock a
+ * segment for unlimited picking (21 Jul 2026) and reach the Authority when the function's
+ * submit button is pressed, so the fixture drives the real path: unlock, over-pick past
+ * the free two, submit.
+ */
 async function menuIncreaseException(): Promise<{ subId: string; excId: string }> {
   const { subId } = await makeSubEvent()
-  await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: { 'Paneer Main Course': ['Kadai Paneer'] } })
-  const res = await menus.increaseCategory(bm, subId, 'Paneer Main Course')
-  if (res.applied !== 'exception') throw new Error('expected an exception')
-  return { subId, excId: res.exceptionId }
+  const silver = await tierId('Silver')
+  await menus.saveSubEventMenu(bm, subId, { tierId: silver, selections: { 'Paneer Main Course': ['Kadai Paneer'] } })
+  await menus.increaseCategory(bm, subId, 'Paneer Main Course')
+  // Five on a base of one: four extras, two of them free, so TWO reach the Authority and a
+  // partial approval has something to roll out.
+  await menus.saveSubEventMenu(bm, subId, {
+    tierId: silver,
+    selections: { 'Paneer Main Course': ['Kadai Paneer', 'Handi Paneer', 'Mutter Paneer', 'Paneer Lababdar', 'Paneer Makhani'] },
+  })
+
+  const { exceptionId } = await menus.submitIncreases(bm, subId)
+  if (!exceptionId) throw new Error('expected an increase awaiting approval')
+  return { subId, excId: exceptionId }
 }
 function paneerPick(subId: string) {
   return menus.getSubEventMenu(subId).then((m) => m.menu!.categories.find((c) => c.categoryName === 'Paneer Main Course')!)
@@ -88,38 +95,51 @@ afterEach(async () => { if (hasDb) await cleanup() })
 afterAll(async () => { if (hasDb) await cleanup() })
 
 d('menu-increase decisions (acceptance)', () => {
-  it('APPROVING applies the extra pick', async () => {
+  it('APPROVING sanctions picks the manager is already using', async () => {
+    // The picks were applied when they were chosen, days earlier. Approval confirms them.
     const { subId, excId } = await menuIncreaseException()
-    expect((await paneerPick(subId)).extraPicks).toBe(0) // deferred, not yet applied
-    expect((await paneerPick(subId)).exceptionPending).toBe(true)
+    const before = await paneerPick(subId)
+    expect(before.extraPicks).toBe(4) // already in use: 2 free + 2 submitted
+    expect(before.exceptionPending).toBe(true)
 
     const res = await approvals.decideException(ha, excId, { action: 'approve' })
     expect(res.status).toBe('approved')
 
     const cat = await paneerPick(subId)
-    expect(cat.extraPicks).toBe(1) // the pick is now applied
-    expect(cat.effectivePick).toBe(2) // base 1 + 1
+    expect(cat.extraPicks).toBe(4) // unchanged — nothing was being withheld
+    expect(cat.effectivePick).toBe(5) // base 1 + 4
     expect(cat.exceptionPending).toBe(false)
   })
 
-  it('REJECTING leaves the pick untouched and surfaces the remark to the booking manager', async () => {
+  it('REJECTING drops the submitted dishes but leaves the free two alone', async () => {
+    // A rejection has something real to undo, because the picks were already applied — but
+    // the free allowance was never the Authority's to refuse.
     const { subId, excId } = await menuIncreaseException()
     const res = await approvals.decideException(ha, excId, { action: 'reject', remark: 'Kitchen cannot support a fifth paneer' })
     expect(res.status).toBe('rejected')
 
     const cat = await paneerPick(subId)
-    expect(cat.extraPicks).toBe(0) // reverted / never applied
-    expect(cat.effectivePick).toBe(1)
+    expect(cat.extraPicks).toBe(2) // the two submitted went; the two free stayed
+    expect(cat.effectivePick).toBe(3)
     expect(cat.exceptionPending).toBe(false)
     expect(cat.exceptionStatus).toBe('rejected')
     expect(cat.exceptionRemark).toBe('Kitchen cannot support a fifth paneer')
   })
 
-  it('APPROVE_MODIFIED applies a modified pick delta', async () => {
+  it('APPROVE_MODIFIED keeps what was granted and rolls the rest out', async () => {
+    // "If he approves partially then that other will roll out" — two were asked for, one
+    // is granted, one goes.
     const { subId, excId } = await menuIncreaseException()
-    const res = await approvals.decideException(ha, excId, { action: 'approve_modified', remark: 'Two extra, not one', modified: { extraPicks: 2 } })
+    const res = await approvals.decideException(ha, excId, {
+      action: 'approve_modified',
+      remark: 'One extra only',
+      modified: { extraPicks: 1 },
+    })
     expect(res.status).toBe('approved_modified')
-    expect((await paneerPick(subId)).extraPicks).toBe(2)
+
+    const cat = await paneerPick(subId)
+    expect(cat.extraPicks).toBe(3) // 2 free + 1 granted; the refused one rolled out
+    expect(cat.effectivePick).toBe(4)
   })
 })
 
@@ -142,22 +162,62 @@ d('decision guards', () => {
 })
 
 d('room-allocation (BR-L2) decisions', () => {
-  it('approving a 35+ exception inserts the held rooms', async () => {
+  /** A confirmed event holding `lines` worth of rooms booked in bulk on the proposal. */
+  async function bigBooking() {
     const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
     const [event] = await db.insert(schema.events).values({ code, guestName: 'Big Wedding', eventType: 'engagement', status: 'confirmed', createdBy: bm.id }).returning({ id: schema.events.id })
-    const ids = await regencyRooms(35)
-    const res = await roomsSvc.allocateRooms(lm, event!.id, ids.map((roomId) => ({ roomId, checkIn: '2026-10-01', checkOut: '2026-10-03' })))
+    const [palace] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = 'Palace'`)) as unknown as { id: string }[]
+    // 33 deluxe + 3 suite = 36, over the threshold and within Palace's real inventory.
+    const res = await roomsSvc.saveRoomRequirements(bm, event!.id, [
+      { unitId: palace!.id, roomType: 'deluxe', count: 33, checkIn: '2026-10-01', checkOut: '2026-10-03' },
+      { unitId: palace!.id, roomType: 'suite', count: 3, checkIn: '2026-10-01', checkOut: '2026-10-03' },
+    ])
+    return { eventId: event!.id, res }
+  }
+
+  it('raises one request for the whole proposal when it crosses 35', async () => {
+    const { eventId, res } = await bigBooking()
     expect(res.deferred).toBe(true)
-    const excId = (res as { exceptionId: string }).exceptionId
+    expect(res.totalRooms).toBe(36)
 
-    // Nothing committed yet.
-    const [{ before }] = (await db.execute(sql`SELECT count(*)::int AS before FROM room_allocations WHERE event_id = ${event!.id}`)) as unknown as { before: number }[]
-    expect(before).toBe(0)
+    // The rooms ARE saved — the request gates confirm and the lock, it does not hold them.
+    const [{ n }] = (await db.execute(sql`SELECT count(*)::int AS n FROM room_requirements WHERE event_id = ${eventId}`)) as unknown as { n: number }[]
+    expect(n).toBe(2)
+  })
 
-    const decision = await approvals.decideException(ha, excId, { action: 'approve' })
-    expect(decision.applied).toMatch(/35 room/)
-    const [{ after }] = (await db.execute(sql`SELECT count(*)::int AS after FROM room_allocations WHERE event_id = ${event!.id}`)) as unknown as { after: number }[]
-    expect(after).toBe(35)
+  it('APPROVES a bulk room request instead of dying on an empty allocation list', async () => {
+    // The raise path writes `payload.lines`; the decide path used to read
+    // `payload.allocations` and throw "No rooms to allocate", so every one of these
+    // failed. Nothing is inserted on approval — the requirement already is the booking.
+    const { eventId } = await bigBooking()
+    const [exc] = await db
+      .select({ id: schema.exceptions.id })
+      .from(schema.exceptions)
+      .where(eq(schema.exceptions.eventId, eventId))
+      .limit(1)
+
+    const decision = await approvals.decideException(ha, exc!.id, { action: 'approve' })
+    expect(decision.status).toBe('approved')
+    expect(decision.applied).toMatch(/36 room/)
+  })
+
+  it('summarises the request without NaN', async () => {
+    const { eventId } = await bigBooking()
+    const rows = await approvals.listExceptions({ status: 'pending' })
+    const row = rows.find((r) => r.eventId === eventId)!
+    expect(row.summary).toContain('36 room(s)')
+    expect(row.summary).not.toContain('NaN')
+  })
+
+  it('clears the request when the booking drops back under the threshold', async () => {
+    const { eventId } = await bigBooking()
+    const [palace] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = 'Palace'`)) as unknown as { id: string }[]
+    const res = await roomsSvc.saveRoomRequirements(bm, eventId, [
+      { unitId: palace!.id, roomType: 'deluxe', count: 4, checkIn: '2026-10-01', checkOut: '2026-10-03' },
+    ])
+    expect(res.deferred).toBe(false)
+    const pending = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))
+    expect(pending.filter((p) => p.status === 'pending')).toHaveLength(0)
   })
 })
 
