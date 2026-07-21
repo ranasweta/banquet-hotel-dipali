@@ -5,7 +5,7 @@ import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
 import { badRequest, notFound, ok, route } from '@/lib/api'
-import { storeEncrypted } from '@/lib/storage'
+import { deleteStored, storeEncrypted } from '@/lib/storage'
 
 const MAX_BYTES = 8 * 1024 * 1024 // 8 MB
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -38,11 +38,14 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   const bytes = Buffer.from(await file.arrayBuffer())
   const { fileKey } = await storeEncrypted(bytes, { contentType: file.type })
 
+  let replaced: string | null = null
   await db.transaction(async (tx) => {
     // Replace any existing document of this kind (one_doc_per_kind for aadhaar).
-    await tx
+    const [old] = await tx
       .delete(schema.guestDocuments)
       .where(and(eq(schema.guestDocuments.eventId, id), eq(schema.guestDocuments.kind, kind)))
+      .returning({ fileKey: schema.guestDocuments.fileKey })
+    replaced = old?.fileKey ?? null
     await tx.insert(schema.guestDocuments).values({
       eventId: id,
       kind,
@@ -59,6 +62,11 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
       newValue: '(uploaded)',
     })
   })
+
+  // The row is gone, so the bytes should be too. After the commit, never inside it: a
+  // storage failure must not roll back an upload that has already succeeded, and an
+  // unreachable Aadhaar image left in a bucket is still an Aadhaar image (rule 7).
+  if (replaced) await deleteStored(replaced)
 
   return ok({ document: { kind } }, 201)
 })

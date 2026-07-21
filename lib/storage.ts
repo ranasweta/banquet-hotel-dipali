@@ -4,17 +4,44 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 /**
- * Encrypted-at-rest local document storage for KYC/Aadhaar (CLAUDE.md rule 7). Files are
- * AES-256-GCM encrypted with STORAGE_KEY before hitting disk; only a `file_key` (an
- * opaque path) is stored in guest_documents. In production this would be object storage;
- * the interface is the same. NEVER log document bytes or Aadhaar data.
+ * Encrypted-at-rest document storage for KYC/Aadhaar (CLAUDE.md rule 7).
  *
- * On-disk layout of each .enc file: [12-byte IV][16-byte auth tag][ciphertext].
+ * Bytes are AES-256-GCM encrypted with STORAGE_KEY *before* they leave this process, and
+ * only an opaque `file_key` is kept in `guest_documents`. NEVER log document bytes or
+ * Aadhaar data.
+ *
+ * Two drivers behind one interface, chosen by whether a blob store is configured:
+ *
+ *   BLOB_READ_WRITE_TOKEN set  ->  Vercel Blob, `access: 'private'`
+ *   otherwise                  ->  the local `storage/` directory
+ *
+ * The local driver is not a deployment option, it is the dev convenience. A serverless
+ * filesystem is read-only apart from /tmp, and /tmp does not survive between invocations —
+ * so on Vercel the local driver would accept an Aadhaar upload, report success, and lose
+ * the file. Since confirming an event requires both Aadhaar sides on record, that failure
+ * would surface as "no booking can ever be confirmed", a long way from its cause.
+ *
+ * Encryption is kept even though the blob is private. The key never leaves the server, so a
+ * leaked URL, a misconfigured store or a snapshot of the bucket yields ciphertext and
+ * nothing else.
+ *
+ * Two envelope formats, told apart by the shape of the file_key — a blob key has a slash:
+ *
+ *   local  `<uuid>.enc`             [12 IV][16 tag][ciphertext], content type in a sidecar
+ *   blob   `documents/<uuid>.enc`   [12 IV][16 tag][ciphertext of [2-byte len][type][bytes]]
+ *
+ * The blob envelope carries its own content type — a second round trip for a sidecar would
+ * be wasteful, and encrypting the type leaks marginally less. The local format is untouched
+ * so files written before this change still read back.
  */
 
 const STORAGE_DIR = resolve(process.cwd(), 'storage')
+const BLOB_PREFIX = 'documents/'
 const IV_LEN = 12
 const TAG_LEN = 16
+
+/** Vercel Blob is used when its token is present — Vercel injects it once a store exists. */
+const usingBlob = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN)
 
 function key(): Buffer {
   const b64 = process.env.STORAGE_KEY
@@ -26,20 +53,61 @@ function key(): Buffer {
   return buf
 }
 
-/** Encrypts and writes bytes; returns the file_key to persist. `contentType` is recorded. */
+function encrypt(plaintext: Buffer): Buffer {
+  const iv = randomBytes(IV_LEN)
+  const cipher = createCipheriv('aes-256-gcm', key(), iv)
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()])
+  return Buffer.concat([iv, cipher.getAuthTag(), ciphertext])
+}
+
+function decrypt(envelope: Buffer): Buffer {
+  const iv = envelope.subarray(0, IV_LEN)
+  const tag = envelope.subarray(IV_LEN, IV_LEN + TAG_LEN)
+  const ciphertext = envelope.subarray(IV_LEN + TAG_LEN)
+  const decipher = createDecipheriv('aes-256-gcm', key(), iv)
+  decipher.setAuthTag(tag)
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()])
+}
+
+/** [2-byte big-endian length][contentType utf8][bytes] — encrypted as one plaintext. */
+function pack(bytes: Buffer, contentType: string): Buffer {
+  const type = Buffer.from(contentType || 'application/octet-stream', 'utf8')
+  const len = Buffer.alloc(2)
+  len.writeUInt16BE(type.byteLength)
+  return Buffer.concat([len, type, bytes])
+}
+
+function unpack(plaintext: Buffer): { bytes: Buffer; contentType: string } {
+  const len = plaintext.readUInt16BE(0)
+  const contentType = plaintext.subarray(2, 2 + len).toString('utf8')
+  return { bytes: plaintext.subarray(2 + len), contentType }
+}
+
+/** Encrypts and stores bytes; returns the file_key to persist against the document row. */
 export async function storeEncrypted(
   bytes: Buffer,
   meta: { contentType: string },
 ): Promise<{ fileKey: string }> {
-  await mkdir(STORAGE_DIR, { recursive: true })
-  const iv = randomBytes(IV_LEN)
-  const cipher = createCipheriv('aes-256-gcm', key(), iv)
-  const ciphertext = Buffer.concat([cipher.update(bytes), cipher.final()])
-  const tag = cipher.getAuthTag()
-
   const id = randomUUID()
+
+  if (usingBlob()) {
+    const { put } = await import('@vercel/blob')
+    const pathname = `${BLOB_PREFIX}${id}.enc`
+    await put(pathname, encrypt(pack(bytes, meta.contentType)), {
+      access: 'private',
+      // The blob holds ciphertext, so its own content type is exactly what it is. The real
+      // one travels inside the envelope.
+      contentType: 'application/octet-stream',
+      // We generate the uuid, so the pathname is already unique; a random suffix would only
+      // make the key unpredictable to us.
+      addRandomSuffix: false,
+    })
+    return { fileKey: pathname }
+  }
+
+  await mkdir(STORAGE_DIR, { recursive: true })
   const fileName = `${id}.enc`
-  await writeFile(join(STORAGE_DIR, fileName), Buffer.concat([iv, tag, ciphertext]))
+  await writeFile(join(STORAGE_DIR, fileName), encrypt(bytes))
   // The content type is stored alongside as a tiny sidecar so downloads can set it.
   await writeFile(join(STORAGE_DIR, `${id}.type`), meta.contentType, 'utf8')
   return { fileKey: fileName }
@@ -49,17 +117,23 @@ export async function storeEncrypted(
 export async function readDecrypted(
   fileKey: string,
 ): Promise<{ bytes: Buffer; contentType: string }> {
+  // A blob key carries its prefix; a local one is a bare file name. The shape is what
+  // decides the driver, so a database written under one still reads under the other.
+  if (fileKey.startsWith(BLOB_PREFIX)) {
+    if (!/^documents\/[a-f0-9-]+\.enc$/.test(fileKey)) throw new Error('Invalid file key')
+    const { get } = await import('@vercel/blob')
+    const found = await get(fileKey, { access: 'private' })
+    if (!found?.stream) throw new Error('Document not found in storage')
+    const chunks: Uint8Array[] = []
+    for await (const chunk of found.stream as unknown as AsyncIterable<Uint8Array>) chunks.push(chunk)
+    return unpack(decrypt(Buffer.concat(chunks)))
+  }
+
   // Guard against path traversal — file_key is an opaque name we generated.
   if (!/^[a-f0-9-]+\.enc$/.test(fileKey)) {
     throw new Error('Invalid file key')
   }
-  const raw = await readFile(join(STORAGE_DIR, fileKey))
-  const iv = raw.subarray(0, IV_LEN)
-  const tag = raw.subarray(IV_LEN, IV_LEN + TAG_LEN)
-  const ciphertext = raw.subarray(IV_LEN + TAG_LEN)
-  const decipher = createDecipheriv('aes-256-gcm', key(), iv)
-  decipher.setAuthTag(tag)
-  const bytes = Buffer.concat([decipher.update(ciphertext), decipher.final()])
+  const bytes = decrypt(await readFile(join(STORAGE_DIR, fileKey)))
 
   let contentType = 'application/octet-stream'
   try {
@@ -68,4 +142,27 @@ export async function readDecrypted(
     // Missing sidecar → fall back to the generic type.
   }
   return { bytes, contentType }
+}
+
+/**
+ * Removes a stored document. Used when a document of the same kind replaces an earlier one:
+ * an Aadhaar image nobody can reach is still an Aadhaar image sitting in a bucket, and rule
+ * 7 is about what exists at rest, not only about what the app will hand back.
+ *
+ * Deliberately forgiving — a missing file is the desired end state, and a tidy-up failure
+ * must never fail the upload that triggered it.
+ */
+export async function deleteStored(fileKey: string): Promise<void> {
+  try {
+    if (fileKey.startsWith(BLOB_PREFIX)) {
+      const { del } = await import('@vercel/blob')
+      await del(fileKey)
+      return
+    }
+    const { rm } = await import('node:fs/promises')
+    await rm(join(STORAGE_DIR, fileKey), { force: true })
+    await rm(join(STORAGE_DIR, fileKey.replace(/\.enc$/, '.type')), { force: true })
+  } catch {
+    // Left behind rather than crashing the request; nothing downstream depends on it.
+  }
 }
