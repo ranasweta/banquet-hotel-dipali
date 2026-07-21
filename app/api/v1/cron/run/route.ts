@@ -29,6 +29,13 @@ function isScheduler(req: NextRequest): boolean {
  * GET /cron/run — the same job, for Vercel Cron, which issues a GET and cannot be told to
  * POST. Scheduler-only: there is no body, so no `as_of`, and a browser hitting this URL
  * without the secret gets a 403 rather than silently advancing every event in the hotel.
+ *
+ * Scheduled daily at 03:00 UTC (08:30 IST, before the hotel's day starts) — see vercel.json.
+ * The reasoning lives here rather than beside the schedule because vercel.json is strict
+ * JSON: it has no comment syntax, and Vercel rejects any property it does not recognise.
+ *
+ * This job is why an event ever reaches Completed. Nothing else advances a status, so
+ * without it nothing can be locked, invoiced or billed.
  */
 export const GET = route(async (req: NextRequest) => {
   if (!isScheduler(req)) throw forbidden('This endpoint is for the scheduler.')
