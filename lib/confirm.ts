@@ -5,7 +5,7 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
 import { occupancyParts } from '@/lib/occupancy'
-import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
+import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal, roomEstimatePaise } from '@/lib/pricing'
 import { transitionEvent } from '@/lib/events'
 
 export type AdvancePayment = {
@@ -119,6 +119,23 @@ export async function confirmEvent(
       }
       const extras = await foodAndAddonTotal(eventId, tx)
       const proposalTotal = pricing.totalPaise + extras.foodPaise + extras.addonPaise
+      // Rooms count toward the advance (client, 20 Jul 2026) but stay OUT of
+      // proposal_total_paise, which BR-D2's 10% discount cap is measured against.
+      const roomEst = await roomEstimatePaise(eventId, tx)
+      const advanceBase = proposalTotal + roomEst.roomsPaise + roomEst.roomsTaxPaise
+
+      // 3b. BR-L2: 35+ rooms need the Authority first. Rooms are booked in bulk on the
+      //     proposal now, so this is the gate that matters — confirm is the moment those
+      //     rooms start occupying the lodging calendar. Approving the request clears it.
+      const [{ pending }] = (await tx.execute(sql`
+        SELECT count(*)::int AS pending FROM exceptions
+        WHERE event_id = ${eventId} AND kind = 'room_allocation_35plus' AND status = 'pending'
+      `)) as unknown as { pending: number }[]
+      if (pending > 0) {
+        throw badRequest(
+          'This proposal takes 35 or more rooms, which needs Higher Authority approval before the dates can be blocked (BR-L2).',
+        )
+      }
 
       // 4. Record the advance, then require recorded advance ≥ 25% of the proposal.
       if (advance) {
@@ -151,12 +168,16 @@ export async function confirmEvent(
         SELECT COALESCE(sum(amount_paise), 0)::bigint AS paid
         FROM payments WHERE event_id = ${eventId} AND kind = 'advance_block'
       `)) as unknown as { paid: number }[]
-      const required = percentOfPaise(proposalTotal, 25)
+      const required = percentOfPaise(advanceBase, 25)
       if (paid < required) {
+        const rupees = (n: number) => `₹${(n / 100).toLocaleString('en-IN')}`
+        const roomsPart = advanceBase > proposalTotal
+          ? ` (venue, food and add-ons ${rupees(proposalTotal)} plus rooms ${rupees(roomEst.roomsPaise + roomEst.roomsTaxPaise)} including 5% tax)`
+          : ''
         throw new ApiError(
           402,
           'advance_required',
-          `A 25% advance is required to block the dates: ₹${(required / 100).toLocaleString('en-IN')} on a proposal of ₹${(proposalTotal / 100).toLocaleString('en-IN')}. Recorded so far: ₹${(paid / 100).toLocaleString('en-IN')}.`,
+          `A 25% advance is required to block the dates: ${rupees(required)} on a total of ${rupees(advanceBase)}${roomsPart}. Recorded so far: ${rupees(paid)}.`,
         )
       }
 

@@ -8,9 +8,11 @@ import { nextDay } from '@/lib/occupancy'
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const WINDOW_DAYS = 15
 
-// The banquet manager's operational access is the rolling 15-day window (FR-2.1); other
-// operational roles get the same cap. Only Auditor and Higher Authority may open any range.
-const UNCAPPED_ROLES = new Set(['auditor', 'higher_authority'])
+// FR-2.1 and PRD §2 give the rolling 15-day operational view to the **Banquet Manager**,
+// who owns the venue calendar. It was previously applied to every role except Auditor and
+// Higher Authority, which over-read the spec: a Booking Manager quoting dates needs to see
+// as far ahead as a guest might ask (client, 20 Jul 2026). Capping is now opt-in by role.
+const CAPPED_ROLES = new Set(['banquet_manager'])
 
 function todayLocal(): string {
   return new Date().toLocaleDateString('en-CA') // YYYY-MM-DD in the server's local zone
@@ -36,7 +38,7 @@ export const GET = route(async (req: NextRequest) => {
   let from = parsed.data.from ?? today
   let to = parsed.data.to ?? addDays(today, WINDOW_DAYS - 1)
 
-  const capped = !UNCAPPED_ROLES.has(user.roleName)
+  const capped = CAPPED_ROLES.has(user.roleName)
   if (capped) {
     // Clamp to [today, today + 15 days) server-side — the client cannot widen it.
     const maxTo = addDays(today, WINDOW_DAYS - 1)

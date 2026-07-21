@@ -43,8 +43,8 @@ export type EventDetail = {
 }
 
 const STATUS_STYLES: Record<string, string> = {
-  enquiry: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  confirmed: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
+  enquiry: 'bg-muted text-muted-foreground',
+  confirmed: 'bg-[var(--chart-2)]/15 text-[var(--chart-5)] dark:text-[var(--chart-2)]',
   in_progress: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
   cancelled: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300',
 }
@@ -143,7 +143,7 @@ export function EventDetailView({
           </Card>
           {['confirmed', 'in_progress', 'completed'].includes(event.status) && (
             <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
-              Proforma estimate →
+              Print Draft →
             </Link>
           )}
         </div>
@@ -297,7 +297,7 @@ export function EventDetailView({
         <>
           <Separator />
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold">Lock &amp; invoice</h2>
+            <h2 className="text-lg font-semibold">Lock &amp; payment review</h2>
             <EventLockInvoice eventId={event.id} role={role} isAuditor={isAuditor} />
           </div>
         </>

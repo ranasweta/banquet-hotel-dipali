@@ -61,6 +61,15 @@ races return 409 with a human-readable message.
 - `POST /events/:id/room-allocations` — bulk allocate; ≥35 rooms auto-raises
   exception (202); overlap → 409; non-Palace for lawn wedding needs override_note
 - `GET  /events/:id/rooms/reconciliation` — promised vs allocated vs occupied
+- `GET  /rooms/calendar?from=&to=` — the Lodge Manager's 30-day board: cumulative counts per
+  date × unit × room category, never room numbers. Both ends inclusive (unlike `/rooms/board`,
+  which is half-open). Defaults to the next 30 days; span capped at 92 server-side. Returns
+  `{ from, to, windowDays, inventory[], occupancy[] }` — `occupancy` carries only non-empty
+  cells, each split `locked | confirmed | pending`; the client fills the rest from `inventory`.
+  `pending` counts rooms inside an undecided 35+ exception (BR-L2), which write nothing to
+  `room_allocations` and would otherwise read as free.
+- `GET  /rooms/calendar/:date` — that date drilled down: `{ date, inventory[], holders[] }`,
+  each holder being an event, its category, its count and its state.
 
 ## Discounts & payments (module: billing — booking_manager has none; the advance is
 ## recorded on the bookings/confirm path instead)

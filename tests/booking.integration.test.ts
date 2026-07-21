@@ -144,9 +144,36 @@ d('confirm gates', () => {
     await expect(confirmEvent(actor, id, advance(1_000_000))).rejects.toMatchObject({ status: 402 })
   })
 
+  it('refuses confirm while a 35+ room request is pending (BR-L2)', async () => {
+    // Rooms are booked in bulk on the proposal, so confirm — not allocation — is the moment
+    // they take inventory on the lodging calendar. That makes it the gate for BR-L2.
+    const id = await makeEnquiry()
+    const rooms = await import('@/lib/rooms')
+    const [unit] = (await db.execute(
+      sql`SELECT id FROM lodging_units WHERE name = 'Palace'`,
+    )) as unknown as { id: string }[]
+
+    await rooms.saveRoomRequirements(actor, id, [
+      { unitId: unit!.id, roomType: 'deluxe', count: 35, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+    ])
+    await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/35 or more rooms/)
+
+    // Trimming below the threshold withdraws the request and confirm goes through — with a
+    // bigger advance, because rooms and their 5% tax count toward the 25% base (BR-P1 as
+    // amended 20 Jul 2026): 2 deluxe × 2 nights lifts what a quarter comes to.
+    await rooms.saveRoomRequirements(actor, id, [
+      { unitId: unit!.id, roomType: 'deluxe', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+    ])
+    const ok = await confirmEvent(actor, id, advance(5_000_000))
+    expect(ok.code).toMatch(/^E-/)
+  })
+
   it('refuses confirm when a venue has no rate card (BR-R1), never pricing at zero', async () => {
-    // Upper Hall is "package-based" — no rate card seeded.
-    const id = await makeEnquiry({ venueName: 'Upper Hall', date: '2026-09-05' })
+    // Gulmohar Lawn is sold only as the "Gulmohar + Middle" bundle, so it carries no rate
+    // of its own. It replaces Upper Hall here, which was removed from the seed on 19 Jul
+    // 2026 — the fixture had been erroring on setup ever since, quietly leaving this
+    // non-negotiable unverified.
+    const id = await makeEnquiry({ venueName: 'Gulmohar Lawn', date: '2026-09-05' })
     await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/No rate is defined/)
   })
 

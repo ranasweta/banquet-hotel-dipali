@@ -11,17 +11,27 @@ import { transitionEvent } from '@/lib/events'
  * snapshots, food (pax × snapshotted per-plate) + add-ons, room allocations (nights × rate),
  * closed maintenance lines — less effective discounts and advances. GST is computed per line.
  *
- * GST rates per charge head are placeholders pending the hotel's tax consultant (PRD open
- * question 5); they live here as constants until they become Admin-editable masters. Tax is
- * charged per line on the GROSS line amount; discounts are shown as a separate deduction, not
- * pro-rated into each line's taxable value — a documented simplification to revisit (D9).
+ * TAX: the client's instruction of 20 Jul 2026 is that **only rooms are taxed, at 5%**.
+ * Venue, food and maintenance are zero-rated here — they previously carried placeholder
+ * rates of 18%, 5% and 18% pending the hotel's tax consultant (PRD open question 5). This
+ * is the hotel's own instruction and CLAUDE.md ranks that above the PRD, but zero GST on
+ * banquet food and venue hire is unusual enough to be worth re-confirming before a real
+ * guest pays against it — see docs/SEED_ASSUMPTIONS.md §F8.
+ *
+ * Tax is charged per line on the GROSS line amount and rounded per line, so the sum of the
+ * line taxes is the authoritative figure (not 5% of the room subtotal, which can differ by
+ * a paisa). Discounts are shown as a separate deduction, not pro-rated into each line's
+ * taxable value — a documented simplification to revisit (D9).
  */
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 type Exec = Tx | typeof db
 
-const GST_BP: Record<string, number> = { venue: 1800, food: 500, rooms: 1200, maintenance: 1800, adjustment: 0 }
-const INVOICE_PREFIX = 'INV-2026-'
+// Basis points. Only rooms are taxed (client, 20 Jul 2026) — see the note above.
+const GST_BP: Record<string, number> = { venue: 0, food: 0, rooms: 500, maintenance: 0, adjustment: 0 }
+// "INV" would put the banned word in front of the guest; the number belongs to the Draft 2
+// document, so it carries that name instead (client: never "invoice", never "final").
+const INVOICE_PREFIX = 'D2-2026-'
 const LOCKED_PLUS = new Set(['locked', 'billed', 'closed'])
 
 const taxOf = (amountPaise: number, bp: number) => Math.round((amountPaise * bp) / 10000)

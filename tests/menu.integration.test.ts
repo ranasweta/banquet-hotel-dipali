@@ -162,17 +162,18 @@ d('wedding surcharge (BR-M5)', () => {
 })
 
 d('increases (BR-M2 free, BR-M3 exception)', () => {
-  it('applies one free increase on an eligible category, bumping its effective pick', async () => {
+  it('applies the free increase on an eligible category, bumping its effective pick by two', async () => {
+    // BR-M2 amended 20 Jul 2026: two dishes are free of Authority approval, not one.
     const sub = await makeSubEvent()
     await menus.saveSubEventMenu(actor, sub, { tierId: await tierId('Silver'), selections: { Soup: ['Hot & Sour Soup'] } })
     const res = await menus.increaseCategory(actor, sub, 'Soup')
-    expect(res).toMatchObject({ applied: 'free', effectivePick: 2 })
+    expect(res).toMatchObject({ applied: 'free', effectivePick: 3 }) // base 1 + 2 free
 
     const snap = await menus.getSubEventMenu(sub)
     expect(snap.menu!.freeIncreaseUsed).toBe(true)
     expect(snap.menu!.freeIncreaseCategoryName).toBe('Soup')
     const soup = snap.menu!.categories.find((c) => c.categoryName === 'Soup')!
-    expect(soup.effectivePick).toBe(2)
+    expect(soup.effectivePick).toBe(3)
   })
 
   it('raises a deferred exception on the SECOND increase (202)', async () => {
@@ -203,11 +204,35 @@ d('increases (BR-M2 free, BR-M3 exception)', () => {
     expect(snap.menu!.freeIncreaseUsed).toBe(false)
   })
 
-  it('will not raise a duplicate exception while one is already pending', async () => {
+  it('batches every increment into ONE pending request per proposal', async () => {
+    // BR-M3 amended 20 Jul 2026: the manager keeps picking and the Authority sees a single
+    // item per proposal, labelled by function and segment — not one row per increment.
     const sub = await makeSubEvent()
-    await menus.saveSubEventMenu(actor, sub, { tierId: await tierId('Silver'), selections: { Dal: ['Dal Tadka'] } })
-    await menus.increaseCategory(actor, sub, 'Dal') // exception (ineligible)
-    await expect(menus.increaseCategory(actor, sub, 'Dal')).rejects.toThrow(/already awaiting approval/)
+    const eid = await eventIdOf(sub)
+    await menus.saveSubEventMenu(actor, sub, {
+      tierId: await tierId('Silver'),
+      selections: { Dal: ['Dal Tadka'], 'Paneer Main Course': ['Kadai Paneer'] },
+    })
+
+    const first = await menus.increaseCategory(actor, sub, 'Dal')
+    const second = await menus.increaseCategory(actor, sub, 'Paneer Main Course')
+    const third = await menus.increaseCategory(actor, sub, 'Dal') // same segment again
+
+    // All three land on the same exception.
+    expect(second).toMatchObject({ applied: 'exception', exceptionId: (first as { exceptionId: string }).exceptionId })
+    expect(third).toMatchObject({ applied: 'exception', exceptionId: (first as { exceptionId: string }).exceptionId })
+
+    const rows = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eid))
+    const pending = rows.filter((r) => r.kind === 'menu_increase' && r.status === 'pending')
+    expect(pending).toHaveLength(1)
+
+    const items = (pending[0]!.payload as { items: { categoryName: string; subEventName: string; currentPick: number; requestedPick: number }[] }).items
+    expect(items).toHaveLength(2) // two segments, not three requests
+    expect(items.every((i) => typeof i.subEventName === 'string' && i.subEventName.length > 0)).toBe(true)
+
+    // Pressing Dal twice raises Dal's ask rather than adding a second row.
+    const dal = items.find((i) => i.categoryName === 'Dal')!
+    expect(dal.requestedPick - dal.currentPick).toBe(2)
   })
 })
 

@@ -135,17 +135,23 @@ d('seed', () => {
       const [row] = await sql.unsafe<{ n: number }[]>(`SELECT count(*)::int AS n FROM ${table}`)
       return row!.n
     }
-    expect(await count('properties')).toBe(4)
-    expect(await count('venues')).toBe(13)
+    // 3 properties: the Residency property retired with Upper Hall (19 Jul 2026) — Residency
+    // exists as a LODGING unit, not a venue property.
+    expect(await count('properties')).toBe(3)
+    // 11 venues: Upper Hall and Utsav Hall are not carried — the 2026 proposal prices
+    // neither, and a venue with no price is not offered at all.
+    expect(await count('venues')).toBe(11)
     expect(await count('venue_bundles')).toBe(4)
     expect(await count('event_types')).toBe(6)
     expect(await count('menu_tiers')).toBe(8)
-    expect(await count('modules')).toBe(10)
-    expect(await count('roles')).toBe(6)
+    // 11 modules: `lodging_calendar` split out of `rooms` (20 Jul 2026) so it can be
+    // granted on its own.
+    expect(await count('modules')).toBe(11)
+    expect(await count('roles')).toBe(7) // + chef, who alone prices a delicacy request
     expect(await count('lodging_units')).toBe(3)
   })
 
-  it('provisions 15 users — the PRD\'s 14 plus the Auditor', async () => {
+  it('provisions 16 users — the PRD\'s 14 plus the Auditor and the Chef', async () => {
     const rows = await sql<{ name: string; n: number }[]>`
       SELECT r.name, count(*)::int AS n
       FROM users u JOIN roles r ON r.id = u.role_id
@@ -154,13 +160,14 @@ d('seed', () => {
       auditor: 1,
       banquet_manager: 3,
       booking_manager: 5,
+      chef: 1, // added 19 Jul 2026
       higher_authority: 2,
       lodge_manager: 3,
       maintenance: 1,
     })
   })
 
-  it('loads Palace at 36 rooms + 2 dormitories and Regency at 49 + 1', async () => {
+  it('loads Palace at 36 + 1 dormitory, Regency at 49 + 1, Residency at 28', async () => {
     const rows = await sql<{ name: string; rooms: number; dorms: number }[]>`
       SELECT lu.name,
              count(*) FILTER (WHERE r.room_type <> 'dormitory')::int AS rooms,
@@ -168,10 +175,12 @@ d('seed', () => {
       FROM lodging_units lu LEFT JOIN rooms r ON r.unit_id = lu.id
       GROUP BY lu.name ORDER BY lu.name`
     const byUnit = Object.fromEntries(rows.map((r) => [r.name, { rooms: r.rooms, dorms: r.dorms }]))
-    expect(byUnit.Palace).toEqual({ rooms: 36, dorms: 2 })
+    // Client-confirmed inventory, 21 Jul 2026. Palace is 36 (the earlier 38 was a miscount);
+    // One 18-bed dormitory at Palace, one at Regency.
+    expect(byUnit.Palace).toEqual({ rooms: 36, dorms: 1 })
     expect(byUnit.Regency).toEqual({ rooms: 49, dorms: 1 })
-    // Grand / Regency A-block has rates but no inventory in the PRD — deliberately empty.
-    expect(byUnit['Grand / Regency A-block']).toEqual({ rooms: 0, dorms: 0 })
+    expect(byUnit.Residency).toEqual({ rooms: 28, dorms: 0 })
+    expect(byUnit['Grand / Regency A-block']).toBeUndefined()
   })
 
   it('applies the PRD §2.1 permission matrix', async () => {
@@ -198,20 +207,25 @@ d('seed', () => {
         WHERE v.name = ${venue} AND rc.event_type = ${eventType}`
       return rows[0]?.rate_paise ?? null
     }
-    // Printed on the proposal as sangeet/engagement rates — NOT wedding rates.
+    // ONE price per venue, charged whatever the event is (client, 19 Jul 2026: the
+    // proposal's third column is the venue's speciality, not a second price).
     expect(await rate('Kohinoor', 'mahila_sangeet')).toBe(5_500_000)
     expect(await rate('Imperial', 'engagement')).toBe(7_500_000)
-    expect(await rate('Kohinoor', 'wedding')).toBeNull()
-    expect(await rate('Imperial', 'wedding')).toBeNull()
+    expect(await rate('Kohinoor', 'wedding')).toBe(5_500_000)
+    expect(await rate('Imperial', 'wedding')).toBe(7_500_000)
     // A wedding at Imperial/Kohinoor is priced as the bundle instead.
     const [bundle] = await sql<{ rate_paise: number }[]>`
       SELECT rc.rate_paise FROM venue_rate_cards rc
       JOIN venue_bundles b ON b.id = rc.bundle_id
       WHERE b.name = 'Imperial + Kohinoor' AND rc.event_type = 'wedding'`
     expect(bundle!.rate_paise).toBe(15_100_000)
-    // Package-based halls carry no rate at all — the missing-rate gate handles them.
-    expect(await rate('Upper Hall', 'wedding')).toBeNull()
-    expect(await rate('Utsav Hall', 'wedding')).toBeNull()
+    // The bundle-only venues carry no rate of their own, for any event type. That is the
+    // gap BR-R1 guards: a missing rate stays an explicit gate, never a silent zero.
+    for (const v of ['Diamond Hall', 'Golden Hall', 'Gulmohar Lawn', 'Middle Lawn']) {
+      for (const et of ['wedding', 'birthday']) {
+        expect(await rate(v, et), `${v} / ${et}`).toBeNull()
+      }
+    }
   })
 
   it('snapshots the Rs. 50 wedding surcharge onto every tier price (BR-M5)', async () => {

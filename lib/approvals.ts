@@ -42,8 +42,21 @@ function pgCode(err: unknown): string | undefined {
 /** A one-line, human summary of what an exception is asking for. */
 function summarize(kind: string, payload: Record<string, unknown>): string {
   switch (kind) {
-    case 'menu_increase':
-      return `+1 pick on "${payload.categoryName}" (${payload.currentPick} → ${payload.requestedPick})`
+    case 'menu_increase': {
+      // One batch per proposal (20 Jul 2026). Name the function and the segment for each
+      // increment so the Authority can see exactly what is being asked for and where.
+      const items = (payload.items ?? []) as {
+        subEventName: string; categoryName: string; currentPick: number; requestedPick: number
+      }[]
+      if (items.length === 0) return 'menu increase'
+      const lines = items.map(
+        (i) => `${i.subEventName} · ${i.categoryName} (${i.currentPick} → ${i.requestedPick})`,
+      )
+      const fns = new Set(items.map((i) => i.subEventName)).size
+      return items.length === 1
+        ? lines[0]!
+        : `${items.length} increments across ${fns} function${fns === 1 ? '' : 's'} — ${lines.join('; ')}`
+    }
     case 'room_allocation_35plus':
       return `${payload.requestedCount} room(s) — event total would reach ${Number(payload.existingCount) + Number(payload.requestedCount)}`
     case 'discount_over_cap':
@@ -223,18 +236,35 @@ async function applyDeferred(
 ): Promise<string> {
   switch (kind) {
     case 'menu_increase': {
-      // Bump the category's extra pick and mark the menu incomplete until the item is chosen.
-      const delta = modified?.extraPicks != null ? Number(modified.extraPicks) : 1
-      if (!Number.isInteger(delta) || delta < 1) throw badRequest('Modified pick must be a positive whole number')
-      await tx.execute(sql`
-        UPDATE sub_event_menu_categories
-        SET extra_picks = extra_picks + ${delta}
-        WHERE menu_id = ${payload.menuId as string} AND category_name = ${payload.categoryName as string}
-      `)
-      await tx.execute(sql`
-        UPDATE sub_event_menus SET is_complete = false WHERE id = ${payload.menuId as string}
-      `)
-      return `+${delta} pick on ${payload.categoryName}`
+      // Apply every increment in the batch. Each segment gets exactly what was asked for
+      // (requested − current), so approving once releases the whole proposal.
+      const items = (payload.items ?? []) as {
+        subEventName: string; menuId: string; categoryName: string
+        currentPick: number; requestedPick: number
+      }[]
+      if (items.length === 0) throw badRequest('This request carries no increments to apply.')
+
+      // "Approve modified" REPLACES the granted delta — the Authority may hand out more than
+      // was asked for ("two extra, not one"), so this is not a cap. Against a batch the one
+      // number applies to every segment; granting different amounts per segment would need
+      // a per-segment control the approvals screen does not have.
+      const override = modified?.extraPicks != null ? Number(modified.extraPicks) : null
+      if (override != null && (!Number.isInteger(override) || override < 1)) {
+        throw badRequest('Modified pick must be a positive whole number')
+      }
+
+      for (const i of items) {
+        const delta = override ?? i.requestedPick - i.currentPick
+        if (delta < 1) continue
+        await tx.execute(sql`
+          UPDATE sub_event_menu_categories
+          SET extra_picks = extra_picks + ${delta}
+          WHERE menu_id = ${i.menuId} AND category_name = ${i.categoryName}
+        `)
+        await tx.execute(sql`UPDATE sub_event_menus SET is_complete = false WHERE id = ${i.menuId}`)
+      }
+      const fns = new Set(items.map((i) => i.subEventName)).size
+      return `${items.length} increment(s) across ${fns} function(s)`
     }
     case 'room_allocation_35plus': {
       // Insert the held rooms now. A subset may be chosen on approve_modified.

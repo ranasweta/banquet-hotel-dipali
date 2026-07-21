@@ -9,6 +9,7 @@ import { formatPaise, rupeesToPaise } from '@/lib/money'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { EventDiscounts } from '@/components/event-discounts'
 import {
   Table,
   TableBody,
@@ -79,57 +80,76 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
             </Button>
           )}
           {isAuditor && checklist.status === 'completed' && (
-            <Button size="sm" disabled={busy || !checklist.canLock} onClick={() => act(() => api(`/events/${eventId}/lock`, { method: 'POST' }), 'Event locked — invoice drafted')}>
-              <Lock className="size-3.5" /> Lock &amp; draft invoice
+            <Button size="sm" disabled={busy || !checklist.canLock} onClick={() => act(() => api(`/events/${eventId}/lock`, { method: 'POST' }), 'Event locked — Draft prepared')}>
+              <Lock className="size-3.5" /> Lock &amp; prepare Draft
             </Button>
           )}
           {!checklist.canLock && checklist.status === 'completed' && <span className="text-xs text-amber-600">Complete every item to lock.</span>}
         </div>
       </div>
 
-      {/* Invoice */}
+      {/* Payment review. Never "invoice", never "final" — the two documents the client
+          recognises are Draft and Draft 2 (20 Jul 2026). */}
       {invoice && (
         <div>
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-medium">
-              Invoice {invoice.invoiceNo && <span className="tabular-nums">· {invoice.invoiceNo}</span>}
-              {invoice.finalised ? <Badge variant="outline" className="ml-2 text-emerald-600">finalised</Badge> : <Badge variant="outline" className="ml-2 text-amber-600">draft</Badge>}
+              Payment review {invoice.invoiceNo && <span className="tabular-nums">· {invoice.invoiceNo}</span>}
+              {invoice.finalised ? <Badge variant="outline" className="ml-2 text-emerald-600">Draft 2</Badge> : <Badge variant="outline" className="ml-2 text-amber-600">Draft</Badge>}
             </h3>
             <Link href={`/bookings/${eventId}/invoice`} className="text-sm text-primary hover:underline">Print view →</Link>
           </div>
           <div className="overflow-x-auto rounded-lg border">
             <Table>
               <TableHeader><TableRow>
-                <TableHead>Section</TableHead><TableHead>Description</TableHead><TableHead className="text-right">Qty</TableHead><TableHead className="text-right">Amount</TableHead><TableHead className="text-right">GST</TableHead><TableHead className="text-right">Tax</TableHead>
+                <TableHead>Head</TableHead><TableHead>Description</TableHead><TableHead className="text-right">How it works out</TableHead><TableHead className="text-right">Amount</TableHead><TableHead className="text-right">Tax</TableHead>
               </TableRow></TableHeader>
               <TableBody>
-                {invoice.lines.map((l) => (
-                  <TableRow key={l.id}>
-                    <TableCell className="capitalize text-muted-foreground">{l.section}</TableCell>
-                    <TableCell>{l.description}</TableCell>
-                    <TableCell className="text-right tabular-nums">{Number(l.qty)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatPaise(l.amountPaise)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">{(l.gstRateBp / 100).toFixed(0)}%</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatPaise(l.taxPaise)}</TableCell>
-                  </TableRow>
-                ))}
+                {invoice.lines.map((l) => {
+                  const qty = Number(l.qty)
+                  return (
+                    <TableRow key={l.id}>
+                      <TableCell className="capitalize text-muted-foreground">{l.section}</TableCell>
+                      <TableCell>{l.description}</TableCell>
+                      {/* The arithmetic, spelled out — the client asked for every penny to
+                          be traceable rather than a bare total. */}
+                      <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+                        {qty > 1 ? `${qty} × ${formatPaise(l.ratePaise)}` : formatPaise(l.ratePaise)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatPaise(l.amountPaise)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {l.gstRateBp > 0 ? `${formatPaise(l.taxPaise)} (${(l.gstRateBp / 100).toFixed(0)}%)` : '—'}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
           <dl className="mt-3 ml-auto max-w-xs space-y-1 text-sm">
-            <Row label="Gross" value={formatPaise(invoice.grossPaise)} />
+            <Row label="Sub-total" value={formatPaise(invoice.grossPaise)} />
             {invoice.discountPaise > 0 && <Row label="Less discounts" value={`− ${formatPaise(invoice.discountPaise)}`} />}
-            <Row label="Tax (GST)" value={formatPaise(invoice.taxPaise)} />
-            <Row label="Net payable" value={formatPaise(invoice.netPaise)} bold />
-            <Row label="Advances received" value={`− ${formatPaise(invoice.advancesPaise)}`} />
+            <Row label="Tax — 5% on rooms only" value={`+ ${formatPaise(invoice.taxPaise)}`} />
+            <Row label="Amount payable" value={formatPaise(invoice.netPaise)} bold />
+            <Row label="Received so far" value={`− ${formatPaise(invoice.advancesPaise)}`} />
             <Row label="Balance due" value={formatPaise(invoice.balancePaise)} bold accent={invoice.balancePaise > 0 ? 'text-amber-600' : 'text-emerald-600'} />
           </dl>
+
+          {/* Discounts belong with the money, not under a separate Billing tab
+              (client, 20 Jul 2026). The 10% combined cap is unchanged (BR-D2). */}
+          {!invoice.finalised && (
+            <div className="mt-4 border-t pt-3">
+              <EventDiscounts eventId={eventId} editable={isAuditor} />
+            </div>
+          )}
 
           {isAuditor && !invoice.finalised && (
             <div className="mt-4 flex flex-wrap items-end gap-2 border-t pt-3">
               <Adjuster eventId={eventId} onDone={load} />
-              <Button size="sm" disabled={busy} onClick={() => act(() => api(`/events/${eventId}/invoice/finalise`, { method: 'POST' }), 'Invoice finalised')}>
-                Finalise invoice
+              {/* Issuing Draft 2 locks the amount — same mechanism as before, never called
+                  "finalise" in front of a user (client, 20 Jul 2026). */}
+              <Button size="sm" disabled={busy} onClick={() => act(() => api(`/events/${eventId}/invoice/finalise`, { method: 'POST' }), 'Draft 2 issued — the amount is locked')}>
+                Issue Draft 2
               </Button>
             </div>
           )}

@@ -42,7 +42,7 @@ export function AuthorityDashboard({ data, user }: { data: AuthorityData; user: 
             <h1 className="text-2xl font-semibold sm:text-3xl">
               {exceptions.length} {exceptions.length === 1 ? 'decision' : 'decisions'} waiting
             </h1>
-            <p className="mt-1 text-sm text-blue-100">
+            <p className="mt-1 text-sm text-primary-foreground/75">
               {byKind.map((k) => `${k.n} ${formatType(k.kind)}`).join(' · ')}
             </p>
           </>
@@ -53,7 +53,7 @@ export function AuthorityDashboard({ data, user }: { data: AuthorityData; user: 
         <KpiTile href="/approvals" icon={<ClipboardCheck className="size-5" aria-hidden />} value={exceptions.length} label="Awaiting your decision" tone={exceptions.length ? 'amber' : 'slate'} />
         <KpiTile icon={<Wallet className="size-5" aria-hidden />} value={formatPaise(atRiskPaise)} label="Outstanding · 30 days" tone={atRiskPaise ? 'red' : 'slate'} />
         <KpiTile icon={<Wallet className="size-5" aria-hidden />} value={overdue.length} label="Balances overdue" tone={overdue.length ? 'red' : 'emerald'} />
-        <KpiTile href="/day-sheet" icon={<CalendarDays className="size-5" aria-hidden />} value={upcoming.length} label="Functions · next 7 days" tone="blue" />
+        <KpiTile href="/calendar" icon={<CalendarDays className="size-5" aria-hidden />} value={upcoming.length} label="Functions · next 7 days" tone="blue" />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

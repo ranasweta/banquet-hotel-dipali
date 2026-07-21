@@ -60,6 +60,31 @@ async function makeEvent(opts: { eventType?: string; status?: string; lawnSub?: 
   return event!.id
 }
 
+async function pending35(eventId: string) {
+  return db.execute(sql`
+    SELECT id, payload FROM exceptions
+    WHERE event_id = ${eventId} AND kind = 'room_allocation_35plus' AND status = 'pending'
+  `) as unknown as Promise<{ id: string; payload: unknown }[]>
+}
+
+async function unitId(name: string): Promise<string> {
+  const [u] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = ${name}`)) as unknown as { id: string }[]
+  return u!.id
+}
+/** Books rooms the way the proposal does now: lodge + category + count + dates, in bulk. */
+async function bookRooms(
+  eventId: string,
+  unit: string,
+  roomType: string,
+  count: number,
+  checkIn: string,
+  checkOut: string,
+): Promise<void> {
+  await db.insert(schema.roomRequirements).values({
+    eventId, unitId: await unitId(unit), roomType, count, checkIn, checkOut,
+  })
+}
+
 beforeAll(async () => {
   if (!hasDb) return
   const setup = createClient('TEST_DATABASE_URL')
@@ -79,6 +104,9 @@ beforeAll(async () => {
 }, 90_000)
 
 async function cleanup() {
+  // Unlock first: the lock guard fires on cascaded child deletes, so a locked event left
+  // behind by a test would make every later cleanup throw.
+  await db.execute(sql`UPDATE events SET status = 'confirmed' WHERE status IN ('locked','billed','closed')`)
   await db.delete(schema.venueBookings)
   await db.delete(schema.events)
 }
@@ -110,6 +138,58 @@ d('allocation + overlap guard (FR-4.3)', () => {
     await expect(
       rooms.allocateRooms(actor, e, [{ roomId: room!, checkIn: '2026-09-01', checkOut: '2026-09-02' }]),
     ).rejects.toThrow(/confirmed/)
+  })
+})
+
+d('bulk room booking + BR-L2 on the proposal', () => {
+
+  it('raises ONE pending request per proposal at 35+ rooms, and clears it when trimmed', async () => {
+    // Rooms are booked in bulk on the proposal now, so BR-L2 counts rooms ASKED FOR rather
+    // than rows in room_allocations (which nothing writes any more).
+    const e = await makeEvent({ status: 'enquiry' })
+    const palace = await unitId('Palace')
+    const regency = await unitId('Regency')
+
+    const under = await rooms.saveRoomRequirements(actor, e, [
+      { unitId: palace, roomType: 'deluxe', count: 20, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+    ])
+    expect(under).toMatchObject({ totalRooms: 20, deferred: false })
+    expect(await pending35(e)).toHaveLength(0)
+
+    // Two lodges, 34 + 1 = 35 — the threshold is the event's total, not any one line.
+    const over = await rooms.saveRoomRequirements(actor, e, [
+      { unitId: palace, roomType: 'deluxe', count: 34, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: regency, roomType: 'suite', count: 1, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+    ])
+    expect(over).toMatchObject({ totalRooms: 35, deferred: true })
+
+    const raised = await pending35(e)
+    expect(raised).toHaveLength(1) // one per proposal, not one per line
+    const payload = raised[0]!.payload as { requestedCount: number; lines: unknown[] }
+    expect(payload.requestedCount).toBe(35)
+    expect(payload.lines).toHaveLength(2) // the Authority sees both lodges
+
+    // The requirements are still saved — an enquiry occupies nothing until it confirms.
+    const [{ n }] = (await db.execute(
+      sql`SELECT count(*)::int AS n FROM room_requirements WHERE event_id = ${e}`,
+    )) as unknown as { n: number }[]
+    expect(n).toBe(2)
+
+    // Trimming back below the threshold withdraws the request: its reason is gone.
+    const trimmed = await rooms.saveRoomRequirements(actor, e, [
+      { unitId: palace, roomType: 'deluxe', count: 5, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+    ])
+    expect(trimmed.deferred).toBe(false)
+    expect(await pending35(e)).toHaveLength(0)
+  })
+
+  it('refuses requirements on an event that is no longer an enquiry', async () => {
+    const e = await makeEvent() // confirmed
+    await expect(
+      rooms.saveRoomRequirements(actor, e, [
+        { unitId: await unitId('Palace'), roomType: 'deluxe', count: 1, checkIn: '2026-09-01', checkOut: '2026-09-02' },
+      ]),
+    ).rejects.toThrow(/enquiry/)
   })
 })
 
@@ -170,6 +250,61 @@ d('lawn-wedding Palace preference (BR-L1)', () => {
     const [palace] = await anyRooms('Palace', 1)
     const ok = await rooms.allocateRooms(actor, e, [{ roomId: palace!, checkIn: '2026-12-01', checkOut: '2026-12-03' }])
     expect(ok).toEqual({ deferred: false, allocated: 1 })
+  })
+})
+
+d('lodging calendar (Lodge Manager 30-day occupancy)', () => {
+  const unitIdOf = (inv: { unitId: string; unitName: string }[], name: string) =>
+    inv.find((i) => i.unitName === name)!.unitId
+  const cell = (cal: Awaited<ReturnType<typeof rooms.getLodgingCalendar>>, date: string, unit: string, type: string) =>
+    cal.occupancy.find((c) => c.date === date && c.unitId === unit && c.roomType === type)
+
+  it('counts a stay on every night it spans, but never on the checkout day', async () => {
+    const e = await makeEvent()
+    await bookRooms(e, 'Palace', 'deluxe', 2, '2026-09-01', '2026-09-04')
+
+    const cal = await rooms.getLodgingCalendar('2026-08-30', '2026-09-06')
+    const palace = unitIdOf(cal.inventory, 'Palace')
+
+    for (const date of ['2026-09-01', '2026-09-02', '2026-09-03']) {
+      expect(cell(cal, date, palace, 'deluxe')?.confirmed, `night ${date}`).toBe(2)
+    }
+    // Half-open stay: the guest is gone on the 4th, and never arrived on 31 Aug.
+    expect(cell(cal, '2026-09-04', palace, 'deluxe')).toBeUndefined()
+    expect(cell(cal, '2026-08-31', palace, 'deluxe')).toBeUndefined()
+  })
+
+  it('separates locked from confirmed', async () => {
+    const locked = await makeEvent()
+    await bookRooms(locked, 'Regency', 'suite', 1, '2026-10-01', '2026-10-02')
+    await db.execute(sql`UPDATE events SET status = 'locked' WHERE id = ${locked}`)
+
+    const open = await makeEvent() // stays confirmed
+    await bookRooms(open, 'Regency', 'suite', 4, '2026-10-01', '2026-10-02')
+
+    const cal = await rooms.getLodgingCalendar('2026-10-01', '2026-10-06')
+    const regency = unitIdOf(cal.inventory, 'Regency')
+
+    expect(cell(cal, '2026-10-01', regency, 'suite')?.locked).toBe(1)
+    expect(cell(cal, '2026-10-01', regency, 'suite')?.confirmed).toBe(4)
+  })
+
+  it('names who holds each category on a date, and what is left', async () => {
+    const e = await makeEvent()
+    await bookRooms(e, 'Palace', 'deluxe', 3, '2026-11-10', '2026-11-12')
+
+    const day = await rooms.getLodgingDay('2026-11-11')
+    const palace = unitIdOf(day.inventory, 'Palace')
+    const held = day.holders.find((h) => h.unitId === palace && h.roomType === 'deluxe')!
+
+    expect(held.count).toBe(3)
+    expect(held.state).toBe('confirmed')
+    expect(held.guestName).toBe('Rooms Test')
+    expect(held.code).toMatch(/^E-/)
+
+    const stock = day.inventory.find((i) => i.unitId === palace && i.roomType === 'deluxe')!
+    expect(stock.total - held.count).toBe(stock.total - 3) // the "how many are left" figure
+    expect(stock.total).toBeGreaterThan(3)
   })
 })
 

@@ -9,7 +9,7 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-geist-mono);
-  --font-heading: var(--font-sans);
+  --font-heading: var(--font-serif);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -49,72 +49,92 @@
 }
 
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  /* ------------------------------------------------------------------
+     Hotel Dipali brand, 20 Jul 2026.
+     Primary #AD8B3A gold · Secondary #45443F charcoal · Tertiary #798EC8
+     periwinkle · Neutral #13130F, on a warm cream page.
+
+     Every pair below was contrast-checked. Two deliberate departures from
+     the raw brand swatches, both for legibility:
+
+     1. --primary is #8E7230, a darker gold than the #AD8B3A swatch. White
+        on #AD8B3A is only 3.22:1 — fine for large display text, but button
+        labels are body-sized and need 4.5:1. #8E7230 reads as the same gold
+        and hits 4.57:1. The pure swatch survives as --ring and --chart-1,
+        where it is a large/decorative element.
+     2. Periwinkle #798EC8 is 2.93:1 on cream, so it is never used for text.
+        It lives in the chart ramp only.
+     ------------------------------------------------------------------ */
+  --background: oklch(0.9563 0.0225 87.15); /* #F7F0E0 warmer cream */
+  --foreground: oklch(0.1852 0.0079 107.15);         /* #13130F */
+  --card: oklch(0.9914 0.0098 87.47); /* #FFFCF5 */
+  --card-foreground: oklch(0.1852 0.0079 107.15);
+  --popover: oklch(0.9914 0.0098 87.47); /* #FFFCF5 */
+  --popover-foreground: oklch(0.1852 0.0079 107.15);
+  --primary: oklch(0.5659 0.0910 85.99);             /* #8E7230 · 4.57:1 on white */
+  --primary-foreground: oklch(1.0000 0.0000 89.88);
+  --secondary: oklch(0.3859 0.0084 97.54);           /* #45443F */
+  --secondary-foreground: oklch(0.9820 0.0082 91.48);
+  --muted: oklch(0.9237 0.0324 87.29); /* #EFE5CE */
+  --muted-foreground: oklch(0.4799 0.0336 89.65); /* #655D48 · 5.76:1 on background */
+  --accent: oklch(0.9064 0.0461 87.76); /* #EDDFBE */
+  --accent-foreground: oklch(0.3571 0.0602 86.82);
+  --destructive: oklch(0.4770 0.1578 28.77);
+  --border: oklch(0.8694 0.0438 87.97); /* #E0D3B4 */
+  /* Distinct from --border: a field's outline is the only thing that makes it
+     visible on a white card, so WCAG 1.4.11 wants 3:1. #948C7C = 3.33:1. */
+  --input: oklch(0.6214 0.0363 89.91); /* #8F866E · 3.53:1 on card */
+  --ring: oklch(0.6530 0.1069 86.07);                /* #AD8B3A, the true brand gold */
+  --chart-1: oklch(0.6530 0.1069 86.07);
+  --chart-2: oklch(0.6534 0.0904 268.57);            /* #798EC8 */
+  --chart-3: oklch(0.3859 0.0084 97.54);
+  --chart-4: oklch(0.7350 0.1156 86.59);
+  --chart-5: oklch(0.4913 0.0881 268.78);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar: oklch(0.9738 0.0167 88.00); /* #FBF6EA */
+  --sidebar-foreground: oklch(0.2769 0.0111 91.70);
+  --sidebar-primary: oklch(0.3571 0.0602 86.82);     /* deep gold-brown active pill */
+  --sidebar-primary-foreground: oklch(1.0000 0.0000 89.88);
+  --sidebar-accent: oklch(0.9064 0.0461 87.76); /* #EDDFBE */
+  --sidebar-accent-foreground: oklch(0.3571 0.0602 86.82);
+  --sidebar-border: oklch(0.8694 0.0438 87.97); /* #E0D3B4 */
+  --sidebar-ring: oklch(0.6530 0.1069 86.07);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Warm dark, not neutral grey — the cream/gold identity has to survive.
+     Gold lifts to #C9A44B so near-black sits on it at 7.75:1. */
+  --background: oklch(0.1947 0.0117 99.53);
+  --foreground: oklch(0.9520 0.0124 91.52);
+  --card: oklch(0.2336 0.0130 100.60);
+  --card-foreground: oklch(0.9520 0.0124 91.52);
+  --popover: oklch(0.2336 0.0130 100.60);
+  --popover-foreground: oklch(0.9520 0.0124 91.52);
+  --primary: oklch(0.7350 0.1156 86.59);
+  --primary-foreground: oklch(0.1947 0.0117 99.53);
+  --secondary: oklch(0.3243 0.0087 97.60);
+  --secondary-foreground: oklch(0.9520 0.0124 91.52);
+  --muted: oklch(0.2792 0.0142 101.39);
+  --muted-foreground: oklch(0.7224 0.0236 89.84);    /* 7.44:1 */
+  --accent: oklch(0.3230 0.0326 90.11);
+  --accent-foreground: oklch(0.8855 0.0660 93.07);
+  --destructive: oklch(0.6636 0.1494 26.78);
+  --border: oklch(0.3316 0.0172 97.88);
+  --input: oklch(0.5380 0.0249 92.67);               /* 3.28:1 on card */
+  --ring: oklch(0.7350 0.1156 86.59);
+  --chart-1: oklch(0.7350 0.1156 86.59);
+  --chart-2: oklch(0.7401 0.0765 270.17);
+  --chart-3: oklch(0.6730 0.0179 91.62);
+  --chart-4: oklch(0.8185 0.1060 88.23);
+  --chart-5: oklch(0.6084 0.0881 270.01);
+  --sidebar: oklch(0.2164 0.0132 100.67);
+  --sidebar-foreground: oklch(0.9341 0.0153 90.24);
+  --sidebar-primary: oklch(0.7350 0.1156 86.59);
+  --sidebar-primary-foreground: oklch(0.1947 0.0117 99.53);
+  --sidebar-accent: oklch(0.2916 0.0193 98.87);
+  --sidebar-accent-foreground: oklch(0.8855 0.0660 93.07);
+  --sidebar-border: oklch(0.3316 0.0172 97.88);
+  --sidebar-ring: oklch(0.7350 0.1156 86.59);
 }
 
 @layer base {
@@ -126,5 +146,15 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Noto Serif carries the headings; Inter carries everything operational.
+     The slight negative tracking stops the serif looking loose at display sizes. */
+  h1, h2, h3 {
+    font-family: var(--font-serif), ui-serif, Georgia, serif;
+    letter-spacing: -0.011em;
+  }
+  /* Figures in tables, money and dates must not jitter between renders. */
+  .tabular-nums, table {
+    font-variant-numeric: tabular-nums;
   }
 }

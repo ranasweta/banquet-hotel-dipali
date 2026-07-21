@@ -31,7 +31,11 @@ export function RequestChange({ sub }: { sub: SubEvent }) {
 
   useEffect(() => {
     if (open && venues.length === 0) {
-      api<{ venues: Venue[] }>('/booking-options').then((r) => setVenues(r.venues)).catch(() => {})
+      // Only priceable venues: a bundle-only venue picked here would be approved and
+      // then dead-end on the missing-rate gate (BR-R1).
+      api<{ venues: (Venue & { priceable?: boolean })[] }>('/booking-options')
+        .then((r) => setVenues(r.venues.filter((v) => v.priceable !== false)))
+        .catch(() => {})
     }
   }, [open, venues.length])
 

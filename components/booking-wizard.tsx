@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,7 +29,8 @@ type Options = {
   venues: Venue[]
   bundles: Bundle[]
   roomTypes: string[]
-  roomRates: { roomType: string; rackRatePaise: number }[]
+  roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
+  lodgingUnits?: { id: string; name: string }[]
 }
 type Tier = CatalogTier
 
@@ -43,7 +44,7 @@ type SubEvent = {
   bundleId: string | null
   pax: number
 }
-type RoomReq = { room_type: string; count: number; check_in: string; check_out: string }
+type RoomReq = { unit_id: string; room_type: string; count: number; check_in: string; check_out: string }
 type Quote = {
   totalPaise: number
   advanceRequiredPaise: number
@@ -52,7 +53,13 @@ type Quote = {
 }
 
 // Dates & event first, then who the guest is (KYC), then the functions with their menus.
-const STEPS = ['Date & event', 'KYC', 'Functions & menu', 'Rooms', 'Review & confirm']
+const STEPS = ['Date & event', 'KYC', 'Functions & menu', 'Rooms', 'Payment review']
+
+/** The usual run of functions, offered as one-tap names once the first one exists. */
+const SUGGESTED_FUNCTIONS = ['Mehndi', 'Haldi', 'Sangeet', 'Wedding', 'Reception', 'Tilak']
+
+/** Basis points. Rooms are the only taxed head (client, 20 Jul 2026); see lib/invoice.ts. */
+const ROOM_TAX_BP = 500
 
 export function BookingWizard() {
   const router = useRouter()
@@ -194,12 +201,20 @@ export function BookingWizard() {
     // Tier now, dishes later: saving with no selections keeps the menu incomplete (FR-3.2).
     if (spec.tierId) {
       try {
-        await api(`/sub-events/${subEvent.id}/menu`, {
-          method: 'PUT',
-          body: JSON.stringify({ tier_id: spec.tierId, is_tentative: true, selections: {} }),
-        })
-        const tier = tiers.find((t) => t.id === spec.tierId)
-        if (tier) setMenuBySub((m) => ({ ...m, [subEvent.id]: { tierName: tier.name, perPlatePaise: tier.baseRatePaise } }))
+        const saved = await api<{ menu: { tierName: string; perPlatePaise: number } }>(
+          `/sub-events/${subEvent.id}/menu`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ tier_id: spec.tierId, is_tentative: true, selections: {} }),
+          },
+        )
+        // Read the rate back rather than assuming the tier's base: the wedding surcharge
+        // (BR-M5) is added server-side, so a base-rate guess shows Rs. 650 where the guest
+        // is billed Rs. 700. Money is never recomputed on the client.
+        setMenuBySub((m) => ({
+          ...m,
+          [subEvent.id]: { tierName: saved.menu.tierName, perPlatePaise: saved.menu.perPlatePaise },
+        }))
       } catch (e) {
         toast.error(e instanceof Error ? `Function added, but the menu didn't save: ${e.message}` : 'Menu did not save')
       }
@@ -270,12 +285,17 @@ export function BookingWizard() {
 
   // Lodging estimate: rooms × nights × the type's rack rate. The exact charge is settled when
   // the Lodge Manager allocates real rooms, but the proposal has to show a number.
-  const roomsTotalPaise = rooms.reduce((sum, r) => {
-    const rate = options.roomRates?.find((x) => x.roomType === r.room_type)?.rackRatePaise ?? 0
-    const nights = nightsBetween(r.check_in, r.check_out)
-    return sum + rate * Math.max(0, r.count) * nights
-  }, 0)
-  const grandTotalPaise = (quote?.totalPaise ?? 0) + foodTotalPaise + roomsTotalPaise
+  const roomLinePaise = (r: (typeof rooms)[number]) => {
+    // Rate is per lodge + category — the same pairing the server prices with.
+    const rate =
+      options.roomRates?.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
+    return rate * Math.max(0, r.count) * nightsBetween(r.check_in, r.check_out)
+  }
+  const roomsTotalPaise = rooms.reduce((sum, r) => sum + roomLinePaise(r), 0)
+  // Only rooms are taxed, at 5% (client, 20 Jul 2026) — mirrors GST_BP in lib/invoice.ts.
+  // Rounded per line and then summed, exactly as the payment review does it, so this
+  // estimate and the figure on the Draft can never disagree by a rounding paisa.
+  const roomsTaxPaise = rooms.reduce((sum, r) => sum + Math.round((roomLinePaise(r) * ROOM_TAX_BP) / 10000), 0)
 
   return (
     <div className="space-y-6">
@@ -384,29 +404,30 @@ export function BookingWizard() {
             onAdd={addFunction}
             onRemove={removeFunction}
           />
-          {subEvents.length > 0 && (
-            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-              <div className="flex justify-between"><span className="text-muted-foreground">Venue total</span><span className="tabular-nums">{quote ? formatPaise(quote.totalPaise) : '—'}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Food (pax × per plate)</span><span className="tabular-nums">{formatPaise(foodTotalPaise)}</span></div>
-              {roomsTotalPaise > 0 && (
-                <div className="flex justify-between"><span className="text-muted-foreground">Rooms (estimate)</span><span className="tabular-nums">{formatPaise(roomsTotalPaise)}</span></div>
-              )}
-              <div className="mt-1 flex justify-between border-t pt-1 font-medium"><span>Running total</span><span className="tabular-nums">{formatPaise(grandTotalPaise)}</span></div>
-            </div>
-          )}
           <Nav onBack={() => setStep(1)} onNext={() => setStep(3)} busy={busy} nextDisabled={subEvents.length === 0} />
         </StepCard>
       )}
 
       {step === 3 && (
         <StepCard title="Room requirements">
-          <RoomEditor rooms={rooms} setRooms={setRooms} roomTypes={options.roomTypes} />
+          <RoomEditor rooms={rooms} setRooms={setRooms} roomTypes={options.roomTypes} units={options.lodgingUnits ?? []} />
           {rooms.length > 0 && (
-            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+            <div className="space-y-1 rounded-lg border bg-muted/30 p-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Rooms (rack-rate estimate)</span>
                 <span className="tabular-nums">{formatPaise(roomsTotalPaise)}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Tax — 5% on rooms</span>
+                <span className="tabular-nums">+ {formatPaise(roomsTaxPaise)}</span>
+              </div>
+              <div className="flex justify-between border-t pt-1 font-medium">
+                <span>Rooms total</span>
+                <span className="tabular-nums">{formatPaise(roomsTotalPaise + roomsTaxPaise)}</span>
+              </div>
+              <p className="pt-1 text-xs text-muted-foreground">
+                Rooms and their tax count toward the 25% advance needed to block the dates.
+              </p>
             </div>
           )}
           {roomsSavedAt && (
@@ -424,6 +445,21 @@ export function BookingWizard() {
           quote={quote}
           foodTotalPaise={foodTotalPaise}
           roomsTotalPaise={roomsTotalPaise}
+          roomsTaxPaise={roomsTaxPaise}
+          functions={subEvents.map((s) => ({
+            id: s.id,
+            name: s.name,
+            eventDate: s.eventDate,
+            startTime: s.startTime.slice(0, 5),
+            endTime: s.endTime.slice(0, 5),
+            venueLabel: s.bundleId
+              ? options.bundles.find((b) => b.id === s.bundleId)?.name ?? 'Bundle'
+              : options.venues.find((v) => v.id === s.venueId)?.name ?? 'Venue',
+            pax: s.pax,
+            menu: menuBySub[s.id],
+          }))}
+          rooms={rooms}
+          roomRates={options.roomRates ?? []}
           onBack={() => setStep(3)}
           onConfirmed={(code) => {
             toast.success(`Confirmed — ${code}`)
@@ -435,22 +471,60 @@ export function BookingWizard() {
   )
 }
 
+/**
+ * A numbered trail rather than a row of pills: the connector line makes the sequence
+ * legible at a glance, and a done step keeps its number as a tick so progress reads
+ * left-to-right. Colour is never the only cue — position, number and tick all carry it.
+ */
 function Stepper({ step }: { step: number }) {
   return (
-    <ol className="flex flex-wrap gap-2">
-      {STEPS.map((label, i) => (
-        <li
-          key={label}
-          className={cn(
-            'flex items-center gap-2 rounded-full border px-3 py-1 text-sm',
-            i === step && 'border-primary bg-primary text-primary-foreground',
-            i < step && 'border-emerald-300 text-emerald-700 dark:text-emerald-300',
-          )}
-        >
-          <span className="tabular-nums">{i < step ? '✓' : i + 1}</span>
-          {label}
-        </li>
-      ))}
+    <ol className="flex items-start">
+      {STEPS.map((label, i) => {
+        const done = i < step
+        const current = i === step
+        return (
+          <li key={label} className="relative flex flex-1 flex-col items-center gap-2">
+            {/* Connector: drawn behind the marker, half on each side, so the ends never
+                overhang the first and last markers. */}
+            {i > 0 && (
+              <span
+                aria-hidden
+                className={cn(
+                  'absolute left-0 top-4 h-px w-1/2 -translate-x-1/2',
+                  done || current ? 'bg-primary/40' : 'bg-border',
+                )}
+              />
+            )}
+            {i < STEPS.length - 1 && (
+              <span
+                aria-hidden
+                className={cn(
+                  'absolute right-0 top-4 h-px w-1/2 translate-x-1/2',
+                  done ? 'bg-primary/40' : 'bg-border',
+                )}
+              />
+            )}
+            <span
+              className={cn(
+                'relative z-10 grid size-8 place-items-center rounded-full border text-[13px] tabular-nums transition-colors',
+                current && 'border-primary bg-primary font-semibold text-primary-foreground',
+                done && 'border-primary/40 bg-card text-primary',
+                !done && !current && 'border-border bg-card text-muted-foreground',
+              )}
+            >
+              {done ? '✓' : i + 1}
+            </span>
+            <span
+              className={cn(
+                'text-center text-xs leading-tight',
+                current ? 'font-semibold text-primary' : 'text-muted-foreground',
+              )}
+            >
+              {label}
+            </span>
+          </li>
+        )
+      })}
     </ol>
   )
 }
@@ -584,7 +658,12 @@ function FunctionsEditor({
     setBusy(true)
     try {
       await onAdd({ name, eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), note, tierId })
-      setName(''); setDate(''); setTarget(''); setStart(''); setEnd(''); setPax(''); setNote(''); setTierId(''); setFreeVenues(null)
+      // Carry the run of the event forward rather than blanking the form: the next function
+      // usually follows straight on, on the same day, at the same head count and tier. Only
+      // what genuinely differs each time is cleared. (Client: adding functions one by one
+      // from scratch was tedious.)
+      setName(''); setTarget(''); setNote(''); setFreeVenues(null)
+      setStart(end); setEnd('')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not add function')
     } finally {
@@ -593,14 +672,26 @@ function FunctionsEditor({
   }
 
   const venueItems = freeVenues ?? []
-  const tierItems = tiers.map((t) => ({ value: t.id, label: `${t.name} — ${formatPaise(t.baseRatePaise)}/plate` }))
+  // No price in the picker: the per-plate rate is internal and must not be quoted here
+  // (client, 20 Jul 2026). It appears once, correctly surcharged, on Payment review.
+  const tierItems = tiers.map((t) => ({ value: t.id, label: t.name }))
 
   return (
     <div className="space-y-4">
+      {/* The functions read as a trail of their own — Haldi → Mehndi → Sangeet — so the run
+          of the event is visible while it is being built, not just at review. Numbering
+          follows date/time order, which is the order the server returns them in. */}
       {rows.length > 0 && (
-        <ul className="divide-y rounded-lg border">
-          {rows.map((r) => (
-            <li key={r.id} className="px-3 py-2 text-sm">
+        <ol className="space-y-0">
+          {rows.map((r, i) => (
+            <li key={r.id} className="relative flex gap-3 pb-3 text-sm last:pb-0">
+              {i < rows.length - 1 && (
+                <span aria-hidden className="absolute bottom-0 left-4 top-9 w-px bg-border" />
+              )}
+              <span className="relative z-10 grid size-8 shrink-0 place-items-center rounded-full border border-primary/40 bg-card text-[13px] font-medium tabular-nums text-primary">
+                {i + 1}
+              </span>
+              <div className="min-w-0 flex-1 rounded-lg border bg-card p-3">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <span className="font-medium">{r.name}</span>{' '}
@@ -608,9 +699,8 @@ function FunctionsEditor({
                     {r.eventDate} · {r.startTime}–{r.endTime} · {r.venueLabel} · {r.pax} pax
                   </span>
                   <div className="text-xs text-muted-foreground">
-                    {r.menu
-                      ? `${r.menu.tierName} · ${formatPaise(r.menu.perPlatePaise)}/plate · food ${formatPaise(r.menu.perPlatePaise * r.pax)}`
-                      : 'No menu chosen'}
+                    {/* Tier only — no rate on the selection step (client, 20 Jul 2026). */}
+                    {r.menu ? r.menu.tierName : 'No menu chosen'}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
@@ -633,12 +723,40 @@ function FunctionsEditor({
                   <MenuPicker subEventId={r.id} tiers={tiers} pools={pools} canEdit />
                 </div>
               )}
+              </div>
             </li>
           ))}
-        </ul>
+        </ol>
       )}
 
       <div className="rounded-lg border p-4">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h4 className="text-sm font-medium">
+            {rows.length === 0 ? 'Add the first function' : `Add function ${rows.length + 1}`}
+          </h4>
+          {rows.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              Date, pax and menu carried over from {rows[rows.length - 1]!.name} — change anything that differs.
+            </span>
+          )}
+        </div>
+
+        {/* Quick-pick names for the usual run of an Indian wedding. Typing is still fine. */}
+        {rows.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-1">
+            {SUGGESTED_FUNCTIONS.filter((s) => !rows.some((r) => r.name.toLowerCase() === s.toLowerCase())).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setName(s)}
+                className="rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                + {s}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Date">
             <Input type="date" min={fromDate || undefined} max={toDate || undefined} value={date} onChange={(e) => setDate(e.target.value)} />
@@ -709,19 +827,28 @@ function RoomEditor({
   rooms,
   setRooms,
   roomTypes,
+  units,
 }: {
   rooms: RoomReq[]
   setRooms: (r: RoomReq[]) => void
   roomTypes: string[]
+  units: { id: string; name: string }[]
 }) {
-  const add = () => setRooms([...rooms, { room_type: roomTypes[0] ?? 'deluxe', count: 1, check_in: '', check_out: '' }])
+  // Lodge + category + count + dates is the whole booking (client, 21 Jul 2026). No room
+  // numbers: which actual room a guest gets is the reception desk's call, not this system's.
+  const add = () =>
+    setRooms([...rooms, { unit_id: units[0]?.id ?? '', room_type: roomTypes[0] ?? 'deluxe', count: 1, check_in: '', check_out: '' }])
   const update = (i: number, patch: Partial<RoomReq>) => setRooms(rooms.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const remove = (i: number) => setRooms(rooms.filter((_, j) => j !== i))
   return (
     <div className="space-y-3">
       {rooms.length === 0 && <p className="text-sm text-muted-foreground">No rooms required. Add a line if the guest needs lodging.</p>}
       {rooms.map((r, i) => (
-        <div key={i} className="grid gap-2 sm:grid-cols-5">
+        <div key={i} className="grid gap-2 sm:grid-cols-6">
+          <Select items={units.map((u) => ({ value: u.id, label: u.name }))} value={r.unit_id} onValueChange={(v) => update(i, { unit_id: v ?? '' })}>
+            <SelectTrigger><SelectValue placeholder="Lodge" /></SelectTrigger>
+            <SelectContent>{units.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
+          </Select>
           <Select items={roomTypes.map((t) => ({ value: t, label: t }))} value={r.room_type} onValueChange={(v) => update(i, { room_type: v ?? '' })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>{roomTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
@@ -751,6 +878,10 @@ function ReviewStep({
   quote,
   foodTotalPaise,
   roomsTotalPaise,
+  roomsTaxPaise,
+  functions,
+  rooms,
+  roomRates,
   onBack,
   onConfirmed,
 }: {
@@ -758,6 +889,10 @@ function ReviewStep({
   quote: Quote | null
   foodTotalPaise: number
   roomsTotalPaise: number
+  roomsTaxPaise: number
+  functions: FunctionRow[]
+  rooms: RoomReq[]
+  roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
   onBack: () => void
   onConfirmed: (code: string) => void
 }) {
@@ -808,32 +943,77 @@ function ReviewStep({
           <div className="rounded-lg border">
             <table className="w-full text-sm">
               <tbody className="divide-y">
-                {quote.lines.map((l) => (
-                  <tr key={l.subEventId}>
-                    <td className="px-3 py-2">{l.name}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {l.ratePaise == null ? <span className="text-destructive">no rate</span> : formatPaise(l.ratePaise)}
-                    </td>
-                  </tr>
-                ))}
-                <tr>
-                  <td className="px-3 py-2 text-muted-foreground">Venue total</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.totalPaise)}</td>
-                </tr>
-                <tr>
-                  <td className="px-3 py-2 text-muted-foreground">Food (pax × per plate)</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(foodTotalPaise)}</td>
-                </tr>
-                <tr>
-                  <td className="px-3 py-2 text-muted-foreground">Rooms (rack-rate estimate)</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(roomsTotalPaise)}</td>
-                </tr>
+                {/* Every function spelled out — venue, menu, pax and the arithmetic — so the
+                    total can be checked line by line rather than taken on trust. */}
+                {functions.map((f) => {
+                  const venuePaise = quote.lines.find((l) => l.subEventId === f.id)?.ratePaise ?? null
+                  const foodPaise = (f.menu?.perPlatePaise ?? 0) * f.pax
+                  return (
+                    <Fragment key={f.id}>
+                      <tr className="bg-muted/40">
+                        <td colSpan={2} className="px-3 py-1.5 text-xs font-semibold">
+                          {f.name}
+                          <span className="ml-2 font-normal tabular-nums text-muted-foreground">
+                            {f.eventDate} · {f.startTime}–{f.endTime} · {f.pax} pax
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-2">Venue — {f.venueLabel}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          {venuePaise == null ? <span className="text-destructive">no rate</span> : formatPaise(venuePaise)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-2">
+                          {f.menu
+                            ? `Food — ${f.menu.tierName}, ${f.pax} pax × ${formatPaise(f.menu.perPlatePaise)}/plate`
+                            : `Food — no menu chosen yet (${f.pax} pax)`}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{formatPaise(foodPaise)}</td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{f.name} sub-total</td>
+                        <td className="px-3 py-2 text-right text-xs tabular-nums text-muted-foreground">
+                          {formatPaise((venuePaise ?? 0) + foodPaise)}
+                        </td>
+                      </tr>
+                    </Fragment>
+                  )
+                })}
+
+                {rooms.length > 0 && (
+                  <>
+                    <tr className="bg-muted/40">
+                      <td colSpan={2} className="px-3 py-1.5 text-xs font-semibold">Rooms</td>
+                    </tr>
+                    {rooms.map((r, i) => {
+                      const rate = roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
+                      const nights = nightsBetween(r.check_in, r.check_out)
+                      return (
+                        <tr key={`${r.room_type}-${i}`}>
+                          <td className="px-3 py-2">
+                            <span className="capitalize">{r.room_type.replace(/_/g, ' ')}</span>
+                            {' — '}{r.count} room{r.count === 1 ? '' : 's'} × {nights} night{nights === 1 ? '' : 's'} × {formatPaise(rate)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular-nums">
+                            {formatPaise(rate * Math.max(0, r.count) * nights)}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                    <tr>
+                      <td className="px-3 py-2 text-muted-foreground">Tax — 5% on rooms</td>
+                      <td className="px-3 py-2 text-right tabular-nums">+ {formatPaise(roomsTaxPaise)}</td>
+                    </tr>
+                  </>
+                )}
                 <tr className="font-medium">
-                  <td className="px-3 py-2">Proposal total</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.totalPaise + foodTotalPaise + roomsTotalPaise)}</td>
+                  <td className="px-3 py-2">Estimated total</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise)}</td>
                 </tr>
                 <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">Advance required (25% of venue)</td>
+                  <td className="px-3 py-2">Advance required (25% of the total, rooms included)</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.advanceRequiredPaise)}</td>
                 </tr>
               </tbody>
@@ -841,7 +1021,7 @@ function ReviewStep({
           </div>
           <p className="text-xs text-muted-foreground">
             Rooms are a rack-rate estimate until the Lodge Manager allocates them; maintenance is
-            added to the final bill once logged.
+            added to the payment review once logged.
           </p>
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

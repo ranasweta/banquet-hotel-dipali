@@ -134,17 +134,32 @@ describe('rooms.regency.seed.json', () => {
     expect([...new Set(regency.rooms.map((r) => r.block))].sort()).toEqual(['A', 'B', 'C'])
   })
 
-  it('carries the real rack rates from PRD §3.3', () => {
+  it('carries the rates the 2026 proposal prints for Regency', () => {
     const rateFor = (type: string) => regency.rooms.find((r) => r.roomType === type)?.rackRatePaise
     expect(rateFor('deluxe')).toBe(rupeesToPaise(4500))
     expect(rateFor('semi_suite')).toBe(rupeesToPaise(6000))
     expect(rateFor('suite')).toBe(rupeesToPaise(7000))
     expect(rateFor('dormitory')).toBe(rupeesToPaise(50_000))
+    // Not on the Regency page — the client confirmed both (21 Jul 2026).
+    expect(rateFor('semi_deluxe')).toBe(rupeesToPaise(7000)) // priced as Executive Deluxe
+    expect(rateFor('presidential_suite')).toBe(rupeesToPaise(11_000))
   })
 
-  it('models the 30-bed dormitory as one bookable unit', () => {
+  it('holds the client-confirmed category counts, adding to 49', () => {
+    const n = (type: string) => regency.rooms.filter((r) => r.roomType === type).length
+    expect(n('deluxe')).toBe(27) // 12 + 15
+    expect(n('semi_deluxe')).toBe(11)
+    expect(n('semi_suite')).toBe(6)
+    expect(n('suite')).toBe(2)
+    expect(n('presidential_suite')).toBe(3)
+    expect(n('deluxe') + n('semi_deluxe') + n('semi_suite') + n('suite') + n('presidential_suite')).toBe(49)
+  })
+
+  it('has ONE dormitory, booked whole', () => {
+    // A dormitory is indivisible — beds are never selectable — so the bed count is
+    // descriptive and the rate is per dormitory.
     const dorms = regency.rooms.filter((r) => r.roomType === 'dormitory')
     expect(dorms).toHaveLength(1)
-    expect(dorms[0]!.beds).toBe(30)
+    expect(dorms[0]!.rackRatePaise).toBe(rupeesToPaise(50_000))
   })
 })

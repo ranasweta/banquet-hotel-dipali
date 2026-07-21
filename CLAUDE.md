@@ -16,6 +16,43 @@ below before implementing any feature.
 4. `docs/BUILD_PLAN.md` — milestone order with acceptance criteria. Work
    through milestones sequentially; each ends with passing tests.
 
+## How to work
+Behavioural guidelines (after Andrej Karpathy's notes on LLM coding pitfalls).
+These bias toward caution over speed; for trivial tasks, use judgement.
+
+**1. Think before coding.** Don't assume. Don't hide confusion. Surface tradeoffs.
+- State assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them — don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop, name what's confusing, and ask.
+
+**2. Simplicity first.** Minimum code that solves the problem. Nothing speculative.
+- No features beyond what was asked; no abstractions for single-use code.
+- No "flexibility" or configurability that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+- Test: "would a senior engineer call this overcomplicated?" If yes, simplify.
+- Caveat: the non-negotiable rules below are *requirements*, not speculative
+  extras. Auditing a write, checking a permission, or snapshotting a menu is
+  never scope creep — leaving it out is a bug.
+
+**3. Surgical changes.** Touch only what you must. Clean up only your own mess.
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor what isn't broken. Match existing style even if you'd differ.
+- Notice unrelated dead code? Mention it — don't delete it.
+- Do remove imports/variables/functions that *your* change orphaned.
+- Test: every changed line should trace directly to the request.
+
+**4. Goal-driven execution.** Define success criteria, then loop until verified.
+- "Add validation" → "write tests for invalid inputs, then make them pass".
+- "Fix the bug" → "write a test that reproduces it, then make it pass".
+- "Refactor X" → "ensure tests pass before and after".
+- For multi-step work, state a brief plan as `step → verify: check` lines.
+- Strong criteria let you work independently; "make it work" doesn't.
+
+Working if: fewer stray diffs, fewer rewrites from overcomplication, and
+clarifying questions arriving before implementation rather than after mistakes.
+
 ## Stack
 - Next.js 14+ (App Router) + TypeScript strict
 - PostgreSQL 16, Drizzle ORM (introspect from `db/schema.sql`, keep SQL as

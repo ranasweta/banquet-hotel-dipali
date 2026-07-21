@@ -143,7 +143,12 @@ export const RATE_CARDS: RateSeed[] = [
   { bundle: 'Lotus + Signature', ratePaise: rupeesToPaise(500_000) },
 ]
 
-export const LODGING_UNITS = ['Palace', 'Regency', 'Grand / Regency A-block'] as const
+// Client, 20 Jul 2026: the lodges are Regency, Palace and Residency — "Dipali Grand" is not
+// one of them. Residency returns here as a LODGING unit only; it is still not a property,
+// because the 2026 proposal prices no venue there (see the VENUES note above and
+// SEED_ASSUMPTIONS §F1). The old 'Grand / Regency A-block' unit is retired into it, taking
+// its two PRD §3.3 rack rates along.
+export const LODGING_UNITS = ['Palace', 'Regency', 'Residency'] as const
 
 export type RoomSeed = {
   block: string | null
@@ -154,8 +159,16 @@ export type RoomSeed = {
 }
 
 /**
- * Palace: 33 Deluxe + 3 Suite = 36 rooms, plus dormitory blocks A and B of 18 beds each
- * (PRD §3.3). Counts and rates are real; ROOM NUMBERS ARE INVENTED — the PRD gives none.
+ * Palace: 33 Deluxe + 3 Suite = 36 rooms, plus ONE dormitory of 18 beds.
+ * Counts and categories confirmed by the client 21 Jul 2026; rates are the hotel's 2026
+ * proposal (Palace page): Deluxe Rs. 5,000, Suite Rs. 8,000, Dormitory 18 beds Rs. 35,000.
+ *
+ * The client was asked directly whether Palace's rooms take the proposal's "Executive
+ * Deluxe" Rs. 7,000 — they do not: Palace is priced off its own page. The 36 also settles
+ * the earlier "38 rooms" figure, which turned out to be a miscount.
+ *
+ * The dormitory is one bookable unit at Rs. 35,000. Beds are never selectable.
+ * ROOM NUMBERS ARE INTERNAL — rooms are booked in bulk by lodge and category.
  */
 export const PALACE_ROOMS: RoomSeed[] = [
   ...Array.from({ length: 33 }, (_, i) => ({
@@ -172,19 +185,31 @@ export const PALACE_ROOMS: RoomSeed[] = [
     beds: 2,
     rackRatePaise: rupeesToPaise(8_000),
   })),
-  // Each dormitory block is one bookable unit of 18 beds at Rs. 35,000 (see
-  // SEED_ASSUMPTIONS.md — per block or per bed is an open question).
   { block: 'A', roomNo: 'DORM-A', roomType: 'dormitory', beds: 18, rackRatePaise: rupeesToPaise(35_000) },
-  { block: 'B', roomNo: 'DORM-B', roomType: 'dormitory', beds: 18, rackRatePaise: rupeesToPaise(35_000) },
 ]
 
 /**
- * Grand / Regency A-block has rack rates in PRD §3.3 (Executive Deluxe Rs. 7,000,
- * Presidential Suite Rs. 11,000) but NO room count and NO structure — the table prints
- * "—". The unit is seeded with zero rooms rather than inventing an inventory out of
- * nothing. Rooms cannot be allocated here until the client supplies the real list.
+ * Residency: 28 rooms. STILL AN ASSUMPTION — the client has not supplied its breakdown
+ * (21 Jul 2026: "residency is still not clear, we can stick to our assumption for now").
+ * The 20/8 split and the room numbers are invented; the rates are the proposal's Executive
+ * Deluxe Rs. 7,000 and Presidential Suite Rs. 11,000. See SEED_ASSUMPTIONS §F1.
  */
-export const GRAND_ROOMS: RoomSeed[] = []
+export const RESIDENCY_ROOMS: RoomSeed[] = [
+  ...Array.from({ length: 20 }, (_, i) => ({
+    block: null,
+    roomNo: `R${101 + i}`,
+    roomType: 'deluxe',
+    beds: 2,
+    rackRatePaise: rupeesToPaise(7_000),
+  })),
+  ...Array.from({ length: 8 }, (_, i) => ({
+    block: null,
+    roomNo: `R${201 + i}`,
+    roomType: 'presidential_suite',
+    beds: 2,
+    rackRatePaise: rupeesToPaise(11_000),
+  })),
+]
 
 export const MODULES = [
   'bookings',
@@ -192,6 +217,10 @@ export const MODULES = [
   'menus',
   'menu_master',
   'rooms',
+  // The lodging calendar is its own module so it can be granted independently of `rooms`
+  // (client, 20 Jul 2026: it belongs to the Lodge Manager). Sharing `rooms` meant no
+  // permission could show the calendar without also showing the room-by-room board.
+  'lodging_calendar',
   'maintenance',
   'approvals',
   'billing',
@@ -229,14 +258,24 @@ export type RoleName = (typeof ROLES)[number]
 type Grant = 'view' | 'edit' | 'full' | 'none'
 
 const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
-  bookings:    { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'view', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
-  calendar:    { booking_manager: 'view', banquet_manager: 'edit', lodge_manager: 'view', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'view' },
+  // Client, 20 Jul 2026: the Lodge Manager's sidebar is the lodging calendar and nothing
+  // else, so every grant that would add a tab is revoked. `rooms` stays (their job) and
+  // `billing` stays (no tab, but it carries their lock sign-off). Departs from PRD §2.1,
+  // which gives them bookings/calendar/approvals — recorded in SEED_ASSUMPTIONS §F6.
+  bookings:    { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  calendar:    { booking_manager: 'view', banquet_manager: 'edit', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'view' },
   // The Chef reads menus to price a delicacy request, but never edits a guest's menu.
   menus:       { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   menu_master: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   rooms:       { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  // Lodge Managers only by default. The Auditor keeps `full` because that role IS the
+  // permission utility — it grants and revokes for everyone, so locking it out of a module
+  // would make the module ungovernable. Anyone else can be granted this from /admin/roles.
+  lodging_calendar: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'view', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none' },
   maintenance: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none' },
-  approvals:   { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  // `view`, not `edit`: the Lodge Manager must see the outcome of the 35+ room exceptions
+  // they raise (BR-L2), but deciding one is the Higher Authority's call, not theirs.
+  approvals:   { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'view', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   billing:     { booking_manager: 'none', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
   audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
@@ -274,7 +313,7 @@ export const USERS: UserSeed[] = [
   { fullName: 'Higher Authority 2', mobile: '9000000003', role: 'higher_authority' },
   { fullName: 'Lodge Manager — Palace', mobile: '9000000004', role: 'lodge_manager' },
   { fullName: 'Lodge Manager — Regency', mobile: '9000000005', role: 'lodge_manager' },
-  { fullName: 'Lodge Manager — Grand', mobile: '9000000006', role: 'lodge_manager' },
+  { fullName: 'Lodge Manager — Residency', mobile: '9000000006', role: 'lodge_manager' },
   { fullName: 'Booking Manager 1', mobile: '9000000007', role: 'booking_manager' },
   { fullName: 'Booking Manager 2', mobile: '9000000008', role: 'booking_manager' },
   { fullName: 'Booking Manager 3', mobile: '9000000009', role: 'booking_manager' },

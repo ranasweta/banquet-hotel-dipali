@@ -1,11 +1,23 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { ChevronLeft, ChevronRight, Info } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+
+/**
+ * The venue calendar as a month/week grid (client, 20 Jul 2026), replacing the venues × dates
+ * matrix. Confirmed-and-beyond bookings only — enquiries never appear here (FR-2.5).
+ *
+ * ONE THING TO KNOW ABOUT THE WINDOW. FR-2.1 caps operational roles to a rolling 15 days and
+ * `/calendar` clamps `from`/`to` server-side. A month grid asks for ~35 days, so a capped
+ * role gets data for only part of it. Those out-of-range days are drawn as explicitly
+ * *unavailable* rather than empty — an empty-looking day on a booking calendar reads as
+ * "free to sell", and that would be a lie the moment someone books into it.
+ */
 
 type Venue = { id: string; name: string; kind: string; propertyName: string }
 type Booking = {
@@ -29,78 +41,66 @@ type CalendarResponse = {
   bookings: Booking[]
 }
 
-// Status color system (FR-2.5). Color is never the only signal — each chip also carries
-// a text time and, for carryover, a "↳" glyph. Tuned for light and dark.
-const STATUS_STYLES: Record<string, string> = {
-  confirmed:
-    'bg-blue-50 text-blue-800 ring-blue-200 dark:bg-blue-950/60 dark:text-blue-200 dark:ring-blue-900',
-  in_progress:
-    'bg-emerald-50 text-emerald-800 ring-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-200 dark:ring-emerald-900',
-  completed:
-    'bg-slate-100 text-slate-700 ring-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:ring-slate-700',
-  locked:
-    'bg-violet-50 text-violet-800 ring-violet-200 dark:bg-violet-950/60 dark:text-violet-200 dark:ring-violet-900',
-  billed:
-    'bg-violet-50 text-violet-800 ring-violet-200 dark:bg-violet-950/60 dark:text-violet-200 dark:ring-violet-900',
-  closed:
-    'bg-slate-100 text-slate-600 ring-slate-200 dark:bg-slate-800/60 dark:text-slate-400 dark:ring-slate-700',
+// Status colour (FR-2.5). Never the only signal — each chip also carries a time and, for a
+// carryover tail, a "↳" glyph. The left rule is what reads at a glance in a dense grid.
+const STATUS_RULE: Record<string, string> = {
+  confirmed: 'border-l-[var(--chart-2)]',
+  in_progress: 'border-l-emerald-500',
+  completed: 'border-l-muted-foreground',
+  locked: 'border-l-primary',
+  billed: 'border-l-primary',
+  closed: 'border-l-muted-foreground',
 }
-const CARRYOVER_STYLE =
-  'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950/50 dark:text-amber-200 dark:ring-amber-900'
+const CARRYOVER_RULE = 'border-l-amber-500'
 
-type Chip = {
-  key: string
-  booking: Booking
-  label: string // time text
-  carryover: boolean
-}
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-function dateOnly(iso: string): string {
-  return iso.slice(0, 10)
-}
-function timeOnly(iso: string): string {
-  return iso.slice(11, 16)
-}
-function nextDay(date: string): string {
+function dateOnly(iso: string) { return iso.slice(0, 10) }
+function timeOnly(iso: string) { return iso.slice(11, 16) }
+function ymd(d: Date) { return d.toISOString().slice(0, 10) }
+function parse(date: string) {
   const [y, m, d] = date.split('-').map(Number)
-  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)
+  return new Date(Date.UTC(y, m - 1, d))
 }
-function eachDay(from: string, to: string): string[] {
-  const days: string[] = []
-  let d = from
-  // Guard against an unbounded loop; the window is at most a few weeks.
-  for (let i = 0; i < 120 && d <= to; i++) {
-    days.push(d)
-    d = nextDay(d)
-  }
-  return days
+function shift(date: string, days: number) {
+  const d = parse(date); d.setUTCDate(d.getUTCDate() + days); return ymd(d)
 }
-
-function formatDayHeader(date: string): { weekday: string; day: string; month: string } {
-  const [y, m, d] = date.split('-').map(Number)
-  const dt = new Date(Date.UTC(y, m - 1, d))
-  return {
-    weekday: dt.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }),
-    day: String(d),
-    month: dt.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }),
-  }
+function shiftMonths(date: string, months: number) {
+  const d = parse(date); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + months); return ymd(d)
 }
-function titleCase(s: string): string {
+function startOfMonth(date: string) { const d = parse(date); d.setUTCDate(1); return ymd(d) }
+function startOfWeek(date: string) { const d = parse(date); return shift(ymd(d), -d.getUTCDay()) }
+function monthLabel(date: string) {
+  return parse(date).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+}
+function longDate(date: string) {
+  return parse(date).toLocaleDateString('en-US', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  })
+}
+function titleCase(s: string) {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+type Chip = { key: string; booking: Booking; label: string; carryover: boolean }
+
 export function CalendarBoard() {
   const [data, setData] = useState<CalendarResponse | null>(null)
-  const [range, setRange] = useState<{ from?: string; to?: string }>({})
+  const [mode, setMode] = useState<'month' | 'week'>('month')
+  const [anchor, setAnchor] = useState(() => new Date().toLocaleDateString('en-CA'))
+  const [selected, setSelected] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const today = new Date().toLocaleDateString('en-CA')
 
-  const load = useCallback(async (from?: string, to?: string) => {
+  // The visible grid always starts on a Sunday and, in month mode, covers whole weeks.
+  const gridFrom = mode === 'month' ? startOfWeek(startOfMonth(anchor)) : startOfWeek(anchor)
+  const gridDays = mode === 'month' ? 42 : 7
+  const gridTo = shift(gridFrom, gridDays - 1)
+
+  const load = useCallback(async (from: string, to: string) => {
     setLoading(true)
     try {
-      const qs = from && to ? `?from=${from}&to=${to}` : ''
-      const res = await api<CalendarResponse>(`/calendar${qs}`)
-      setData(res)
+      setData(await api<CalendarResponse>(`/calendar?from=${from}&to=${to}`))
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load the calendar')
     } finally {
@@ -109,53 +109,46 @@ export function CalendarBoard() {
   }, [])
 
   useEffect(() => {
-    // Fetch on mount and whenever the range changes; state is set in load's async body.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    load(range.from, range.to)
-  }, [load, range])
+    load(gridFrom, gridTo)
+  }, [load, gridFrom, gridTo])
 
-  const shift = (dir: 1 | -1) => {
-    if (!data) return
-    const days = data.windowDays
-    const move = (date: string, n: number) => {
-      let d = date
-      const step = n < 0 ? -1 : 1
-      for (let i = 0; i < Math.abs(n); i++) {
-        const [y, mo, da] = d.split('-').map(Number)
-        d = new Date(Date.UTC(y, mo - 1, da + step)).toISOString().slice(0, 10)
-      }
-      return d
-    }
-    setRange({ from: move(data.from, dir * days), to: move(data.to, dir * days) })
-  }
+  const days = useMemo(
+    () => Array.from({ length: gridDays }, (_, i) => shift(gridFrom, i)),
+    [gridFrom, gridDays],
+  )
 
-  const days = useMemo(() => (data ? eachDay(data.from, data.to) : []), [data])
+  const venueName = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const v of data?.venues ?? []) m.set(v.id, v.name)
+    return m
+  }, [data])
 
-  // cell[venueId][date] = chips. A cross-midnight booking appears on its start day (main)
-  // and, as a carryover tail, on the following morning.
+  // date -> chips. A cross-midnight booking shows on its start day and again, as a tail,
+  // on the following morning (BR-C1).
   const cells = useMemo(() => {
     const map = new Map<string, Chip[]>()
-    const push = (venueId: string, date: string, chip: Chip) => {
-      const k = `${venueId}|${date}`
-      const list = map.get(k) ?? []
+    const push = (date: string, chip: Chip) => {
+      const list = map.get(date) ?? []
       list.push(chip)
-      map.set(k, list)
+      map.set(date, list)
     }
-    if (!data) return map
-    for (const b of data.bookings) {
-      const startDate = dateOnly(b.starts)
-      const endDate = dateOnly(b.ends)
-      const crosses = endDate > startDate
-      // Key on the sub-event id (not the event id): one event can hold several sub-events
-      // on the same venue and day — the exact same-day double-booking the model allows.
-      push(b.venueId, startDate, {
+    for (const b of data?.bookings ?? []) {
+      const s = dateOnly(b.starts)
+      const e = dateOnly(b.ends)
+      const crosses = e > s
+      // Key on sub-event AND venue: booking a bundle writes one row per member venue, so
+      // one sub-event legitimately appears more than once on a day (FR-2.3). Keying on the
+      // sub-event alone collides, and React may then drop one of the two — a booked venue
+      // silently missing from the calendar.
+      push(s, {
         key: `${b.subEventId}-${b.venueId}-main`,
         booking: b,
         label: crosses ? `${timeOnly(b.starts)}→` : `${timeOnly(b.starts)}–${timeOnly(b.ends)}`,
         carryover: false,
       })
       if (crosses) {
-        push(b.venueId, endDate, {
+        push(e, {
           key: `${b.subEventId}-${b.venueId}-tail`,
           booking: b,
           label: `↳ till ${timeOnly(b.ends)}`,
@@ -166,174 +159,242 @@ export function CalendarBoard() {
     return map
   }, [data])
 
+  /** A day the server refused to return data for — not the same thing as a day with none. */
+  const outOfWindow = (date: string) => !!data && (date < data.from || date > data.to)
+  const inMonth = (date: string) => mode === 'week' || date.slice(0, 7) === anchor.slice(0, 7)
+
+  const step = (dir: 1 | -1) =>
+    setAnchor((a) => (mode === 'month' ? shiftMonths(a, dir) : shift(startOfWeek(a), dir * 7)))
+
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-0.5 rounded-lg border bg-card p-0.5">
+          {(['month', 'week'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={cn(
+                'rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors',
+                'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring',
+                mode === m ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+
         <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => shift(-1)}
-            disabled={loading || data?.capped}
-            aria-label="Previous window"
-          >
+          <Button variant="outline" size="icon" onClick={() => step(-1)} disabled={loading} aria-label={`Previous ${mode}`}>
             <ChevronLeft className="size-4" />
           </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => shift(1)}
-            disabled={loading || data?.capped}
-            aria-label="Next window"
-          >
+          <Button variant="outline" size="icon" onClick={() => step(1)} disabled={loading} aria-label={`Next ${mode}`}>
             <ChevronRight className="size-4" />
           </Button>
         </div>
-        {data && (
-          <span className="text-sm font-medium tabular-nums">
-            {formatRange(data.from, data.to)}
-          </span>
+
+        <h2 className="font-[family-name:var(--font-serif)] text-lg font-semibold">
+          {mode === 'month' ? monthLabel(anchor) : `Week of ${longDate(startOfWeek(anchor))}`}
+        </h2>
+
+        {anchor !== today && (
+          <Button variant="ghost" size="sm" onClick={() => setAnchor(today)}>Today</Button>
         )}
+
         <Legend />
       </div>
 
       {data?.capped && (
         <p className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <Info className="size-3.5 shrink-0" />
-          Your role sees the rolling {data.windowDays}-day operational window. Auditor and
-          Higher Authority can open any date range.
+          Your role sees a rolling {data.windowDays}-day window. Days outside it are marked
+          unavailable rather than empty — they are not known to be free. Auditor and Higher
+          Authority can open any range.
         </p>
       )}
 
-      <div className="overflow-x-auto rounded-lg border bg-card">
-        <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-20 w-52 border-b border-r bg-muted/50 px-3 py-2 text-left font-medium backdrop-blur">
-                Venue
-              </th>
-              {days.map((date) => {
-                const h = formatDayHeader(date)
-                const isToday = date === today
-                return (
-                  <th
-                    key={date}
-                    className={cn(
-                      'min-w-[132px] border-b border-r px-2 py-1.5 text-center font-medium last:border-r-0',
-                      isToday ? 'bg-primary/10' : 'bg-muted/30',
-                    )}
-                  >
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                      {h.weekday}
-                    </div>
-                    <div className="flex items-baseline justify-center gap-1">
-                      <span className={cn('text-base tabular-nums', isToday && 'text-primary')}>
-                        {h.day}
-                      </span>
-                      <span className="text-[11px] text-muted-foreground">{h.month}</span>
-                    </div>
-                  </th>
-                )
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.venues ?? []).map((venue, i) => {
-              const prev = data!.venues[i - 1]
-              const newGroup = !prev || prev.propertyName !== venue.propertyName
-              return (
-                <tr key={venue.id} className="group">
-                  <th
-                    scope="row"
-                    className={cn(
-                      'sticky left-0 z-10 border-b border-r bg-card px-3 py-2 text-left align-top font-normal',
-                      newGroup && 'border-t-2 border-t-border',
-                    )}
-                  >
-                    <div className="font-medium leading-tight">{venue.name}</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {venue.propertyName} · {venue.kind}
-                    </div>
-                  </th>
-                  {days.map((date) => {
-                    const chips = cells.get(`${venue.id}|${date}`) ?? []
-                    const isToday = date === today
-                    return (
-                      <td
-                        key={date}
-                        className={cn(
-                          'h-16 min-w-[132px] border-b border-r p-1 align-top last:border-r-0',
-                          newGroup && 'border-t-2 border-t-border',
-                          isToday && 'bg-primary/5',
-                        )}
-                      >
-                        <div className="flex flex-col gap-1">
-                          {chips.map((chip) => (
-                            <BookingChip key={chip.key} chip={chip} />
-                          ))}
-                        </div>
-                      </td>
-                    )
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+      {/* Grid */}
+      {/* One header row plus one row per visible week, each sharing the leftover
+          height equally — that is what keeps the month inside a single screen. */}
+      <div
+        className="grid min-h-0 flex-1 grid-cols-7 gap-px overflow-hidden rounded-lg border bg-border"
+        style={{ gridTemplateRows: `auto repeat(${gridDays / 7}, minmax(0, 1fr))` }}
+      >
+        {WEEKDAYS.map((w) => (
+          <div
+            key={w}
+            className="bg-muted px-2 py-2.5 text-center text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
+          >
+            {w}
+          </div>
+        ))}
+        {days.map((date) => {
+          const chips = cells.get(date) ?? []
+          const isToday = date === today
+          const isSelected = date === selected
+          const dim = !inMonth(date)
+          const blocked = outOfWindow(date)
+          return (
+            <button
+              key={date}
+              type="button"
+              onClick={() => setSelected(isSelected ? null : date)}
+              aria-pressed={isSelected}
+              className={cn(
+                'flex min-h-0 flex-col gap-1 overflow-hidden p-1.5 text-left align-top transition-colors',
+                'focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                blocked ? 'bg-muted/50' : 'bg-card hover:bg-accent/40',
+                dim && 'opacity-45',
+                isSelected && 'ring-2 ring-inset ring-secondary',
+              )}
+            >
+              <span
+                className={cn(
+                  'grid size-6 place-items-center rounded-full text-[13px] tabular-nums',
+                  isToday ? 'bg-primary font-semibold text-primary-foreground' : 'text-foreground',
+                )}
+              >
+                {Number(date.slice(8, 10))}
+              </span>
+
+              {blocked ? (
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Outside window
+                </span>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {chips.slice(0, 3).map((c) => (
+                    <BookingChip key={c.key} chip={c} venue={venueName.get(c.booking.venueId) ?? ''} />
+                  ))}
+                  {chips.length > 3 && (
+                    <span className="pl-1 text-[10px] text-muted-foreground">+{chips.length - 3} more</span>
+                  )}
+                </div>
+              )}
+            </button>
+          )
+        })}
       </div>
 
       {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
-      {!loading && data && data.bookings.length === 0 && (
-        <p className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-          No confirmed bookings in this window. Enquiries don&apos;t appear here — the board
-          shows locked-in deals only.
-        </p>
+
+      {selected && (
+        <DayPanel
+          date={selected}
+          chips={cells.get(selected) ?? []}
+          venueName={venueName}
+          blocked={outOfWindow(selected)}
+          onClose={() => setSelected(null)}
+        />
       )}
     </div>
   )
 }
 
-function BookingChip({ chip }: { chip: Chip }) {
+function BookingChip({ chip, venue }: { chip: Chip; venue: string }) {
   const { booking, label, carryover } = chip
-  const style = carryover ? CARRYOVER_STYLE : (STATUS_STYLES[booking.status] ?? STATUS_STYLES.confirmed)
   return (
-    <div
-      className={cn('rounded-md px-1.5 py-1 text-left ring-1 ring-inset', style)}
-      title={`${booking.guestName} — ${titleCase(booking.subEventName)} (${booking.eventCode}, ${titleCase(booking.status)})`}
+    <span
+      className={cn(
+        'truncate border-l-2 bg-muted/60 py-0.5 pl-1.5 text-[10px] leading-tight',
+        carryover ? CARRYOVER_RULE : (STATUS_RULE[booking.status] ?? STATUS_RULE.confirmed),
+      )}
+      title={`${booking.guestName} — ${titleCase(booking.subEventName)} · ${venue} · ${label} (${booking.eventCode}, ${titleCase(booking.status)})`}
     >
-      <div className="truncate text-[11px] font-medium leading-tight">{booking.guestName}</div>
-      <div className="truncate text-[10px] leading-tight opacity-90 tabular-nums">{label}</div>
+      <span className="font-medium uppercase">{booking.guestName}</span>
+      {venue && <span className="text-muted-foreground"> · {venue}</span>}
+    </span>
+  )
+}
+
+function DayPanel({
+  date,
+  chips,
+  venueName,
+  blocked,
+  onClose,
+}: {
+  date: string
+  chips: Chip[]
+  venueName: Map<string, string>
+  blocked: boolean
+  onClose: () => void
+}) {
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b px-4 py-3">
+        <div>
+          <h2 className="font-medium">{longDate(date)}</h2>
+          <p className="text-xs text-muted-foreground">
+            {blocked ? 'Outside your window' : `${chips.length} booking${chips.length === 1 ? '' : 's'}`}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onClose}
+          className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground"
+        >
+          Close
+        </Button>
+      </div>
+
+      {blocked ? (
+        <p className="p-4 text-sm text-muted-foreground">
+          This date is outside the rolling window your role can open, so nothing is loaded for
+          it. It is not necessarily free.
+        </p>
+      ) : chips.length === 0 ? (
+        <p className="p-4 text-sm text-muted-foreground">
+          Nothing booked. Enquiries never appear here — the calendar shows locked-in deals only.
+        </p>
+      ) : (
+        <ul className="divide-y">
+          {chips.map((c) => (
+            <li key={c.key} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
+              <div className="min-w-0">
+                <span className="font-medium">{c.booking.guestName}</span>
+                <span className="text-muted-foreground"> · {titleCase(c.booking.subEventName)}</span>
+                <div className="text-xs text-muted-foreground">
+                  {venueName.get(c.booking.venueId)} · <span className="tabular-nums">{c.label}</span>
+                  {c.carryover && ' · runs past midnight'}
+                </div>
+              </div>
+              <Link
+                href={`/bookings/${c.booking.eventId}`}
+                className="shrink-0 text-xs text-primary hover:underline"
+              >
+                {c.booking.eventCode} →
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
 
 function Legend() {
-  const items: { label: string; className: string }[] = [
-    { label: 'Confirmed', className: STATUS_STYLES.confirmed },
-    { label: 'In progress', className: STATUS_STYLES.in_progress },
-    { label: 'Carryover', className: CARRYOVER_STYLE },
+  const items = [
+    { label: 'Confirmed', className: 'bg-[var(--chart-2)]' },
+    { label: 'In progress', className: 'bg-emerald-500' },
+    { label: 'Locked', className: 'bg-primary' },
+    { label: 'Carryover', className: 'bg-amber-500' },
   ]
   return (
-    <div className="ml-auto flex flex-wrap items-center gap-3">
+    <div className="ml-auto flex flex-wrap items-center gap-4">
       {items.map((it) => (
-        <span key={it.label} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className={cn('size-3 rounded-sm ring-1 ring-inset', it.className)} />
+        <span
+          key={it.label}
+          className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground"
+        >
+          <span className={cn('size-2 rounded-full', it.className)} aria-hidden />
           {it.label}
         </span>
       ))}
     </div>
   )
-}
-
-function formatRange(from: string, to: string): string {
-  const fmt = (d: string) => {
-    const [y, m, day] = d.split('-').map(Number)
-    return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString('en-US', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      timeZone: 'UTC',
-    })
-  }
-  return `${fmt(from)} – ${fmt(to)}`
 }

@@ -401,6 +401,9 @@ export const roomRequirements = pgTable("room_requirements", {
 	count: integer().notNull(),
 	checkIn: date("check_in").notNull(),
 	checkOut: date("check_out").notNull(),
+	// Which lodge the rooms come from (migration 0009). NULL only on rows captured before
+	// the proposal asked for it — never inferred, see the migration's note.
+	unitId: uuid("unit_id"),
 }, (table) => [
 	foreignKey({
 			columns: [table.eventId],

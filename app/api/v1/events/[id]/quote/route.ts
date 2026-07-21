@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { notFound, ok, route } from '@/lib/api'
-import { loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
+import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal, roomEstimatePaise } from '@/lib/pricing'
 import { percentOfPaise } from '@/lib/money'
 
 /**
@@ -24,6 +24,7 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
 
   const subs = await loadSubEventsForPricing(id)
   const pricing = await priceProposal(event.eventType, subs)
+  const [extras, roomEst] = await Promise.all([foodAndAddonTotal(id), roomEstimatePaise(id)])
 
   const lines = subs.map((s) => ({
     subEventId: s.id,
@@ -33,7 +34,12 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
 
   return ok({
     totalPaise: pricing.totalPaise,
-    advanceRequiredPaise: percentOfPaise(pricing.totalPaise, 25),
+    // The 25% is measured on everything the guest will pay, rooms included
+    // (client, 20 Jul 2026) — see SEED_ASSUMPTIONS §F10.
+    advanceRequiredPaise: percentOfPaise(
+      pricing.totalPaise + extras.foodPaise + extras.addonPaise + roomEst.roomsPaise + roomEst.roomsTaxPaise,
+      25,
+    ),
     lines,
     missing: pricing.missing,
   })

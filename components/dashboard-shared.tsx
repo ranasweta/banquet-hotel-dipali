@@ -31,15 +31,17 @@ export function Hero({
     <section
       className={cn(
         'overflow-hidden rounded-xl ring-1 ring-foreground/10',
-        accent ? 'bg-gradient-to-br from-blue-600 to-indigo-700 text-white' : 'bg-gradient-to-br from-muted/60 to-card',
+        accent
+          ? 'bg-gradient-to-br from-[var(--sidebar-primary)] to-[var(--primary)] text-primary-foreground'
+          : 'bg-gradient-to-br from-muted/60 to-card',
       )}
     >
       <div className="p-5 sm:p-6">
         <div className="flex items-center justify-between gap-3">
-          <p className={cn('text-xs font-medium uppercase tracking-wide', accent ? 'text-blue-100' : 'text-muted-foreground')}>
+          <p className={cn('text-xs font-medium uppercase tracking-wide', accent ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
             {greeting()}, {firstName(name)}
           </p>
-          <p className={cn('text-xs tabular-nums', accent ? 'text-blue-100' : 'text-muted-foreground')}>
+          <p className={cn('text-xs tabular-nums', accent ? 'text-primary-foreground/75' : 'text-muted-foreground')}>
             {formatFullDate(dateISO)}
           </p>
         </div>
@@ -54,11 +56,13 @@ export function Hero({
 export type Tone = 'blue' | 'amber' | 'emerald' | 'red' | 'slate' | 'violet'
 
 const TONE: Record<Tone, { ring: string; icon: string; value: string }> = {
-  blue: { ring: 'ring-blue-500/20', icon: 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300', value: 'text-foreground' },
+  // The brand's tertiary periwinkle (--chart-2/--chart-5), not Tailwind blue: it is the
+  // one cool accent the palette allows, and it follows the theme in dark mode.
+  blue: { ring: 'ring-[var(--chart-2)]/25', icon: 'bg-[var(--chart-2)]/15 text-[var(--chart-5)] dark:text-[var(--chart-2)]', value: 'text-foreground' },
   amber: { ring: 'ring-amber-500/30', icon: 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300', value: 'text-amber-700 dark:text-amber-300' },
   emerald: { ring: 'ring-emerald-500/20', icon: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300', value: 'text-foreground' },
   red: { ring: 'ring-red-500/30', icon: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300', value: 'text-red-700 dark:text-red-300' },
-  violet: { ring: 'ring-violet-500/20', icon: 'bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300', value: 'text-foreground' },
+  violet: { ring: 'ring-primary/20', icon: 'bg-accent text-accent-foreground', value: 'text-foreground' },
   slate: { ring: 'ring-foreground/10', icon: 'bg-muted text-muted-foreground', value: 'text-foreground' },
 }
 
@@ -154,13 +158,13 @@ export function EmptyState({ text, icon }: { text: string; icon?: React.ReactNod
 // ── Status pill ──────────────────────────────────────────────────────────────
 
 const STATUS_STYLES: Record<string, string> = {
-  enquiry: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  confirmed: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200',
+  enquiry: 'bg-muted text-muted-foreground',
+  confirmed: 'bg-[var(--chart-2)]/15 text-[var(--chart-5)] dark:bg-[var(--chart-2)]/15 dark:text-[var(--chart-2)]',
   in_progress: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
-  completed: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  locked: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-200',
+  completed: 'bg-muted text-muted-foreground',
+  locked: 'bg-accent text-accent-foreground',
   billed: 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-200',
-  closed: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400',
+  closed: 'bg-muted text-muted-foreground',
 }
 
 export function StatusPill({ status }: { status: string }) {

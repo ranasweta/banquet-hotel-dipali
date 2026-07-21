@@ -319,17 +319,12 @@ export function MenuPicker({
             </SelectContent>
           </Select>
         </div>
+        {/* No rate shown while dishes are being chosen: pricing is internal to this step
+            (client, 20 Jul 2026). The per-plate figure — already carrying the wedding
+            surcharge (BR-M5) — appears once on Payment review and on the Draft. */}
         {savedForThisTier && (
-          <div className="text-right text-sm">
-            <div className="tabular-nums">
-              {/* The wedding surcharge is folded into the per-plate rate and deliberately not
-                  called out — the guest knows the scheme; it's a back-office line (BR-M5). */}
-              <span className="font-medium">{formatPaise(savedForThisTier.perPlatePaise)}</span>
-              <span className="text-muted-foreground"> / plate</span>
-            </div>
-            <div className="text-xs text-muted-foreground tabular-nums">
-              {pax} pax → {formatPaise(savedForThisTier.foodTotalPaise)} food
-            </div>
+          <div className="text-right text-xs text-muted-foreground tabular-nums">
+            {pax} pax
           </div>
         )}
       </div>
@@ -448,7 +443,7 @@ export function MenuPicker({
                               onCheckedChange={(v) => toggleItem(cat, item, Boolean(v))}
                             />
                             <span>{item}</span>
-                            <Badge variant="outline" className="text-violet-600">swapped</Badge>
+                            <Badge variant="outline" className="text-primary">swapped</Badge>
                           </label>
                           <ItemNote
                             value={notes[cat.name]?.[item] ?? ''}
@@ -496,7 +491,7 @@ export function MenuPicker({
                       r.status === 'priced'
                         ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
                         : r.status === 'declined'
-                          ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                          ? 'bg-muted text-muted-foreground'
                           : 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
                     )}
                     title={r.remark ?? undefined}

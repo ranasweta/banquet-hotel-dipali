@@ -24,13 +24,13 @@ import { splitMenuItemName } from './menu-split'
 import {
   BUNDLES,
   EVENT_TYPES,
-  GRAND_ROOMS,
   LODGING_UNITS,
   MODULES,
   PALACE_ROOMS,
   PROPERTIES,
   RATE_CARDS,
   RATE_EFFECTIVE_FROM,
+  RESIDENCY_ROOMS,
   ROLES,
   SETTINGS,
   USERS,
@@ -239,7 +239,7 @@ export async function seed(
     const roomRows = [
       ...PALACE_ROOMS.map((r) => ({ ...r, unit: 'Palace' })),
       ...regency.rooms.map((r) => ({ ...r, block: r.block ?? null, unit: 'Regency' })),
-      ...GRAND_ROOMS.map((r) => ({ ...r, unit: 'Grand / Regency A-block' })),
+      ...RESIDENCY_ROOMS.map((r) => ({ ...r, unit: 'Residency' })),
     ].map((r) => ({
       unit_id: unitId.get(r.unit)!,
       block: r.block,

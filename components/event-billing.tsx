@@ -1,14 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, rupeesToPaise } from '@/lib/money'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Select,
@@ -35,25 +34,12 @@ type Ledger = {
   balancePaise: number
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string; note: string | null }[]
 }
-type DiscountRow = { id: string; head: string; amountPaise: number; remark: string; status: 'effective' | 'pending' | 'rejected'; givenAt: string }
-
-const DISC_STATUS: Record<string, string> = {
-  effective: 'text-emerald-600',
-  pending: 'text-amber-600',
-  rejected: 'text-red-600',
-}
 
 export function EventBilling({ eventId, editable }: { eventId: string; editable: boolean }) {
   const [ledger, setLedger] = useState<Ledger | null>(null)
-  const [discs, setDiscs] = useState<DiscountRow[]>([])
 
   const load = useCallback(async () => {
-    const [l, d] = await Promise.all([
-      api<Ledger>(`/events/${eventId}/ledger`),
-      api<{ discounts: DiscountRow[] }>(`/events/${eventId}/discounts`),
-    ])
-    setLedger(l)
-    setDiscs(d.discounts)
+    setLedger(await api<Ledger>(`/events/${eventId}/ledger`))
   }, [eventId])
 
   useEffect(() => {
@@ -79,7 +65,6 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
         />
       </div>
 
-      <DiscountSection eventId={eventId} discs={discs} editable={editable} onChanged={load} />
       <PaymentSection eventId={eventId} ledger={ledger} editable={editable} onChanged={load} />
     </div>
   )
@@ -93,81 +78,6 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
         <div className={cn('text-lg font-semibold tabular-nums', accent)}>{value}</div>
       </CardContent>
     </Card>
-  )
-}
-
-function DiscountSection({ eventId, discs, editable, onChanged }: { eventId: string; discs: DiscountRow[]; editable: boolean; onChanged: () => Promise<void> }) {
-  const [head, setHead] = useState('venue')
-  const [amount, setAmount] = useState('')
-  const [remark, setRemark] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  async function add() {
-    const rupees = Number(amount)
-    if (!Number.isFinite(rupees) || rupees <= 0 || !remark.trim()) {
-      toast.error('Enter a positive amount and a remark')
-      return
-    }
-    setBusy(true)
-    try {
-      const res = await api<{ deferred: boolean }>(`/events/${eventId}/discounts`, {
-        method: 'POST',
-        body: JSON.stringify({ head, amount_paise: rupeesToPaise(rupees), remark: remark.trim() }),
-      })
-      toast[res.deferred ? 'info' : 'success'](res.deferred ? 'Over the 10% cap — sent to the GM for approval.' : 'Discount applied')
-      setAmount(''); setRemark('')
-      await onChanged()
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not add discount')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function remove(id: string) {
-    try { await api(`/discounts/${id}`, { method: 'DELETE' }); await onChanged() }
-    catch (e) { toast.error(e instanceof Error ? e.message : 'Could not remove') }
-  }
-
-  return (
-    <div>
-      <h3 className="mb-2 text-sm font-medium">Discounts</h3>
-      {discs.length === 0 ? (
-        <p className="text-sm text-muted-foreground">None. The combined discount stays ≤ 10% of the proposal (over that needs GM approval).</p>
-      ) : (
-        <ul className="mb-2 space-y-1 text-sm">
-          {discs.map((x) => (
-            <li key={x.id} className="flex items-center justify-between gap-2">
-              <span>
-                <span className="capitalize">{x.head}</span> · {x.remark}
-                <Badge variant="outline" className={cn('ml-2 capitalize', DISC_STATUS[x.status])}>{x.status}</Badge>
-              </span>
-              <span className="flex items-center gap-2 tabular-nums">
-                − {formatPaise(x.amountPaise)}
-                {editable && <Button size="icon-xs" variant="ghost" onClick={() => remove(x.id)}><Trash2 className="size-3" /></Button>}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {editable && (
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="w-32 space-y-1"><Label className="text-xs">Head</Label>
-            <Select value={head} onValueChange={(v) => { if (v) setHead(v) }} items={[{ value: 'venue', label: 'Venue' }, { value: 'menu', label: 'Menu' }, { value: 'overall', label: 'Overall' }]}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="venue">Venue</SelectItem>
-                <SelectItem value="menu">Menu</SelectItem>
-                <SelectItem value="overall">Overall</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="w-28 space-y-1"><Label className="text-xs">Amount ₹</Label><Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></div>
-          <div className="grow space-y-1"><Label className="text-xs">Remark (required)</Label><Input value={remark} onChange={(e) => setRemark(e.target.value)} /></div>
-          <Button variant="outline" onClick={add} disabled={busy}><Plus className="size-4" /> Add</Button>
-        </div>
-      )}
-    </div>
   )
 }
 

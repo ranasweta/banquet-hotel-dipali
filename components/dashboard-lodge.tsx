@@ -34,7 +34,7 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
               {arrivals.length} {arrivals.length === 1 ? 'arrival' : 'arrivals'} · {departures.length}{' '}
               {departures.length === 1 ? 'departure' : 'departures'} today
             </h1>
-            <p className="mt-1 text-sm text-blue-100">
+            <p className="mt-1 text-sm text-primary-foreground/75">
               {occupied} of {totalRooms} rooms occupied right now.
             </p>
           </>
@@ -44,8 +44,8 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiTile icon={<LogIn className="size-5" aria-hidden />} value={arrivals.length} label="Check-ins today" tone={arrivals.length ? 'emerald' : 'slate'} />
         <KpiTile icon={<LogOut className="size-5" aria-hidden />} value={departures.length} label="Check-outs today" tone={departures.length ? 'amber' : 'slate'} />
-        <KpiTile href="/rooms" icon={<DoorOpen className="size-5" aria-hidden />} value={`${occupied}/${totalRooms}`} label="Rooms occupied" tone="blue" />
-        <KpiTile href="/rooms" icon={<ClipboardList className="size-5" aria-hidden />} value={toAllocate} label="Rooms to allocate" tone={toAllocate ? 'amber' : 'emerald'} />
+        <KpiTile href="/rooms/calendar" icon={<DoorOpen className="size-5" aria-hidden />} value={`${occupied}/${totalRooms}`} label="Rooms occupied" tone="blue" />
+        <KpiTile href="/rooms/calendar" icon={<ClipboardList className="size-5" aria-hidden />} value={toAllocate} label="Rooms to allocate" tone={toAllocate ? 'amber' : 'emerald'} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -54,7 +54,7 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
             icon={<BedDouble className="size-4 text-muted-foreground" aria-hidden />}
             title="Occupancy by property"
             note="today"
-            link={{ href: '/rooms', label: 'Rooms board' }}
+            link={{ href: '/rooms/calendar', label: 'Lodging calendar' }}
           >
             {occupancy.length === 0 ? (
               <EmptyState text="No properties configured." />
@@ -72,7 +72,7 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
                       </div>
                       <div className="mt-1 h-2 overflow-hidden rounded-full bg-muted">
                         <div
-                          className={cn('h-full rounded-full', pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-amber-500' : 'bg-blue-500')}
+                          className={cn('h-full rounded-full', pct >= 90 ? 'bg-red-500' : pct >= 60 ? 'bg-amber-500' : 'bg-emerald-500')}
                           style={{ width: `${pct}%` }}
                         />
                       </div>

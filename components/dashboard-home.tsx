@@ -64,19 +64,19 @@ export function DashboardHome({
                   key={fn.subEventId}
                   className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-white/10 px-4 py-3 backdrop-blur-sm"
                 >
-                  <span className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums text-blue-50">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums text-primary-foreground/90">
                     <Clock className="size-4" aria-hidden />
                     {formatTimeRange(fn.startTime, fn.endTime)}
                   </span>
                   <span className="min-w-0 flex-1 text-base font-semibold">
                     {fn.guestName}
-                    <span className="ml-2 font-normal text-blue-100">{fn.name}</span>
+                    <span className="ml-2 font-normal text-primary-foreground/75">{fn.name}</span>
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-sm text-blue-50">
+                  <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/90">
                     <MapPin className="size-4" aria-hidden />
                     {fn.venueName ?? 'Venue TBD'}
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-sm text-blue-100">
+                  <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/75">
                     <Users className="size-4" aria-hidden />
                     {fn.pax}
                   </span>
@@ -88,7 +88,7 @@ export function DashboardHome({
       </Hero>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile href="/day-sheet" icon={<CalendarDays className="size-5" aria-hidden />} value={upcoming.length} label="Functions · next 7 days" tone="blue" />
+        <KpiTile href="/calendar" icon={<CalendarDays className="size-5" aria-hidden />} value={upcoming.length} label="Functions · next 7 days" tone="blue" />
         <KpiTile href="/bookings" icon={<Inbox className="size-5" aria-hidden />} value={openEnquiries.length} label="Open enquiries" hint={staleCount ? `${staleCount} going cold` : undefined} tone={staleCount ? 'amber' : 'slate'} />
         <KpiTile href="/approvals" icon={<ClipboardCheck className="size-5" aria-hidden />} value={approvals.total} label="Awaiting approval" tone={approvals.total ? 'amber' : 'slate'} />
         <KpiTile href="/bookings" icon={<Wallet className="size-5" aria-hidden />} value={paymentsDue.length} label="Balances due · 30 days" hint={dueNowCount ? `${dueNowCount} due now` : undefined} tone={dueNowCount ? 'red' : paymentsDue.length ? 'emerald' : 'slate'} />
@@ -99,7 +99,7 @@ export function DashboardHome({
           className="lg:col-span-2"
           icon={<CalendarDays className="size-4 text-muted-foreground" aria-hidden />}
           title="The week ahead"
-          link={{ href: '/day-sheet', label: 'Day sheet' }}
+          link={{ href: '/calendar', label: 'Calendar' }}
         >
           <AgendaList functions={upcoming} asOf={data.asOf} empty="No functions scheduled in the next seven days." />
         </SectionCard>

@@ -16,8 +16,8 @@ import {
 type TrailRow = { seq: number; at: string; action: string; entity: string; field: string | null; oldValue: string | null; newValue: string | null; userName: string; roleName: string }
 
 const ACTION_STYLE: Record<string, string> = {
-  insert: 'text-emerald-600', update: 'text-blue-600', delete: 'text-red-600',
-  status: 'text-purple-600', approval: 'text-amber-600', lock: 'text-slate-600',
+  insert: 'text-emerald-600', update: 'text-[var(--chart-5)] dark:text-[var(--chart-2)]', delete: 'text-red-600',
+  status: 'text-primary', approval: 'text-amber-600', lock: 'text-muted-foreground',
 }
 
 export function EventTrail({ eventId }: { eventId: string }) {

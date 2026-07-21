@@ -1,4 +1,4 @@
-import { asc, eq, sql } from 'drizzle-orm'
+import { asc, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
@@ -17,19 +17,20 @@ export const GET = route(async () => {
       })
       .from(schema.eventTypes)
       .orderBy(asc(schema.eventTypes.displayName)),
-    db
-      .select({
-        id: schema.venues.id,
-        name: schema.venues.name,
-        kind: schema.venues.kind,
-        propertyName: schema.properties.name,
-        capacityMin: schema.venues.capacityMin,
-        capacityMax: schema.venues.capacityMax,
-      })
-      .from(schema.venues)
-      .innerJoin(schema.properties, eq(schema.properties.id, schema.venues.propertyId))
-      .where(eq(schema.venues.isActive, true))
-      .orderBy(asc(schema.properties.name), asc(schema.venues.name)),
+    // Every active venue, each flagged `priceable`. The list stays complete because callers
+    // also use it to resolve a venue's NAME and capacity for functions already booked — but
+    // anything that lets a user PICK a venue must offer only the priceable ones. Diamond,
+    // Golden, Gulmohar and Middle are priced by the proposal solely as their bundle, so
+    // picking one alone dead-ends at the missing-rate gate (BR-R1).
+    db.execute(sql`
+      SELECT v.id, v.name, v.kind, p.name AS "propertyName",
+             v.capacity_min AS "capacityMin", v.capacity_max AS "capacityMax",
+             EXISTS (SELECT 1 FROM venue_rate_cards r WHERE r.venue_id = v.id) AS priceable
+      FROM venues v
+      JOIN properties p ON p.id = v.property_id
+      WHERE v.is_active
+      ORDER BY p.name, v.name
+    `),
     db.execute(sql`
       SELECT b.id, b.name,
              string_agg(v.name, ' + ' ORDER BY v.name) AS members
@@ -43,9 +44,11 @@ export const GET = route(async () => {
     // (type, count, dates) — the billable rate lands when the Lodge Manager allocates real
     // rooms — so the wizard prices it at the type's lowest rack rate as an estimate.
     db.execute(sql`
-      SELECT room_type AS "roomType", min(rack_rate_paise)::bigint AS "rackRatePaise"
+      -- Per lodge: Residency deluxe is Rs. 7,000 where Palace deluxe is Rs. 5,000, so a
+      -- single min() across lodges would under-quote the guest (21 Jul 2026).
+      SELECT unit_id AS "unitId", room_type AS "roomType", min(rack_rate_paise)::bigint AS "rackRatePaise"
       FROM rooms WHERE is_active
-      GROUP BY room_type
+      GROUP BY unit_id, room_type
       ORDER BY room_type
     `),
   ])
@@ -56,16 +59,27 @@ export const GET = route(async () => {
     members: b.members,
   }))
 
-  const roomRates = (roomTypeRows as unknown as { roomType: string; rackRatePaise: number }[]).map((r) => ({
+  const roomRates = (roomTypeRows as unknown as { unitId: string; roomType: string; rackRatePaise: number }[]).map((r) => ({
+    unitId: r.unitId,
     roomType: r.roomType,
     rackRatePaise: Number(r.rackRatePaise),
   }))
+
+  // Rooms are booked as lodge + category on the proposal (21 Jul 2026), so the wizard needs
+  // the lodges too. Only units that actually have rooms — an empty lodge cannot be booked.
+  const lodgingUnits = (await db.execute(sql`
+    SELECT u.id, u.name
+    FROM lodging_units u
+    WHERE EXISTS (SELECT 1 FROM rooms r WHERE r.unit_id = u.id AND r.is_active)
+    ORDER BY u.name
+  `)) as unknown as { id: string; name: string }[]
 
   return ok({
     eventTypes,
     venues,
     bundles,
-    roomTypes: roomRates.map((r) => r.roomType),
+    roomTypes: [...new Set(roomRates.map((r) => r.roomType))],
     roomRates,
+    lodgingUnits,
   })
 })

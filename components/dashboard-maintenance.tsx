@@ -36,7 +36,7 @@ export function MaintenanceDashboard({ data, user }: { data: MaintenanceData; us
             <h1 className="text-2xl font-semibold sm:text-3xl">
               {inProgress.length} {inProgress.length === 1 ? 'event' : 'events'} in progress
             </h1>
-            <p className="mt-1 text-sm text-blue-100">Log extra costs while each event is live.</p>
+            <p className="mt-1 text-sm text-primary-foreground/75">Log extra costs while each event is live.</p>
           </>
         )}
       </Hero>
@@ -111,7 +111,7 @@ function EventRow({ e }: { e: MaintenanceEventRow }) {
       <span
         className={
           e.closed
-            ? 'shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+            ? 'shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground'
             : 'shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
         }
       >

@@ -35,23 +35,23 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
             <ul className="mt-4 space-y-2">
               {today.map((fn) => (
                 <li key={fn.subEventId} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-white/10 px-4 py-3 backdrop-blur-sm">
-                  <span className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums text-blue-50">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-medium tabular-nums text-primary-foreground/90">
                     <Clock className="size-4" aria-hidden />
                     {formatTimeRange(fn.startTime, fn.endTime)}
                   </span>
                   <span className="min-w-0 flex-1 text-base font-semibold">
                     {fn.guestName}
-                    <span className="ml-2 font-normal text-blue-100">{fn.name}</span>
+                    <span className="ml-2 font-normal text-primary-foreground/75">{fn.name}</span>
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-sm text-blue-50">
+                  <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/90">
                     <MapPin className="size-4" aria-hidden />
                     {fn.venueName ?? 'Venue TBD'}
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-sm text-blue-100">
+                  <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/75">
                     <Users className="size-4" aria-hidden />
                     {fn.pax}
                   </span>
-                  <span className="inline-flex items-center gap-1.5 text-sm text-blue-50">
+                  <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/90">
                     <UtensilsCrossed className="size-4" aria-hidden />
                     {fn.tierName ?? 'no menu'}
                   </span>
@@ -65,7 +65,7 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiTile href="/chef" icon={<ChefHat className="size-5" aria-hidden />} value={toPrice.length} label="Delicacies to price" tone={toPrice.length ? 'amber' : 'slate'} />
         <KpiTile icon={<Users className="size-5" aria-hidden />} value={coversToday} label="Covers today" tone={coversToday ? 'blue' : 'slate'} />
-        <KpiTile href="/day-sheet" icon={<CalendarDays className="size-5" aria-hidden />} value={upcoming.length} label="Functions · next 7 days" tone="blue" />
+        <KpiTile href="/calendar" icon={<CalendarDays className="size-5" aria-hidden />} value={upcoming.length} label="Functions · next 7 days" tone="blue" />
         <KpiTile icon={<UtensilsCrossed className="size-5" aria-hidden />} value={menuGaps.length} label="Menus not settled" tone={menuGaps.length ? 'amber' : 'emerald'} />
       </div>
 
@@ -74,7 +74,7 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
           className="lg:col-span-2"
           icon={<CalendarDays className="size-4 text-muted-foreground" aria-hidden />}
           title="The week ahead"
-          link={{ href: '/day-sheet', label: 'Day sheet' }}
+          link={{ href: '/calendar', label: 'Calendar' }}
         >
           <AgendaList functions={upcoming} asOf={data.asOf} empty="No functions in the next seven days." />
         </SectionCard>

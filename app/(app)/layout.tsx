@@ -12,10 +12,13 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!user) redirect('/login')
   const permissions = await getPermissionMatrix(user.roleId)
 
+  // A proper app shell: the frame is exactly the viewport and each pane scrolls inside
+  // itself. Previously `min-h-dvh` let a long sidebar (the Auditor sees every module)
+  // stretch the whole page, which also stopped the calendars from ever fitting one screen.
   return (
-    <div className="flex min-h-dvh">
+    <div className="flex h-dvh overflow-hidden">
       <AppNav user={{ fullName: user.fullName, roleName: user.roleName }} permissions={permissions} />
-      <main className="flex-1 overflow-x-auto p-6">{children}</main>
+      <main className="flex-1 overflow-auto p-6">{children}</main>
     </div>
   )
 }

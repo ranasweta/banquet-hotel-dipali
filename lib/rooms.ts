@@ -118,6 +118,265 @@ export async function getRoomsBoard(
   }
 }
 
+// ── Lodging calendar (FR-4.x, Lodge Manager 30-day occupancy) ────────────────
+
+/**
+ * The Lodge Manager's day-by-day occupancy view: cumulative counts per lodging unit per
+ * room category, never room numbers. Three states, because two would lie:
+ *
+ *   locked    — the event is locked/billed/closed. Red: settled, untouchable.
+ *   confirmed — confirmed/in progress/completed but not yet locked. Amber: sold, still moving.
+ *   pending   — sitting inside a pending 35+ exception (BR-L2). Amber too, and the reason
+ *               this query bothers with `exceptions` at all: a deferred large allocation
+ *               writes NOTHING to room_allocations, so a calendar reading only that table
+ *               would paint rooms free while the Authority is still deciding, and the Lodge
+ *               Manager would promise them twice over.
+ *
+ * Categories are read from the data, not hardcoded — the room-type list is still awaiting
+ * the hotel's real inventory (see docs/SEED_ASSUMPTIONS.md), so whatever the seed holds is
+ * what renders.
+ */
+
+const OCCUPIED_STATES = sql`('confirmed','in_progress','completed','locked','billed','closed')`
+
+export type LodgingInventory = { unitId: string; unitName: string; roomType: string; total: number }
+export type LodgingCell = {
+  date: string
+  unitId: string
+  roomType: string
+  locked: number
+  confirmed: number
+  pending: number
+}
+export type LodgingCalendar = {
+  from: string
+  to: string
+  inventory: LodgingInventory[]
+  occupancy: LodgingCell[]
+}
+
+/** Active room counts per unit per category — the denominator for every "how many left". */
+async function getInventory(): Promise<LodgingInventory[]> {
+  return (await db.execute(sql`
+    SELECT u.id AS "unitId", u.name AS "unitName", r.room_type AS "roomType", count(*)::int AS total
+    FROM lodging_units u
+    JOIN rooms r ON r.unit_id = u.id AND r.is_active
+    GROUP BY u.id, u.name, r.room_type
+    ORDER BY u.name, r.room_type
+  `)) as unknown as LodgingInventory[]
+}
+
+/**
+ * Occupancy for every date in [from, to] — both ends inclusive, matching the venue board's
+ * day list (note `/rooms/board` uses a half-open range instead; these are different shapes).
+ * Only non-empty cells come back; the client fills the rest from `inventory`.
+ */
+export async function getLodgingCalendar(from: string, to: string): Promise<LodgingCalendar> {
+  const [inventory, occupancy] = await Promise.all([
+    getInventory(),
+    db.execute(sql`
+      WITH days AS (
+        SELECT gs::date AS date
+        FROM generate_series(${from}::date, ${to}::date, interval '1 day') AS gs
+      ),
+      alloc AS (
+        -- Rooms are taken in bulk on the proposal (client, 21 Jul 2026): lodge + category +
+        -- count + dates IS the booking. Occupancy is therefore the sum of those counts, not
+        -- a count of assigned rooms. Requirements with no unit (pre-21 Jul) are skipped
+        -- rather than guessed at — see migration 0009.
+        SELECT d.date, rr.unit_id AS "unitId", rr.room_type AS "roomType",
+               COALESCE(sum(rr.count) FILTER (WHERE e.status IN ('locked','billed','closed')), 0)::int AS locked,
+               COALESCE(sum(rr.count) FILTER (WHERE e.status IN ('confirmed','in_progress','completed')), 0)::int AS confirmed
+        FROM days d
+        JOIN room_requirements rr
+          ON d.date >= rr.check_in AND d.date < rr.check_out AND rr.unit_id IS NOT NULL
+        JOIN events e ON e.id = rr.event_id AND e.status IN ${OCCUPIED_STATES}
+        GROUP BY 1, 2, 3
+      ),
+      pend AS (
+        SELECT d.date, r.unit_id AS "unitId", r.room_type AS "roomType", count(*)::int AS pending
+        FROM exceptions x
+        JOIN events e ON e.id = x.event_id AND e.status IN ${OCCUPIED_STATES}
+        CROSS JOIN LATERAL jsonb_array_elements(x.payload->'allocations') AS el
+        JOIN rooms r ON r.id = (el->>'roomId')::uuid AND r.is_active
+        JOIN days d ON d.date >= (el->>'checkIn')::date AND d.date < (el->>'checkOut')::date
+        WHERE x.kind = 'room_allocation_35plus' AND x.status = 'pending'
+        GROUP BY 1, 2, 3
+      )
+      SELECT date::text AS date, "unitId", "roomType",
+             sum(locked)::int AS locked, sum(confirmed)::int AS confirmed, sum(pending)::int AS pending
+      FROM (
+        SELECT date, "unitId", "roomType", locked, confirmed, 0 AS pending FROM alloc
+        UNION ALL
+        SELECT date, "unitId", "roomType", 0, 0, pending FROM pend
+      ) t
+      GROUP BY 1, 2, 3
+      ORDER BY 1, 2, 3
+    `) as unknown as Promise<LodgingCell[]>,
+  ])
+  return { from, to, inventory, occupancy }
+}
+
+export type LodgingHolder = {
+  unitId: string
+  roomType: string
+  eventId: string
+  code: string
+  guestName: string
+  status: string
+  state: 'locked' | 'confirmed' | 'pending'
+  count: number
+}
+export type LodgingDay = { date: string; inventory: LodgingInventory[]; holders: LodgingHolder[] }
+
+/** One date drilled down: who holds how many of which category, and therefore what is left. */
+export async function getLodgingDay(date: string): Promise<LodgingDay> {
+  const [inventory, holders] = await Promise.all([
+    getInventory(),
+    db.execute(sql`
+      SELECT rr.unit_id AS "unitId", rr.room_type AS "roomType", e.id AS "eventId", e.code,
+             e.guest_name AS "guestName", e.status,
+             CASE WHEN e.status IN ('locked','billed','closed') THEN 'locked' ELSE 'confirmed' END AS state,
+             COALESCE(sum(rr.count), 0)::int AS count
+      FROM room_requirements rr
+      JOIN events e ON e.id = rr.event_id AND e.status IN ${OCCUPIED_STATES}
+      WHERE rr.unit_id IS NOT NULL
+        AND ${date}::date >= rr.check_in AND ${date}::date < rr.check_out
+      GROUP BY 1, 2, 3, 4, 5, 6
+
+      UNION ALL
+
+      SELECT r.unit_id, r.room_type, e.id, e.code, e.guest_name, e.status, 'pending', count(*)::int
+      FROM exceptions x
+      JOIN events e ON e.id = x.event_id AND e.status IN ${OCCUPIED_STATES}
+      CROSS JOIN LATERAL jsonb_array_elements(x.payload->'allocations') AS el
+      JOIN rooms r ON r.id = (el->>'roomId')::uuid AND r.is_active
+      WHERE x.kind = 'room_allocation_35plus' AND x.status = 'pending'
+        AND ${date}::date >= (el->>'checkIn')::date
+        AND ${date}::date <  (el->>'checkOut')::date
+      GROUP BY 1, 2, 3, 4, 5, 6
+
+      ORDER BY 1, 2, 5
+    `) as unknown as Promise<LodgingHolder[]>,
+  ])
+  return { date, inventory, holders }
+}
+
+
+// ── Bulk room booking on the proposal (BR-L2) ────────────────────────────────
+
+export type RoomRequirementInput = {
+  unitId: string
+  roomType: string
+  count: number
+  checkIn: string
+  checkOut: string
+}
+export type SaveRequirementsResult = { lines: number; totalRooms: number; deferred: boolean }
+
+/**
+ * Replaces an enquiry's room requirements. Rooms are taken in bulk here — lodge + category
+ * + count + dates IS the booking (client, 21 Jul 2026) — and this is what the lodging
+ * calendar reads.
+ *
+ * BR-L2, rewired the same day: the 35+ rule used to count rows in `room_allocations`, which
+ * nothing writes any more. It now counts the rooms asked for, and raises ONE pending request
+ * per proposal listing every line, so the Authority tracks proposals rather than lines.
+ *
+ * The requirements are still saved when the threshold is crossed. An enquiry occupies
+ * nothing — the calendar counts confirmed events only — so the gate that matters is
+ * CONFIRM, which refuses while the request is pending (see lib/confirm.ts). Saving a
+ * smaller set clears the pending request, because the reason for it is gone.
+ */
+export async function saveRoomRequirements(
+  actor: Actor,
+  eventId: string,
+  requirements: RoomRequirementInput[],
+): Promise<SaveRequirementsResult> {
+  const { large_allocation_rooms } = await getIntSettings(
+    ['large_allocation_rooms'] as const,
+    { large_allocation_rooms: 35 },
+  )
+
+  return db.transaction(async (tx) => {
+    const [event] = await tx
+      .select({ status: schema.events.status })
+      .from(schema.events)
+      .where(eq(schema.events.id, eventId))
+      .limit(1)
+    if (!event) throw notFound('Event not found')
+    if (event.status !== 'enquiry') {
+      throw badRequest('Room requirements can only be set on an enquiry')
+    }
+
+    await tx.delete(schema.roomRequirements).where(eq(schema.roomRequirements.eventId, eventId))
+    if (requirements.length) {
+      await tx.insert(schema.roomRequirements).values(
+        requirements.map((r) => ({
+          eventId,
+          unitId: r.unitId,
+          roomType: r.roomType,
+          count: r.count,
+          checkIn: r.checkIn,
+          checkOut: r.checkOut,
+        })),
+      )
+    }
+
+    await tx.delete(schema.exceptions).where(
+      and(
+        eq(schema.exceptions.eventId, eventId),
+        eq(schema.exceptions.kind, 'room_allocation_35plus'),
+        eq(schema.exceptions.status, 'pending'),
+      ),
+    )
+
+    const totalRooms = requirements.reduce((n, r) => n + r.count, 0)
+    const deferred = totalRooms >= large_allocation_rooms
+    if (deferred) {
+      const [exc] = await tx
+        .insert(schema.exceptions)
+        .values({
+          eventId,
+          kind: 'room_allocation_35plus',
+          status: 'pending',
+          payload: {
+            requestedCount: totalRooms,
+            threshold: large_allocation_rooms,
+            lines: requirements.map((r) => ({
+              unitId: r.unitId,
+              roomType: r.roomType,
+              count: r.count,
+              checkIn: r.checkIn,
+              checkOut: r.checkOut,
+            })),
+          },
+          raisedBy: actor.id,
+        })
+        .returning({ id: schema.exceptions.id })
+      await audit(tx, actor, {
+        entity: 'exceptions',
+        entityId: exc!.id,
+        eventId,
+        action: 'insert',
+        field: 'room_allocation_35plus',
+        newValue: `${totalRooms} room(s) across ${requirements.length} line(s)`,
+      })
+    }
+
+    await audit(tx, actor, {
+      entity: 'room_requirements',
+      entityId: eventId,
+      eventId,
+      action: 'update',
+      field: 'requirements',
+      newValue: `${requirements.length} line(s), ${totalRooms} room(s)`,
+    })
+
+    return { lines: requirements.length, totalRooms, deferred }
+  })
+}
+
 // ── Allocation ───────────────────────────────────────────────────────────────
 
 export type AllocationInput = {

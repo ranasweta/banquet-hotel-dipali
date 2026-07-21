@@ -26,10 +26,18 @@ A/B/C, every room number, and the dormitory's block.
 **Question:** how many of each type, in which block, and what are the real room numbers?
 Replace the whole file — nothing else depends on these specific values.
 
+> **Amended 20 Jul 2026 (§F2/F3).** Semi-suite is retired: the split is now 34 deluxe +
+> 15 suite, and the Rs. 6,000 rate above is no longer represented anywhere. Regency also
+> now holds both dormitory blocks, A and B.
+
 ### A2. Palace room numbers — `db/masters.ts` (`PALACE_ROOMS`)
 **Real:** 33 Deluxe + 3 Suite = 36 rooms at Rs. 5,000 / Rs. 8,000, plus dormitory blocks
 A and B of 18 beds each at Rs. 35,000 (PRD §3.3).
 **Invented:** the room numbers (P101-P133, P201-P203). The PRD gives none.
+
+> **Amended 20 Jul 2026 (§F1/F2).** The client puts Palace at 38 rooms with no dormitory.
+> Seeded as 35 Deluxe + 3 Suite (P101-P135, P201-P203); the 2 extra deluxe are invented,
+> and the dormitory blocks moved to Regency.
 
 ### A3. Golden Hall's capacity — `db/masters.ts` (`VENUES`)
 Golden Hall appears **only** on the proposal ("DIAMOND & GOLDEN HALL 25,000/-") and in
@@ -164,6 +172,10 @@ prints "—" for both room count and structure. The unit exists; its inventory d
 **No rooms can be allocated there until the client supplies the list.** Better an empty
 unit than 40 invented rooms.
 
+> **Superseded 20 Jul 2026 (§F1).** The unit is gone: the client's third lodge is Residency,
+> not the Grand. Both rates moved to Residency's 28 rooms — Executive Deluxe becoming plain
+> `deluxe` under the four-category rule. If that transfer is wrong, so is Residency.
+
 ---
 
 ## C. Contradictions found in the source documents
@@ -208,11 +220,16 @@ one. **A 15th Auditor/Admin user is seeded.** BUILD_PLAN's "14 users" is now 15.
 Not touched in M0 (no lock code yet). **Must be resolved before M9.** Recommendation:
 follow the §2.1 matrix (Banquet, Lodge, Maintenance, Higher Authority) and amend the enum.
 
-### C5. "Residency" — a fourth property, or a typo?
+### C5. "Residency" — a fourth property, or a typo? — **RESOLVED 20 Jul 2026**
 PRD §1 says three units (Palace, Regency, Dipali Grand). PRD §3.1 puts **Upper Hall**
 under "Residency". CLAUDE.md says 4 properties; schema.sql's comment lists
 `'Palace','Regency','Dipali Grand','Residency'`. Seeded as a 4th property hosting only
-Upper Hall. **Question:** is Residency real, or a typo for Regency?
+Upper Hall.
+
+**Client's answer:** Residency is real and "Dipali Grand" is not — the lodging units are
+Regency, Palace and Residency. Residency has 28 rooms. See F1: whether the Grand's rates
+(Executive Deluxe Rs. 7,000, Presidential Suite Rs. 11,000, per B12) transfer to Residency
+is still open, and the unit rename is not yet applied to the seed.
 
 ### C6. Venue rate is snapshotted "at confirm", but pricing must precede confirm
 `sub_events.venue_rate_paise` is commented "snapshot from rate card at confirm". But
@@ -545,6 +562,217 @@ transaction-mode pooling is for.
 
 ---
 
+## F. Lodging model — client instructions, 20 July 2026
+
+From the client's conversation with the hotel. **F1–F3 are applied to the seed** at the
+client's explicit instruction (20 Jul: "add the residency and do what's needed"), on the
+understanding that the real category-wise room and price list follows shortly and replaces
+all of it. Everything invented in the process is flagged below and in the seed files
+themselves. The lodging calendar reads room categories from `rooms.room_type` at query time,
+so the incoming list needs no code change — only new data.
+
+**The cost of applying early:** two rates that used to be sourced are now invented (F3), and
+one dormitory block's shape is a guess (F2). Both were unavoidable once the categories were
+collapsed and the dormitories moved; neither can be checked without the client's list.
+
+### F1. Lodging units are Regency, Palace, Residency
+Resolves C5. Regency 49 rooms, Palace **38**, Residency 28. PRD §3.3 gives Palace as 36
+(33 deluxe + 3 suite) — **two rooms unaccounted for**. The earlier reading that 38 = 36
+rooms + 2 dormitory blocks dies with F2, which moves the dormitories out of Palace.
+**Seeded:** `LODGING_UNITS = ['Palace','Regency','Residency']` — the old
+`'Grand / Regency A-block'` unit is retired into Residency and its two PRD §3.3 rates carried
+over (B12). Palace is 35 deluxe + 3 suite = 38, the 2 extra deluxe invented to reach the
+client's count. Residency is 20 deluxe @ Rs. 7,000 + 8 presidential @ Rs. 11,000 = 28; the
+20/8 split and every room number are invented, the rates are B12's on the reading that the
+unit the client calls Residency is the one the PRD called the Grand.
+
+Note Residency returns as a **lodging unit only**, not a property: the 2026 proposal still
+prices no venue there, so the 19 Jul removal of Upper Hall and the Residency *property*
+stands. `PROPERTIES` is unchanged and Dipali Grand remains a venue property (Signature,
+Lotus Lawn, both really priced on proposal p. 3).
+
+**Questions:** where are Palace's other 2 rooms, and do the Grand's rates really become
+Residency's? If not, all 28 Residency rows are wrong.
+
+### F2. Dormitories are in Regency, blocks A and B — contradicts PRD §3.3
+The client states the dormitory is in Regency across blocks A and B. PRD §3.3 says the
+opposite: Palace holds dorm blocks A and B (18 beds, Rs. 35,000 each) and Regency holds a
+single 30-bed dorm (Rs. 50,000). The client's instruction wins per CLAUDE.md's source
+ranking, but this is a **direct contradiction of the PRD, recorded rather than silently
+applied**.
+
+**Seeded:** Regency holds `DORM-A` (block A, 30 beds, Rs. 50,000 — its own, real) and
+`DORM-B` (block B, 18 beds, Rs. 35,000 — Palace's, relocated). Palace has none. This keeps
+**both** real dormitory rates alive while giving the two blocks the client named; the cost
+is that **which block is which size is invented**, and Palace's *second* 18-bed block is
+dropped, since the client described exactly two. **Question:** is that the right shape, or
+are both Regency blocks the same size?
+
+### F3. Four room categories — semi-suite and executive deluxe are dropped
+The client's categories are **deluxe, suite, presidential suite, dormitory**. Semi-suite
+folds into suite; executive deluxe folds into deluxe.
+
+This **destroys real price data**, which is why it is not yet applied. Semi-suite
+(Rs. 6,000, real per A1) and Executive Deluxe (Rs. 7,000, real per B12) are rates attached
+to the categories being removed. Merging reprices those rooms to the target category's rate
+— Regency suite Rs. 7,000 and Regency deluxe Rs. 4,500 — so eleven rooms move Rs. 1,000 up
+and the A-block's deluxe rooms move Rs. 2,500 down, and both figures become **invented where
+they were previously sourced**. The merge also widens BR-D1's per-room discount cap on those
+11 rooms from Rs. 500 to Rs. 1,000, because the suite cap follows the category name.
+
+**Seeded:** Regency is now 34 deluxe + 15 suite = 49 (was 34 + 11 semi-suite + 4 suite), the
+11 former semi-suites repriced to Rs. 7,000. Executive Deluxe needed no merge — the Grand
+had zero rooms (B12) — but Residency's deluxe inherits its Rs. 7,000, which is why Residency
+deluxe costs more than Palace deluxe at Rs. 5,000. `db/seed-data.test.ts` now asserts
+semi-suite is gone rather than asserting its rate. **Question:** confirm the merged rates,
+or supply the real ones (expected with F1's list).
+
+### F4. The lodging calendar reads locked, not confirmed — with an amber middle state
+The client chose **red at lock**, not at confirm. Taken alone that hides sold inventory: an
+event can be confirmed (25% advance recorded, venue held) and still paint its rooms green
+until the lock checklist completes. The calendar therefore carries three states, not two —
+red locked, **amber confirmed-but-unlocked**, green free — so the client's choice stands
+without the Lodge Manager being able to promise a room twice.
+
+Amber also covers rooms inside an undecided 35+ exception (BR-L2), which by design write
+nothing to `room_allocations`; a calendar reading only that table would show them free while
+the Authority is still deciding.
+
+### F5. The lodging window is 30 days, the venue board's is 15
+FR-2.1 caps the venue calendar to a rolling 15 days for operational roles. The client asked
+for 30 days of lodging. Implemented as 30 for everyone with `rooms:view` — not role-capped,
+unlike `/calendar` — with a 92-day hard ceiling on the query as a guard, not a permission.
+**Amended 20 Jul 2026:** the venue board's own cap now applies to the **Banquet Manager
+only**. `/calendar` previously capped every role except Auditor and Higher Authority, which
+over-read FR-2.1 — PRD §2 assigns the 15-day operational view specifically to the Banquet
+Manager, who owns that calendar. A Booking Manager quoting dates needs to see as far ahead
+as a guest might ask, so they are now uncapped (client instruction). `CAPPED_ROLES` in
+`app/api/v1/calendar/route.ts` is the single place to change this.
+
+This also settles the Lodge Manager question: no, their 30-day lodging window is not capped.
+
+### F6. The Lodge Manager's sidebar is the lodging calendar alone — departs from PRD §2.1
+PRD §2.1's matrix gives the Lodge Manager `bookings: view`, `calendar: view`, `rooms: edit`,
+`approvals: edit`, `billing: edit`. The client wants their sidebar trimmed to the lodging
+calendar and nothing else (20 Jul 2026), so `bookings`, `calendar` and `approvals` are
+revoked in `MATRIX` (`db/masters.ts`) and by migration `0006`.
+
+**Two things this uncovered.** First, the live database had the Lodge Manager on *only*
+`calendar: view` — no `rooms` grant at all, so the module built for that role was invisible
+to it and `/rooms/calendar` would have bounced them. That is not what the seed says; the
+grants had drifted, most likely edited through `/admin/roles`. Migration 0006 restores
+`rooms` (view + create_edit) as well as trimming.
+
+**`billing` is deliberately kept** even though the client asked for "only the lodging
+calendar": it puts no tab in the sidebar, but it carries the Lodge Manager's lock sign-off.
+Revoking it would have removed capability without changing anything they can see.
+
+**`approvals: view` restored** (client, same day, migration `0007`). Revoking it left the
+Lodge Manager able to raise a 35+ room exception (BR-L2) but unable to see the decision.
+`view`, not the matrix's `edit` — deciding one is the Higher Authority's call.
+
+### F7. `lodging_calendar` is its own module
+The calendar originally shared the `rooms` module with the room-by-room board, which made
+the client's "lodge calendar should be shown to lodge managers only" impossible to express:
+one grant drove both screens. It is now a module of its own (`MODULES` in `db/masters.ts`,
+registered by migration `0007`), granted by default to **lodge_manager and auditor only**.
+
+This keeps access **utility-based**, as PRD §2.1 requires: nothing is hardcoded to a role
+name: an Admin can grant `lodging_calendar` to anyone from `/admin/roles`, and both API
+routes enforce `requirePermission('lodging_calendar','view')` server-side. The Auditor keeps
+`full` because that role *is* the permission utility — locking it out of a module would
+leave the module ungovernable.
+
+**Residual, flagged to the client:** the Lodge Manager still sees a **Rooms** tab, because
+allocating rooms (FR-4.2) needs `rooms: view` — the allocation screen reads
+`/rooms/units` and `/rooms/board`. Revoking it to hide the tab would break their core job.
+**Question:** leave the Rooms tab, or hide it another way?
+
+### F8. Only rooms are taxed, at 5% — everything else zero-rated
+Client instruction, 20 Jul 2026. `GST_BP` in `lib/invoice.ts` was `venue 18% / food 5% /
+rooms 12% / maintenance 18%` — all placeholders pending the hotel's tax consultant (PRD open
+question 5). It is now **rooms 5%, everything else 0%**.
+
+That answers PRD open question 5. Zero-rating food and venue is unusual for banquet billing,
+so it was queried explicitly and the client **confirmed it a second time on 20 Jul 2026**:
+only rooms are taxed. Implemented as given and recorded here because it is the kind of
+decision that is expensive to unpick after real guests have been billed — if the hotel's tax
+position changes, this constant is the single place to edit.
+
+Tax is rounded **per line** and summed; the sum of line taxes is the authoritative figure,
+not 5% of the room sub-total (the two can differ by a paisa). `tests/m9.integration.test.ts`
+re-computes the whole bill by hand against the new rates.
+
+### F9. "Invoice" and "final" are banned words — the documents are Draft and Draft 2
+House terminology (client, 20 Jul 2026). There are exactly two documents:
+
+- **Draft** — the tentative statement. Amounts still move. No document number.
+- **Draft 2** — the money actually to be paid. Issued once, then locked.
+
+Neither may be called an invoice, and **nothing may be called "final"**, even though Draft 2
+is functionally the final figure. The mechanism is unchanged — issuing Draft 2 is the old
+finalisation step: it assigns a number and moves the event to `billed`.
+
+The client confirmed **code names may stay**, so the `invoices` / `invoice_lines` tables and
+`lib/invoice.ts` keep their names; only what a human reads changed. Two consequences worth
+knowing: the document-number prefix changed from `INV-2026-` to **`D2-2026-`** (the old one
+put the banned word in front of the guest), and the on-screen panel is now **Payment review**.
+The word "proforma" was also retired from the UI under the same rule — the tentative print is
+simply the Draft — though the route and function names still use it internally.
+
+### F10. Room tax shows live, and stays outside the advance base
+The 5% is shown on the wizard's Rooms step the moment requirements are entered, computed
+per line and summed exactly as `lib/invoice.ts` does it, so the estimate and the Draft can
+never disagree by a rounding paisa.
+
+**Rooms and their tax DO count toward the 25% advance** (client, 20 Jul 2026) — an amendment
+to BR-P1, which previously measured 25% of `proposal_total_paise` alone.
+
+Implemented as a separate `advanceBase = proposal_total + rooms + room tax` rather than by
+folding rooms into `proposal_total_paise`. That column is **also** what BR-D2 measures its
+10% combined-discount cap against, so widening it would have quietly raised the discount
+ceiling on every event — a side effect nobody asked for. The stored proposal total is
+therefore unchanged; only the advance gate sees the bigger number.
+
+The room figure uses `min(rack_rate_paise)` per type across units — the same basis the wizard
+shows — because at proposal time no unit has been chosen. `lib/pricing.ts:roomEstimatePaise`
+is the single implementation, shared by the quote endpoint and the confirm gate so the number
+quoted and the number enforced cannot drift.
+
+### F11. Two free dishes per function, and increases batch per proposal
+Client, 20 Jul 2026. Two amendments to the menu-increase rules:
+
+**BR-M2 — the free allowance is 2, not 1.** `FREE_INCREASE_MAX` in `lib/menus.ts` is now 2:
+pressing increase on an eligible category grants two extra dishes with no Authority
+involvement. Scope is unchanged — **per function** (per sub-event), on one eligible
+category — confirmed by the client rather than assumed.
+
+**BR-M3 — one request per proposal, not per segment.** Increases beyond the free allowance
+are unlimited: the manager keeps picking, and every increment lands in a single pending
+`menu_increase` exception for the whole proposal. Its payload is
+`{ items: [{ subEventId, subEventName, menuId, categoryName, currentPick, requestedPick, reason }] }`,
+so the Authority sees which function and which segment each increment belongs to. Pressing
+the same segment twice raises that segment's ask rather than adding a row.
+
+Previously each segment raised its own exception, which is why a single wedding could put
+five rows in the queue. FR-3.7 needed no change: lock is still blocked while any exception
+is pending, so approving the one batch releases the lock.
+
+`db/migrations/0008` rewrites **pending** requests from the old single-segment payload into
+the new batch shape — without it the new apply path could not read them and the Authority
+would be unable to approve work already in flight. Decided requests are left untouched:
+nothing re-reads their payload, and rewriting history to suit new code is worse than
+leaving it honest.
+
+### F12. Discounts live on Payment review
+Moved out of the Billing section into Payment review (`components/event-discounts.tsx`),
+where the money is actually read. **The 10% combined cap is unchanged** (BR-D2), including
+the fact that it is measured against `proposal_total_paise` — which excludes rooms by
+design (§F10). On a proposal with heavy lodging the cap therefore applies to the smaller
+number; the client was asked and chose to keep it as is.
+
+---
+
 ## E. Still needed from the client
 
 Ranked by what they block.
@@ -558,7 +786,12 @@ Ranked by what they block.
 | 5 | Dormitory rate — per block or per bed? (B8) | M5, M9 |
 | 6 | Standalone Imperial/Kohinoor wedding rate? (C1) | M3 |
 | 7 | Golden Hall capacity; 25,000 for the pair or each? (A3) | M3 |
-| 8 | Is "Residency" real? (C5) | cosmetic |
+| 8 | ~~Is "Residency" real?~~ (C5) — answered 20 Jul: yes, and "Dipali Grand" is not | done |
+| 8a | **Real category-wise rooms + prices for all three units** (F1) — supersedes 3 and 4 | M5 |
+| 8b | Palace's 2 unaccounted rooms: 38 stated vs 36 in PRD §3.3 (F1) | M5 |
+| 8c | Regency's A/B dormitory — 18 beds/Rs. 35,000 or 30 beds/Rs. 50,000? (F2) | M5, M9 |
+| 8d | Confirm the merged semi-suite → suite and exec-deluxe → deluxe rates (F3) | M5 |
+| 8e | Should the Lodge Manager's 30-day window be role-capped like the venue board? (F5) | future |
 | 9 | GST rates per charge head (PRD open question 5) | M9 |
 | 10 | Payment reminder schedule (PRD open question 1) | M7 |
 | 11 | Correct the menu item typos? (B2) | cosmetic |

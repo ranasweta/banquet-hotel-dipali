@@ -1,67 +1,360 @@
 {
-  "_PLACEHOLDER": "THIS ROOM-TYPE BREAKDOWN IS INVENTED. PRD §3.3 gives Regency as '49 rooms in blocks A, B, C' with four rack rates but no counts per type and no block mapping. The 49 totals and the four rack rates are real; WHICH room is WHICH TYPE, and the split across blocks, are a placeholder so the system has usable inventory. Replace this whole file with the hotel's real list — the seed reads it and nothing else depends on these specific numbers. See docs/SEED_ASSUMPTIONS.md.",
-  "_real": "49 guest rooms total; rack rates Deluxe Rs. 4,500 / Semi-suite Rs. 6,000 / Suite Rs. 7,000 / Dormitory 30 beds Rs. 50,000; blocks named A, B, C.",
-  "_invented": "34 deluxe + 11 semi-suite + 4 suite; the A/B/C distribution; every room number; the dormitory's block.",
-  "_openQuestions": [
-    "How many of each room type, and in which block?",
-    "Which block holds the 30-bed dormitory (modelled here as one bookable unit, not 30 beds)?",
-    "Are room numbers really A101-style?"
-  ],
+  "_SOURCE": "Room counts and categories confirmed by the client 21 Jul 2026; rates from the hotel's 2026 venue proposal (Regency page) except where noted below. This file is no longer a placeholder.",
+  "_rates": "Deluxe Rs. 4,500 / Semi-suite Rs. 6,000 / Suite Rs. 7,000 / Dormitory Rs. 50,000 are printed on the Regency page. Semi-deluxe is NOT on that page: the client confirmed it is priced as Executive Deluxe, Rs. 7,000. Presidential Suite Rs. 11,000 is printed under 'Grand + Regency A-block', which the client confirmed is Regency's own A block.",
+  "_dormitory": "One dormitory, booked whole \u2014 beds are never selectable. The client states 24 beds; the proposal prints 30. The rate is Rs. 50,000 either way, and since a dormitory is indivisible the bed count is descriptive only.",
+  "_invented": "Only the A/B/C block placement and the room numbers. Neither is used for booking \u2014 rooms are taken in bulk by lodge and category \u2014 so they are internal identifiers.",
   "unit": "Regency",
   "totalRooms": 49,
   "rooms": [
-    { "block": "A", "roomNo": "A101", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A102", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A103", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A104", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A105", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A106", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A107", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A108", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A109", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A110", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A111", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A112", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "A", "roomNo": "A113", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "A", "roomNo": "A114", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "A", "roomNo": "A115", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "A", "roomNo": "A116", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "A", "roomNo": "A117", "roomType": "suite", "beds": 2, "rackRatePaise": 700000 },
-
-    { "block": "B", "roomNo": "B101", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B102", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B103", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B104", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B105", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B106", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B107", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B108", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B109", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B110", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B111", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "B", "roomNo": "B112", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "B", "roomNo": "B113", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "B", "roomNo": "B114", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "B", "roomNo": "B115", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "B", "roomNo": "B116", "roomType": "suite", "beds": 2, "rackRatePaise": 700000 },
-
-    { "block": "C", "roomNo": "C101", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C102", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C103", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C104", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C105", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C106", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C107", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C108", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C109", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C110", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C111", "roomType": "deluxe", "beds": 2, "rackRatePaise": 450000 },
-    { "block": "C", "roomNo": "C112", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "C", "roomNo": "C113", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "C", "roomNo": "C114", "roomType": "semi_suite", "beds": 2, "rackRatePaise": 600000 },
-    { "block": "C", "roomNo": "C115", "roomType": "suite", "beds": 2, "rackRatePaise": 700000 },
-    { "block": "C", "roomNo": "C116", "roomType": "suite", "beds": 2, "rackRatePaise": 700000 },
-
-    { "block": "A", "roomNo": "DORM-1", "roomType": "dormitory", "beds": 30, "rackRatePaise": 5000000 }
+    {
+      "block": "A",
+      "roomNo": "A101",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A102",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A103",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A104",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A105",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A106",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A107",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A108",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A109",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A110",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A111",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A112",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "A",
+      "roomNo": "A201",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A202",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A203",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A204",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A205",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A206",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A207",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A208",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A209",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A210",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A211",
+      "roomType": "semi_deluxe",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "A301",
+      "roomType": "presidential_suite",
+      "beds": 2,
+      "rackRatePaise": 1100000
+    },
+    {
+      "block": "A",
+      "roomNo": "A302",
+      "roomType": "presidential_suite",
+      "beds": 2,
+      "rackRatePaise": 1100000
+    },
+    {
+      "block": "A",
+      "roomNo": "A303",
+      "roomType": "presidential_suite",
+      "beds": 2,
+      "rackRatePaise": 1100000
+    },
+    {
+      "block": "B",
+      "roomNo": "B101",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B102",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B103",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B104",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B105",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B106",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B107",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B108",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B109",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B110",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B111",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B112",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B113",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B114",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B115",
+      "roomType": "deluxe",
+      "beds": 2,
+      "rackRatePaise": 450000
+    },
+    {
+      "block": "B",
+      "roomNo": "B201",
+      "roomType": "semi_suite",
+      "beds": 2,
+      "rackRatePaise": 600000
+    },
+    {
+      "block": "B",
+      "roomNo": "B202",
+      "roomType": "semi_suite",
+      "beds": 2,
+      "rackRatePaise": 600000
+    },
+    {
+      "block": "B",
+      "roomNo": "B203",
+      "roomType": "semi_suite",
+      "beds": 2,
+      "rackRatePaise": 600000
+    },
+    {
+      "block": "B",
+      "roomNo": "B204",
+      "roomType": "semi_suite",
+      "beds": 2,
+      "rackRatePaise": 600000
+    },
+    {
+      "block": "B",
+      "roomNo": "B205",
+      "roomType": "semi_suite",
+      "beds": 2,
+      "rackRatePaise": 600000
+    },
+    {
+      "block": "B",
+      "roomNo": "B206",
+      "roomType": "semi_suite",
+      "beds": 2,
+      "rackRatePaise": 600000
+    },
+    {
+      "block": "C",
+      "roomNo": "C101",
+      "roomType": "suite",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "C",
+      "roomNo": "C102",
+      "roomType": "suite",
+      "beds": 2,
+      "rackRatePaise": 700000
+    },
+    {
+      "block": "A",
+      "roomNo": "DORM-1",
+      "roomType": "dormitory",
+      "beds": 24,
+      "rackRatePaise": 5000000
+    }
   ]
 }

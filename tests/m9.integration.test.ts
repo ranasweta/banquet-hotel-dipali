@@ -127,22 +127,24 @@ d('invoice reconciliation (FR-7.3) — hand-computed to the paise', () => {
     const inv = (await invoice.getInvoice(eventId))!
 
     const bySection = (s: string) => inv.lines.filter((l) => l.section === s)
+    // Client, 20 Jul 2026: ONLY rooms are taxed, at 5%. Venue, food and maintenance are
+    // zero-rated — they previously carried placeholder rates of 18/5/18 (SEED_ASSUMPTIONS §F8).
     expect(bySection('venue')[0]!.amountPaise).toBe(1_500_000)
-    expect(bySection('venue')[0]!.taxPaise).toBe(270_000) // 18%
+    expect(bySection('venue')[0]!.taxPaise).toBe(0)
     expect(bySection('food')[0]!.amountPaise).toBe(6_500_000) // 100 × 65,000
-    expect(bySection('food')[0]!.taxPaise).toBe(325_000) // 5%
+    expect(bySection('food')[0]!.taxPaise).toBe(0)
     expect(bySection('rooms')[0]!.amountPaise).toBe(1_000_000) // 2 nights × 5,00,000
-    expect(bySection('rooms')[0]!.taxPaise).toBe(120_000) // 12%
+    expect(bySection('rooms')[0]!.taxPaise).toBe(50_000) // 5% — the only taxed head
     expect(bySection('maintenance')[0]!.amountPaise).toBe(300_000)
-    expect(bySection('maintenance')[0]!.taxPaise).toBe(54_000) // 18%
+    expect(bySection('maintenance')[0]!.taxPaise).toBe(0)
 
-    // gross 93,00,000 · tax 7,69,000 · net 1,00,69,000 · advances 25,00,000 · balance 75,69,000
+    // gross 93,00,000 · tax 50,000 · net 93,50,000 · advances 25,00,000 · balance 68,50,000
     expect(inv.grossPaise).toBe(9_300_000)
-    expect(inv.taxPaise).toBe(769_000)
+    expect(inv.taxPaise).toBe(50_000)
     expect(inv.discountPaise).toBe(0)
-    expect(inv.netPaise).toBe(10_069_000)
+    expect(inv.netPaise).toBe(9_350_000)
     expect(inv.advancesPaise).toBe(2_500_000)
-    expect(inv.balancePaise).toBe(7_569_000)
+    expect(inv.balancePaise).toBe(6_850_000)
   })
 
   it('an adjustment line recomputes the totals, then finalisation assigns a number', async () => {
@@ -151,10 +153,12 @@ d('invoice reconciliation (FR-7.3) — hand-computed to the paise', () => {
     await invoice.setAdjustments(auditor, eventId, [{ description: 'Goodwill discount', amountPaise: -500_000, remark: 'repeat guest' }])
     const inv = (await invoice.getInvoice(eventId))!
     expect(inv.grossPaise).toBe(8_800_000) // 93,00,000 − 5,00,000
-    expect(inv.netPaise).toBe(9_569_000) // 88,00,000 + 7,69,000
+    expect(inv.netPaise).toBe(8_850_000) // 88,00,000 + 50,000 room tax
 
+    // The document number belongs to Draft 2; "INV" would put the banned word in front of
+    // the guest (client: never "invoice", never "final").
     const fin = await invoice.finaliseInvoice(auditor, eventId)
-    expect(fin.invoiceNo).toMatch(/^INV-2026-\d{4}$/)
+    expect(fin.invoiceNo).toMatch(/^D2-2026-\d{4}$/)
     const [e] = await db.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, eventId))
     expect(e!.status).toBe('billed')
     // No adjusting a finalised invoice.
@@ -170,8 +174,8 @@ d('proforma estimate (pre-lock)', () => {
     expect(pf.invoice.invoiceNo).toBeNull()
     // Same figures as the locked-invoice test — the estimate matches the eventual bill.
     expect(pf.invoice.grossPaise).toBe(9_300_000)
-    expect(pf.invoice.netPaise).toBe(10_069_000)
-    expect(pf.invoice.balancePaise).toBe(7_569_000)
+    expect(pf.invoice.netPaise).toBe(9_350_000)
+    expect(pf.invoice.balancePaise).toBe(6_850_000)
     // Nothing was persisted: the event is still Completed and no invoice was drafted.
     const [e] = await db.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, eventId))
     expect(e!.status).toBe('completed')

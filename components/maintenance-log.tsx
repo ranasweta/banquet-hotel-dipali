@@ -120,7 +120,7 @@ function Section({
                       className={cn(
                         'rounded-full px-2 py-0.5 text-xs font-medium',
                         e.closed
-                          ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                          ? 'bg-muted text-muted-foreground'
                           : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
                       )}
                     >
@@ -137,7 +137,7 @@ function Section({
                     <EventMaintenance eventId={e.id} editable={canEdit && !e.closed} />
                     <p className="mt-2 text-xs text-muted-foreground">
                       Closing freezes these entries and signs off the maintenance line for the lock
-                      checklist (FR-5.2). Totals flow to the final bill.
+                      checklist (FR-5.2). Totals flow to the payment review.
                     </p>
                   </div>
                 )}

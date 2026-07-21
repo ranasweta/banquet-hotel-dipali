@@ -10,11 +10,11 @@ type Notification = { id: string; kind: string; message: string; href: string; a
 
 const KIND_DOT: Record<string, string> = {
   approval: 'bg-amber-500',
-  change_request: 'bg-blue-500',
-  chef: 'bg-violet-500',
+  change_request: 'bg-[var(--chart-2)]',
+  chef: 'bg-primary',
   maintenance: 'bg-orange-500',
   payment: 'bg-red-500',
-  stale: 'bg-slate-400',
+  stale: 'bg-muted-foreground',
 }
 
 /** Where each kind sends you — shown on the row so it's obvious before you click. */

@@ -119,6 +119,52 @@ export async function foodAndAddonTotal(
   return { foodPaise: food!.total, addonPaise: addon!.total }
 }
 
+/** Basis points. Rooms are the only taxed head (client, 20 Jul 2026); see lib/invoice.ts. */
+const ROOM_TAX_BP = 500
+
+/**
+ * The promised-rooms estimate for an event: per `room_requirements` line,
+ * count × nights × the cheapest active rack rate for that type, plus 5% tax.
+ *
+ * Two things to know about the rate. It is the chosen lodge's rate for that category —
+ * Residency deluxe is Rs. 7,000 where Palace deluxe is Rs. 5,000, so the lodge matters. And the
+ * tax is rounded PER LINE and summed, matching lib/invoice.ts, so the number quoted here and
+ * the number on the Draft cannot differ by a rounding paisa.
+ *
+ * Kept separate from `proposal_total_paise` on purpose: that column feeds BR-D2's 10%
+ * discount cap, and folding rooms into it would quietly raise the discount ceiling. Rooms
+ * enter the 25% advance base (client, 20 Jul 2026) and nothing else — see SEED_ASSUMPTIONS §F10.
+ */
+export async function roomEstimatePaise(
+  eventId: string,
+  e?: Exec,
+): Promise<{ roomsPaise: number; roomsTaxPaise: number }> {
+  const rows = (await exec(e).execute(sql`
+    SELECT rr.count::int AS count,
+           (rr.check_out - rr.check_in)::int AS nights,
+           -- The proposal now names the lodge (21 Jul 2026), so price at THAT lodge's rate.
+           -- The cheapest-across-lodges fallback only applies to rows captured before the
+           -- proposal asked, where no unit is recorded and none may be invented.
+           COALESCE(
+             (SELECT min(r.rack_rate_paise) FROM rooms r
+               WHERE r.room_type = rr.room_type AND r.is_active
+                 AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)),
+             0
+           )::bigint AS rate
+    FROM room_requirements rr
+    WHERE rr.event_id = ${eventId}
+  `)) as unknown as { count: number; nights: number; rate: number }[]
+
+  let roomsPaise = 0
+  let roomsTaxPaise = 0
+  for (const r of rows) {
+    const amount = Number(r.rate) * Math.max(0, r.count) * Math.max(0, r.nights)
+    roomsPaise += amount
+    roomsTaxPaise += Math.round((amount * ROOM_TAX_BP) / 10000)
+  }
+  return { roomsPaise, roomsTaxPaise }
+}
+
 /**
  * Recomputes and persists an event's running proposal total: priceable venue charges
  * (BR-R1 gaps are simply skipped from the running estimate — they become a hard gate only

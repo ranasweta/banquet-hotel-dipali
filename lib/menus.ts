@@ -26,7 +26,11 @@ import { recomputeProposalTotal } from '@/lib/pricing'
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 const LOCKED_STATES = new Set(['locked', 'billed', 'closed'])
-const FREE_INCREASE_MAX = 1 // BR-M2: one free increase per sub-event, whole menu
+// BR-M2, amended 20 Jul 2026: two extra dishes may be taken without Higher Authority
+// approval (was one). Anything beyond that is still allowed to be picked, but joins
+// the proposal's approval batch. Scoped per sub-event on one eligible category, as
+// before — see SEED_ASSUMPTIONS §F11 for the open question on that scope.
+const FREE_INCREASE_MAX = 2
 
 function assertEditable(status: string): void {
   if (LOCKED_STATES.has(status)) {
@@ -580,17 +584,6 @@ export async function increaseCategory(
     if (cat.basePick == null) {
       throw badRequest(`Every item in ${categoryName} is already included — there is nothing to increase.`)
     }
-    if (cat.exceptionId) {
-      const [exc] = await tx
-        .select({ status: schema.exceptions.status })
-        .from(schema.exceptions)
-        .where(eq(schema.exceptions.id, cat.exceptionId))
-        .limit(1)
-      if (exc?.status === 'pending') {
-        throw conflict(`An increase for ${categoryName} is already awaiting approval.`)
-      }
-    }
-
     // Master category → is it free-eligible, and its id for the free-increase marker.
     const [masterCat] = await tx
       .select({
@@ -632,28 +625,77 @@ export async function increaseCategory(
       return { applied: 'free', categoryName, effectivePick: cat.basePick + newExtra }
     }
 
-    // Exception path: raise a pending request, defer the pick until approval (BR-M3).
+    // Exception path (BR-M3, amended 20 Jul 2026): increases are batched into ONE pending
+    // request per PROPOSAL rather than one per segment. The manager keeps picking; the
+    // Higher Authority sees a single item per proposal listing every increment, labelled by
+    // function and by menu segment, and approving it releases the lock (FR-3.7 unchanged).
     const reason = freeUsed ? 'free_increase_already_used' : 'category_not_free_eligible'
-    const [exc] = await tx
-      .insert(schema.exceptions)
-      .values({
-        eventId: ctx.eventId,
-        kind: 'menu_increase',
-        status: 'pending',
-        payload: {
-          subEventId,
-          menuId: menu.id,
-          categoryName,
-          currentPick: cat.basePick + cat.extraPicks,
-          requestedPick: cat.basePick + cat.extraPicks + 1,
-          reason,
-        },
-        raisedBy: actor.id,
+
+    const [open] = await tx
+      .select({ id: schema.exceptions.id, payload: schema.exceptions.payload })
+      .from(schema.exceptions)
+      .where(
+        and(
+          eq(schema.exceptions.eventId, ctx.eventId),
+          eq(schema.exceptions.kind, 'menu_increase'),
+          eq(schema.exceptions.status, 'pending'),
+        ),
+      )
+      .limit(1)
+
+    type BatchItem = {
+      subEventId: string
+      subEventName: string
+      menuId: string
+      categoryName: string
+      currentPick: number
+      requestedPick: number
+      reason: string
+    }
+    const existing = (open?.payload as { items?: BatchItem[] } | null)?.items ?? []
+    const idx = existing.findIndex((i) => i.menuId === menu.id && i.categoryName === categoryName)
+
+    // A second press on the same segment raises that segment's ask rather than adding a row,
+    // so the Authority reads "Soup 1 → 3", not two separate "+1" lines.
+    const items = [...existing]
+    if (idx >= 0) {
+      items[idx] = { ...items[idx]!, requestedPick: items[idx]!.requestedPick + 1 }
+    } else {
+      items.push({
+        subEventId,
+        subEventName: ctx.name,
+        menuId: menu.id,
+        categoryName,
+        currentPick: cat.basePick + cat.extraPicks,
+        requestedPick: cat.basePick + cat.extraPicks + 1,
+        reason,
       })
-      .returning({ id: schema.exceptions.id })
+    }
+
+    let exceptionId: string
+    if (open) {
+      await tx
+        .update(schema.exceptions)
+        .set({ payload: { items } })
+        .where(eq(schema.exceptions.id, open.id))
+      exceptionId = open.id
+    } else {
+      const [created] = await tx
+        .insert(schema.exceptions)
+        .values({
+          eventId: ctx.eventId,
+          kind: 'menu_increase',
+          status: 'pending',
+          payload: { items },
+          raisedBy: actor.id,
+        })
+        .returning({ id: schema.exceptions.id })
+      exceptionId = created!.id
+    }
+
     await tx
       .update(schema.subEventMenuCategories)
-      .set({ exceptionId: exc!.id })
+      .set({ exceptionId })
       .where(
         and(
           eq(schema.subEventMenuCategories.menuId, menu.id),
@@ -663,13 +705,13 @@ export async function increaseCategory(
 
     await audit(tx, actor, {
       entity: 'exceptions',
-      entityId: exc!.id,
+      entityId: exceptionId,
       eventId: ctx.eventId,
-      action: 'insert',
+      action: 'update',
       field: 'menu_increase',
-      newValue: categoryName,
+      newValue: `${ctx.name} · ${categoryName} (${items.length} increment(s) in batch)`,
     })
-    return { applied: 'exception', categoryName, exceptionId: exc!.id }
+    return { applied: 'exception', categoryName, exceptionId }
   })
 }
 

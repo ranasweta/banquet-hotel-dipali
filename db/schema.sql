@@ -311,7 +311,7 @@ ALTER TABLE sub_event_menu_categories
 -- ============================================================
 CREATE TABLE lodging_units (
   id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  name text NOT NULL UNIQUE                     -- 'Palace','Regency','Grand/Regency A-block'
+  name text NOT NULL UNIQUE                     -- 'Palace','Regency','Residency'
 );
 
 CREATE TABLE rooms (
