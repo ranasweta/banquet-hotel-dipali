@@ -5,6 +5,7 @@ import { Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -36,6 +37,15 @@ type Requirement = {
 }
 
 const label = (t: string) => t.replace(/_/g, ' ')
+const keyOf = (r: { unit_id: string; room_type: string; check_in: string; check_out: string }) =>
+  `${r.unit_id}|${r.room_type}|${r.check_in}|${r.check_out}`
+
+/** `date` shifted by whole days, staying in YYYY-MM-DD. UTC so a timezone cannot shift it. */
+function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
 
 function nights(checkIn: string, checkOut: string): number {
   if (!checkIn || !checkOut) return 0
@@ -51,13 +61,21 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
   const [roomTypes, setRoomTypes] = useState<string[]>([])
   const [rates, setRates] = useState<RoomRate[]>([])
   const [busy, setBusy] = useState(false)
+  // The span rooms may be held for, and what each lodge has free over the chosen nights.
+  // Both mirror what the save enforces, so a manager is stopped at the input instead of
+  // discovering it in an error toast.
+  const [win, setWin] = useState<{ firstDate: string | null; lastDate: string | null; latestCheckOut: string | null }>({
+    firstDate: null, lastDate: null, latestCheckOut: null,
+  })
+  const [free, setFree] = useState<Record<string, { available: number; total: number }>>({})
 
   const load = useCallback(async () => {
     const [reqs, opts] = await Promise.all([
-      api<{ requirements: Requirement[] }>(`/events/${eventId}/room-requirements`),
+      api<{ requirements: Requirement[]; window: typeof win }>(`/events/${eventId}/room-requirements`),
       api<{ lodgingUnits?: Unit[]; roomTypes: string[]; roomRates: RoomRate[] }>('/booking-options'),
     ])
     setRows(reqs.requirements)
+    setWin(reqs.window)
     setUnits(opts.lodgingUnits ?? [])
     setRoomTypes(opts.roomTypes)
     setRates(opts.roomRates ?? [])
@@ -68,12 +86,47 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
     load().catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load rooms'))
   }, [load])
 
+  const complete = (rows ?? []).filter((r) => r.unit_id && r.room_type && r.check_in && r.check_out)
+  const signature = complete.map(keyOf).join(',')
+  useEffect(() => {
+    if (!complete.length) return
+    const t = setTimeout(() => {
+      api<{ lines: { available: number; total: number }[] }>('/rooms/availability', {
+        method: 'POST',
+        body: JSON.stringify({
+          event_id: eventId,
+          lines: complete.map((r) => ({
+            unit_id: r.unit_id, room_type: r.room_type, check_in: r.check_in, check_out: r.check_out,
+          })),
+        }),
+      })
+        .then((res) => {
+          const next: Record<string, { available: number; total: number }> = {}
+          complete.forEach((r, i) => {
+            const l = res.lines[i]
+            if (l) next[keyOf(r)] = { available: l.available, total: l.total }
+          })
+          setFree(next)
+        })
+        // A failed lookup must not block the form — the save still enforces the cap.
+        .catch(() => setFree({}))
+    }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, eventId])
+
   if (!rows) {
     return (
       <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" /> Loading rooms…
       </div>
     )
+  }
+
+  /** Does this line ask for more than the lodge has free over its nights? */
+  const overOn = (r: Requirement) => {
+    const a = free[keyOf(r)]
+    return a != null && r.count > a.available
   }
 
   const rateOf = (r: Requirement) =>
@@ -172,23 +225,31 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
                     <Input
                       type="number"
                       min={1}
-                      className="w-20"
+                      max={free[keyOf(r)]?.available || undefined}
+                      className={cn('w-20', overOn(r) && 'border-destructive')}
                       value={r.count}
                       disabled={!editable}
+                      aria-invalid={overOn(r) || undefined}
                       onChange={(e) => update(i, { count: Number(e.target.value) })}
                     />
                   </td>
                   <td className="px-3 py-2">
+                    {/* Bounded by the event: check-in cannot precede the first function. */}
                     <Input
                       type="date"
+                      min={win.firstDate ?? undefined}
+                      max={win.lastDate ?? undefined}
                       value={r.check_in}
                       disabled={!editable}
                       onChange={(e) => update(i, { check_in: e.target.value })}
                     />
                   </td>
                   <td className="px-3 py-2">
+                    {/* Check-out reaches at most the morning after the last function. */}
                     <Input
                       type="date"
+                      min={r.check_in ? addDays(r.check_in, 1) : win.firstDate ?? undefined}
+                      max={win.latestCheckOut ?? undefined}
                       value={r.check_out}
                       disabled={!editable}
                       onChange={(e) => update(i, { check_out: e.target.value })}

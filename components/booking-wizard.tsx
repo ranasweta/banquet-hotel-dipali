@@ -410,7 +410,15 @@ export function BookingWizard() {
 
       {step === 3 && (
         <StepCard title="Room requirements">
-          <RoomEditor rooms={rooms} setRooms={setRooms} roomTypes={options.roomTypes} units={options.lodgingUnits ?? []} />
+          <RoomEditor
+            rooms={rooms}
+            setRooms={setRooms}
+            roomTypes={options.roomTypes}
+            units={options.lodgingUnits ?? []}
+            eventId={eventId}
+            fromDate={fromDate}
+            toDate={toDate}
+          />
           {rooms.length > 0 && (
             <div className="space-y-1 rounded-lg border bg-muted/30 p-3 text-sm">
               <div className="flex justify-between">
@@ -828,40 +836,139 @@ function RoomEditor({
   setRooms,
   roomTypes,
   units,
+  eventId,
+  fromDate,
+  toDate,
 }: {
   rooms: RoomReq[]
   setRooms: (r: RoomReq[]) => void
   roomTypes: string[]
   units: { id: string; name: string }[]
+  eventId: string | null
+  fromDate: string
+  toDate: string
 }) {
   // Lodge + category + count + dates is the whole booking (client, 21 Jul 2026). No room
   // numbers: which actual room a guest gets is the reception desk's call, not this system's.
+  //
+  // Both limits the server enforces are mirrored here, so a manager is stopped at the input
+  // rather than at the save: the dates are bounded by the event's own span, and the count is
+  // bounded by what the lodge actually has free. The server still decides — this only saves
+  // the round trip and the error toast.
+  const latestCheckOut = toDate ? addDays(toDate, 1) : ''
+
+  /** key: unit|type|in|out -> what that lodge has free over those nights. */
+  const [free, setFree] = useState<Record<string, { available: number; total: number }>>({})
+  const keyOf = (r: RoomReq) => `${r.unit_id}|${r.room_type}|${r.check_in}|${r.check_out}`
+
+  // Ask the server what is free whenever a line is complete. Debounced: the manager is
+  // still typing, and every keystroke on the count would otherwise be a query.
+  const complete = rooms.filter((r) => r.unit_id && r.room_type && r.check_in && r.check_out)
+  const signature = complete.map(keyOf).join(',')
+  useEffect(() => {
+    if (!complete.length) return
+    const t = setTimeout(() => {
+      api<{ lines: { available: number; total: number }[] }>('/rooms/availability', {
+        method: 'POST',
+        body: JSON.stringify({
+          event_id: eventId ?? undefined,
+          lines: complete.map((r) => ({
+            unit_id: r.unit_id, room_type: r.room_type, check_in: r.check_in, check_out: r.check_out,
+          })),
+        }),
+      })
+        .then((res) => {
+          const next: Record<string, { available: number; total: number }> = {}
+          complete.forEach((r, i) => {
+            const l = res.lines[i]
+            if (l) next[keyOf(r)] = { available: l.available, total: l.total }
+          })
+          setFree(next)
+        })
+        .catch(() => {
+          // A failed lookup must not block the form — the save still enforces the cap.
+          setFree({})
+        })
+    }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, eventId])
+
   const add = () =>
-    setRooms([...rooms, { unit_id: units[0]?.id ?? '', room_type: roomTypes[0] ?? 'deluxe', count: 1, check_in: '', check_out: '' }])
+    setRooms([
+      ...rooms,
+      // Pre-filled with the event's own dates: rooms almost always run the length of the
+      // booking, and it is one fewer thing to get wrong.
+      { unit_id: units[0]?.id ?? '', room_type: roomTypes[0] ?? 'deluxe', count: 1, check_in: fromDate, check_out: latestCheckOut },
+    ])
   const update = (i: number, patch: Partial<RoomReq>) => setRooms(rooms.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const remove = (i: number) => setRooms(rooms.filter((_, j) => j !== i))
+
   return (
     <div className="space-y-3">
       {rooms.length === 0 && <p className="text-sm text-muted-foreground">No rooms required. Add a line if the guest needs lodging.</p>}
-      {rooms.map((r, i) => (
-        <div key={i} className="grid gap-2 sm:grid-cols-6">
-          <Select items={units.map((u) => ({ value: u.id, label: u.name }))} value={r.unit_id} onValueChange={(v) => update(i, { unit_id: v ?? '' })}>
-            <SelectTrigger><SelectValue placeholder="Lodge" /></SelectTrigger>
-            <SelectContent>{units.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
-          </Select>
-          <Select items={roomTypes.map((t) => ({ value: t, label: t }))} value={r.room_type} onValueChange={(v) => update(i, { room_type: v ?? '' })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>{roomTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-          </Select>
-          <Input type="number" min={1} value={r.count} onChange={(e) => update(i, { count: Number(e.target.value) })} placeholder="Count" />
-          <Input type="date" value={r.check_in} onChange={(e) => update(i, { check_in: e.target.value })} />
-          <Input type="date" value={r.check_out} onChange={(e) => update(i, { check_out: e.target.value })} />
-          <Button variant="ghost" size="icon" onClick={() => remove(i)}><Trash2 className="size-4" /></Button>
-        </div>
-      ))}
+      {rooms.map((r, i) => {
+        const avail = free[keyOf(r)]
+        const over = avail != null && r.count > avail.available
+        return (
+          <div key={i} className="space-y-1">
+            <div className="grid gap-2 sm:grid-cols-6">
+              <Select items={units.map((u) => ({ value: u.id, label: u.name }))} value={r.unit_id} onValueChange={(v) => update(i, { unit_id: v ?? '' })}>
+                <SelectTrigger><SelectValue placeholder="Lodge" /></SelectTrigger>
+                <SelectContent>{units.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
+              </Select>
+              <Select items={roomTypes.map((t) => ({ value: t, label: t }))} value={r.room_type} onValueChange={(v) => update(i, { room_type: v ?? '' })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>{roomTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+              </Select>
+              <Input
+                type="number"
+                min={1}
+                max={avail?.available || undefined}
+                value={r.count}
+                onChange={(e) => update(i, { count: Number(e.target.value) })}
+                placeholder="Count"
+                aria-invalid={over || undefined}
+                className={over ? 'border-destructive' : undefined}
+              />
+              {/* Bounded by the event: check-in cannot precede the first function, and
+                  check-out reaches at most the morning after the last. */}
+              <Input
+                type="date"
+                min={fromDate || undefined}
+                max={toDate || undefined}
+                value={r.check_in}
+                onChange={(e) => update(i, { check_in: e.target.value })}
+              />
+              <Input
+                type="date"
+                min={r.check_in ? addDays(r.check_in, 1) : fromDate || undefined}
+                max={latestCheckOut || undefined}
+                value={r.check_out}
+                onChange={(e) => update(i, { check_out: e.target.value })}
+              />
+              <Button variant="ghost" size="icon" onClick={() => remove(i)}><Trash2 className="size-4" /></Button>
+            </div>
+            {avail && (
+              <p className={cn('text-xs', over ? 'text-destructive' : 'text-muted-foreground')}>
+                {over
+                  ? `Only ${avail.available} of ${avail.total} ${r.room_type.replace(/_/g, ' ')} free at this lodge on these dates.`
+                  : `${avail.available} of ${avail.total} free on these dates.`}
+              </p>
+            )}
+          </div>
+        )
+      })}
       <Button variant="outline" size="sm" onClick={add}>Add room requirement</Button>
     </div>
   )
+}
+
+/** `date` shifted by whole days, staying in YYYY-MM-DD. UTC so a timezone cannot shift it. */
+function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
 }
 
 /** Whole nights between two YYYY-MM-DD dates (0 if either is missing or the range is invalid). */

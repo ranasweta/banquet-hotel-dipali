@@ -43,3 +43,6 @@ next-env.d.ts
 # local encrypted document storage
 /storage/*
 !/storage/README.md
+
+.vercel
+.env*

@@ -357,6 +357,27 @@ export async function getRoomAvailability(
   }))
 }
 
+/**
+ * The window rooms may be held for: the event's own span, with check-out reaching the
+ * morning after the last function. Both ends are what `saveRoomRequirements` enforces, so
+ * the form can bound its date pickers to exactly the same thing rather than letting a
+ * manager pick a date that will be refused on save.
+ *
+ * Read from `sub_events`, never the `events.first_date` cache — that is only written at
+ * confirm and is NULL while a proposal is still being built.
+ */
+export async function getEventRoomWindow(
+  eventId: string,
+): Promise<{ firstDate: string | null; lastDate: string | null; latestCheckOut: string | null }> {
+  const [row] = (await db.execute(sql`
+    SELECT min(event_date)::text AS "firstDate",
+           max(event_date)::text AS "lastDate",
+           (max(event_date) + 1)::text AS "latestCheckOut"
+    FROM sub_events WHERE event_id = ${eventId}
+  `)) as unknown as { firstDate: string | null; lastDate: string | null; latestCheckOut: string | null }[]
+  return row ?? { firstDate: null, lastDate: null, latestCheckOut: null }
+}
+
 // ── Room shortfalls — proposals whose rooms have been taken ──────────────────
 
 /**

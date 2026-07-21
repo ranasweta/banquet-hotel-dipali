@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
-import { listRoomRequirements, saveRoomRequirements } from '@/lib/rooms'
+import { getEventRoomWindow, listRoomRequirements, saveRoomRequirements } from '@/lib/rooms'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -53,9 +53,16 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   return ok(result, result.deferred ? 202 : 200)
 })
 
-/** GET /events/:id/room-requirements — the rooms on this booking, for the event's panel. */
+/**
+ * GET /events/:id/room-requirements — the rooms on this booking, for the event's panel.
+ *
+ * Returns the event's date `window` alongside them so the form can bound its pickers to the
+ * same span the save enforces — otherwise a manager picks a date, saves, and only then finds
+ * out it was never allowed.
+ */
 export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await requirePermission('bookings', 'view')
   const { id } = await ctx.params
-  return ok({ requirements: await listRoomRequirements(id) })
+  const [requirements, window] = await Promise.all([listRoomRequirements(id), getEventRoomWindow(id)])
+  return ok({ requirements, window })
 })
