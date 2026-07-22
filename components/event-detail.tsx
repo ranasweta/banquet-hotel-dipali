@@ -6,6 +6,7 @@ import { CalendarDays, MapPin, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
+import { formatTimeRange } from '@/lib/time'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
@@ -241,7 +242,7 @@ export function EventDetailView({
                   <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                     <span className="flex items-center gap-1 tabular-nums">
                       <CalendarDays className="size-3.5" />
-                      {s.eventDate} · {s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)}
+                      {s.eventDate} · {formatTimeRange(s.startTime, s.endTime)}
                     </span>
                     <span className="flex items-center gap-1">
                       <MapPin className="size-3.5" />

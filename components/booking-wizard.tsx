@@ -6,6 +6,8 @@ import { Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, rupeesToPaise } from '@/lib/money'
+import { formatTimeRange } from '@/lib/time'
+import { TimePicker12 } from '@/components/ui/time-picker-12'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -715,7 +717,7 @@ function FunctionsEditor({
                 <div className="min-w-0">
                   <span className="font-medium">{r.name}</span>{' '}
                   <span className="tabular-nums text-muted-foreground">
-                    {r.eventDate} · {r.startTime}–{r.endTime} · {r.venueLabel} · {r.pax} pax
+                    {r.eventDate} · {formatTimeRange(r.startTime, r.endTime)} · {r.venueLabel} · {r.pax} pax
                   </span>
                   <div className="text-xs text-muted-foreground">
                     {/* Tier only — no rate on the selection step (client, 20 Jul 2026). */}
@@ -781,10 +783,10 @@ function FunctionsEditor({
             <Input type="date" min={fromDate || undefined} max={toDate || undefined} value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
           <Field label="Start">
-            <Input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
+            <TimePicker12 value={start} onChange={setStart} />
           </Field>
           <Field label="End">
-            <Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
+            <TimePicker12 value={end} onChange={setEnd} />
           </Field>
         </div>
         {date && !inRange && (
@@ -1076,7 +1078,7 @@ function ReviewStep({
                         <td colSpan={2} className="px-3 py-1.5 text-xs font-semibold">
                           {f.name}
                           <span className="ml-2 font-normal tabular-nums text-muted-foreground">
-                            {f.eventDate} · {f.startTime}–{f.endTime} · {f.pax} pax
+                            {f.eventDate} · {formatTimeRange(f.startTime, f.endTime)} · {f.pax} pax
                           </span>
                         </td>
                       </tr>

@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { formatTime } from '@/lib/time'
 
 /**
  * The venue calendar as a month/week grid (client, 20 Jul 2026), replacing the venues × dates
@@ -144,14 +145,14 @@ export function CalendarBoard() {
       push(s, {
         key: `${b.subEventId}-${b.venueId}-main`,
         booking: b,
-        label: crosses ? `${timeOnly(b.starts)}→` : `${timeOnly(b.starts)}–${timeOnly(b.ends)}`,
+        label: crosses ? `${formatTime(timeOnly(b.starts))}→` : `${formatTime(timeOnly(b.starts))}–${formatTime(timeOnly(b.ends))}`,
         carryover: false,
       })
       if (crosses) {
         push(e, {
           key: `${b.subEventId}-${b.venueId}-tail`,
           booking: b,
-          label: `↳ till ${timeOnly(b.ends)}`,
+          label: `↳ till ${formatTime(timeOnly(b.ends))}`,
           carryover: true,
         })
       }

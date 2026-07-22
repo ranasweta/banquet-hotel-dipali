@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/http'
+import { formatTimeRange } from '@/lib/time'
 
 /**
  * The Banquet Manager's board and the Chef's day view: what is happening, for how many
@@ -31,10 +32,6 @@ type Fn = {
   addons: { description: string; qty: number }[]
 }
 type Day = { date: string; isToday: boolean; functions: Fn[] }
-
-function hhmm(t: string) {
-  return t.slice(0, 5)
-}
 function dayLabel(iso: string) {
   const d = new Date(`${iso}T00:00:00Z`)
   return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })
@@ -86,7 +83,7 @@ export function OperationsBoard({ days = 15 }: { days?: number }) {
                       {f.name} <span className="font-normal text-muted-foreground">· {f.guestName}</span>
                     </h3>
                     <p className="text-sm text-muted-foreground">
-                      {f.eventCode} · {f.venueName ?? 'Venue TBC'} · {hhmm(f.startTime)}–{hhmm(f.endTime)}
+                      {f.eventCode} · {f.venueName ?? 'Venue TBC'} · {formatTimeRange(f.startTime, f.endTime)}
                     </p>
                   </div>
                   <div className="text-right">
