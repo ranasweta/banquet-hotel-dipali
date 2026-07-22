@@ -97,7 +97,16 @@ export function AppNav({
     router.refresh()
   }
 
-  const items = NAV.filter((item) => canView(item.module))
+  // The Banquet Manager's whole job is the next fifteen days (client, 22 Jul 2026: "keep
+  // next 15 days and dashboard, that's it, nothing more"). The board and the venue calendar
+  // and change requests all share the `calendar` module, so permission alone cannot show
+  // one without the others — hence a role allowlist here. Their read grants on bookings,
+  // menus, maintenance and approvals are revoked too (migration 0016), so those pages bounce
+  // them rather than only hiding from the sidebar.
+  const BANQUET_ONLY = new Set(['/', '/day-sheet'])
+  const items = NAV.filter((item) => canView(item.module)).filter(
+    (item) => user.roleName !== 'banquet_manager' || BANQUET_ONLY.has(item.href),
+  )
 
   return (
     <aside

@@ -262,25 +262,27 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   // else, so every grant that would add a tab is revoked. `rooms` stays (their job) and
   // `billing` stays (no tab, but it carries their lock sign-off). Departs from PRD §2.1,
   // which gives them bookings/calendar/approvals — recorded in SEED_ASSUMPTIONS §F6.
-  bookings:    { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
-  // Client, 21 Jul 2026: the Banquet Manager approves nothing — he reads which event, when,
-  // how many people and what the menu is. Venue/date/time moves passed to the Authority,
-  // which is why `calendar` drops to view for him and rises to edit for them.
+  bookings:    { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  // Client, 21-22 Jul 2026: the Banquet Manager approves nothing and, as of 22 Jul, his
+  // whole screen is the 15-day board — Dashboard and Next 15 days, nothing else. `calendar`
+  // stays at view because the board reads it; every other read grant is revoked below so the
+  // pages actually bounce him, not just hide from the sidebar. `billing` stays for his lock
+  // sign-off (no tab). Venue/date/time moves are the Authority's, hence calendar edit there.
   calendar:    { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   // The Chef reads menus to price a delicacy request, but never edits a guest's menu.
-  menus:       { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
-  menu_master: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
-  rooms:       { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  menus:       { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
+  menu_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
+  rooms:       { booking_manager: 'view', banquet_manager: 'none', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
   // Lodge Managers only by default. The Auditor keeps `full` because that role IS the
   // permission utility — it grants and revokes for everyone, so locking it out of a module
   // would make the module ungovernable. Anyone else can be granted this from /admin/roles.
   lodging_calendar: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'view', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none' },
-  maintenance: { booking_manager: 'none', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  maintenance: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none' },
   // `view`, not `edit`: the Lodge Manager must see the outcome of the 35+ room exceptions
   // they raise (BR-L2), but deciding one is the Higher Authority's call, not theirs.
   // `view` for the Banquet Manager, not `edit`: he sees the outcome of what he is reading
   // around, but deciding is the Authority's (client, 21 Jul 2026).
-  approvals:   { booking_manager: 'edit', banquet_manager: 'view', lodge_manager: 'view', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  approvals:   { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'view', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   billing:     { booking_manager: 'none', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
   audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
@@ -324,9 +326,12 @@ export const USERS: UserSeed[] = [
   { fullName: 'Booking Manager 3', mobile: '9000000009', role: 'booking_manager' },
   { fullName: 'Booking Manager 4', mobile: '9000000010', role: 'booking_manager' },
   { fullName: 'Booking Manager 5', mobile: '9000000011', role: 'booking_manager' },
-  { fullName: 'Banquet Manager 1', mobile: '9000000012', role: 'banquet_manager' },
-  { fullName: 'Banquet Manager 2', mobile: '9000000013', role: 'banquet_manager' },
-  { fullName: 'Banquet Manager 3', mobile: '9000000014', role: 'banquet_manager' },
+  // Named by lodge (client, 22 Jul 2026), the same way the Lodge Managers are. Three
+  // managers, three lodges. The name is a label — the role is not yet scoped to a lodge;
+  // functions live at venues across four properties (Dipali Grand has no matching lodge).
+  { fullName: 'Banquet Manager — Palace', mobile: '9000000012', role: 'banquet_manager' },
+  { fullName: 'Banquet Manager — Regency', mobile: '9000000013', role: 'banquet_manager' },
+  { fullName: 'Banquet Manager — Residency', mobile: '9000000014', role: 'banquet_manager' },
   { fullName: 'Maintenance Lead', mobile: '9000000015', role: 'maintenance' },
   { fullName: 'Head Chef', mobile: '9000000016', role: 'chef' },
 ]
