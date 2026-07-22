@@ -16,6 +16,37 @@ Sources, in order of authority:
 
 ---
 
+## Behavioural amendments after the PRD
+
+### KYC (Aadhaar) is optional — no longer a confirm gate (client, 22 Jul 2026)
+The PRD's **FR-1.10** required Aadhaar front + back on file before an enquiry could be
+confirmed. Testing showed the images usually arrive *after* the date is held, so the client
+asked for KYC to be **skippable, and addable afterwards**. What changed:
+
+- the booking wizard's KYC step no longer blocks moving on (only the proposal must exist);
+- `confirmEvent` no longer checks for the images (`lib/confirm.ts`);
+- `POST /events/:id/documents` accepts uploads on any live booking, not only an enquiry;
+- the booking's detail page gained an Aadhaar upload, so KYC can be completed later.
+
+Aadhaar is still stored encrypted and permission-checked (rule 7) — only the *requirement*
+was dropped. If the client later wants it back as a gate, restore the check in `confirmEvent`.
+
+### Rooms follow the event's declared window, not the functions (client, 22 Jul 2026)
+Rule 9 originally capped a room's check-out at "the morning after the last **function**".
+Testing showed guests stay the whole event even when a function isn't on every day (a 25-27
+Jul wedding with one function on the 25th still needs a room to the 27th). So rooms are now
+bounded by the proposal's **declared From/To window**, stored on the event as
+`planned_from`/`planned_to` (migration **0012**) and set from the wizard's step-1 dates.
+
+- `getEventRoomWindow` and `saveRoomRequirements` clamp against `planned_from`/`planned_to`,
+  falling back to the functions' `min/max(event_date)` for a proposal made before this.
+- These columns are separate from `first_date`/`last_date` (the functions' span cached for
+  the calendar) and are **never** rewritten by confirm.
+- **Deploy note:** run `pnpm migrate` against the target DB — the new columns must exist or
+  every event-create / room-save query referencing them will error.
+
+---
+
 ## A. Invented data (placeholders)
 
 ### A1. Regency's 49-room type breakdown — `db/rooms.regency.seed.json`

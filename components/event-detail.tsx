@@ -106,6 +106,29 @@ export function EventDetailView({
     .filter((p) => p.kind === 'advance_block' || p.kind === 'part_payment')
     .reduce((s, p) => s + p.amountPaise, 0)
 
+  // KYC is optional and added whenever the guest brings it (client, 22 Jul 2026) — including
+  // after the booking is confirmed. It stays editable until the booking is locked or cancelled.
+  const kycEditable =
+    canEditBookings && !['locked', 'billed', 'closed', 'cancelled'].includes(event.status)
+
+  async function uploadDoc(kind: 'aadhaar_front' | 'aadhaar_back', file: File) {
+    try {
+      const fd = new FormData()
+      fd.append('kind', kind)
+      fd.append('file', file)
+      const res = await fetch(`/api/v1/events/${event.id}/documents`, { method: 'POST', body: fd })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.error?.message ?? 'Upload failed')
+      }
+      // Reflect the new document without a round trip; the row replaces any of the same kind.
+      setEvent((e) => ({ ...e, documents: [...e.documents.filter((d) => d.kind !== kind), { kind }] }))
+      toast.success(`${kind === 'aadhaar_front' ? 'Aadhaar front' : 'Aadhaar back'} saved`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Upload failed')
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -166,17 +189,34 @@ export function EventDetailView({
           )}
         </MetaCard>
         <MetaCard title="KYC">
-          <div className="flex flex-wrap gap-1.5">
-            {['aadhaar_front', 'aadhaar_back'].map((k) => (
-              <Badge
-                key={k}
-                variant="outline"
-                className={event.documents.some((d) => d.kind === k) ? 'text-emerald-600' : 'text-muted-foreground'}
-              >
-                {k.replace('aadhaar_', 'Aadhaar ')}
-                {event.documents.some((d) => d.kind === k) ? ' ✓' : ' —'}
-              </Badge>
-            ))}
+          <div className="space-y-1.5">
+            {(['aadhaar_front', 'aadhaar_back'] as const).map((k) => {
+              const present = event.documents.some((d) => d.kind === k)
+              return (
+                <div key={k} className="flex items-center justify-between gap-2">
+                  <Badge variant="outline" className={present ? 'text-emerald-600' : 'text-muted-foreground'}>
+                    {k.replace('aadhaar_', 'Aadhaar ')}
+                    {present ? ' ✓' : ' —'}
+                  </Badge>
+                  {/* Add or replace the image after the fact — KYC is no longer a confirm gate. */}
+                  {kycEditable && (
+                    <label className="cursor-pointer text-xs text-primary hover:underline">
+                      {present ? 'Replace' : 'Upload'}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="sr-only"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          e.target.value = ''
+                          if (f) void uploadDoc(k, f)
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </MetaCard>
         <MetaCard title="Functions">

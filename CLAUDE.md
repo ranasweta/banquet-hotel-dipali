@@ -114,8 +114,11 @@ clarifying questions arriving before implementation rather than after mistakes.
    category than the lodge physically has free on the tightest night of the stay)
    and the **35+ rule** (BR-L2), which is an Authority approval, not a limit.
    Enquiries hold nothing — whoever commits first takes the rooms. Room dates must
-   fall inside the event's own span, check-out reaching at most the morning after
-   the last function.
+   fall inside the event's **declared run** — the From/To window picked when the
+   proposal is started, stored as `planned_from`/`planned_to` (amended 22 Jul 2026) —
+   check-out reaching at most the morning after the To date. A guest may stay the
+   whole event even when a function isn't scheduled on every day. Proposals made
+   before that window was captured fall back to the functions' span.
 10. **Menu increases unlock, they do not increment** (client, 21 Jul 2026).
    Pressing Increase on a segment lifts its ceiling; every pick beyond
    `base_pick` is an extra, flagged on the selection so the picker can colour it

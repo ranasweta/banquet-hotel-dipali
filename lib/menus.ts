@@ -357,7 +357,7 @@ export async function saveSubEventMenu(
   actor: Actor,
   subEventId: string,
   input: MenuSaveInput,
-): Promise<{ menuId: string; isComplete: boolean }> {
+): Promise<{ menuId: string; isComplete: boolean; tierName: string; perPlatePaise: number }> {
   return db.transaction(async (tx) => {
     const ctx = await loadSubEventContext(tx, subEventId)
     assertEditable(ctx.status)
@@ -601,7 +601,16 @@ export async function saveSubEventMenu(
       newValue: `${tier.name}${allComplete ? '' : ' (incomplete)'}`,
     })
 
-    return { menuId, isComplete: allComplete }
+    // The caller (the booking wizard) prices its function list from this — the per-plate
+    // rate INCLUDING the wedding surcharge, computed here and never on the client (BR-M5).
+    // Returning only { menuId, isComplete } left perPlatePaise undefined, and Payment review
+    // then called formatPaise(undefined) and white-screened the whole step.
+    return {
+      menuId,
+      isComplete: allComplete,
+      tierName: tier.name,
+      perPlatePaise: price.baseRatePaise + surchargePaise,
+    }
   })
 }
 

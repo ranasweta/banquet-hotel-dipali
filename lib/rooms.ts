@@ -358,22 +358,27 @@ export async function getRoomAvailability(
 }
 
 /**
- * The window rooms may be held for: the event's own span, with check-out reaching the
- * morning after the last function. Both ends are what `saveRoomRequirements` enforces, so
- * the form can bound its date pickers to exactly the same thing rather than letting a
+ * The window rooms may be held for: the event's declared run (its From/To), with check-out
+ * reaching the morning after the To date. Both ends are what `saveRoomRequirements` enforces,
+ * so the form can bound its date pickers to exactly the same thing rather than letting a
  * manager pick a date that will be refused on save.
  *
- * Read from `sub_events`, never the `events.first_date` cache — that is only written at
- * confirm and is NULL while a proposal is still being built.
+ * Prefers the declared window (`events.planned_from/planned_to`, client 22 Jul 2026) so a
+ * guest may stay the whole event even when a function isn't on every day; falls back to the
+ * functions' span for a proposal made before that window was captured. Never the
+ * `events.first_date` cache — that is only written at confirm and is NULL mid-proposal.
  */
 export async function getEventRoomWindow(
   eventId: string,
 ): Promise<{ firstDate: string | null; lastDate: string | null; latestCheckOut: string | null }> {
   const [row] = (await db.execute(sql`
-    SELECT min(event_date)::text AS "firstDate",
-           max(event_date)::text AS "lastDate",
-           (max(event_date) + 1)::text AS "latestCheckOut"
-    FROM sub_events WHERE event_id = ${eventId}
+    SELECT COALESCE(e.planned_from, min(se.event_date))::text      AS "firstDate",
+           COALESCE(e.planned_to,   max(se.event_date))::text      AS "lastDate",
+           (COALESCE(e.planned_to,  max(se.event_date)) + 1)::text AS "latestCheckOut"
+    FROM events e
+    LEFT JOIN sub_events se ON se.event_id = e.id
+    WHERE e.id = ${eventId}
+    GROUP BY e.id
   `)) as unknown as { firstDate: string | null; lastDate: string | null; latestCheckOut: string | null }[]
   return row ?? { firstDate: null, lastDate: null, latestCheckOut: null }
 }
@@ -527,13 +532,18 @@ export async function saveRoomRequirements(
     }
 
     if (requirements.length) {
-      // Rooms are bounded by the event's own dates (client, 21 Jul 2026): the from/to
-      // captured at the top of the wizard. Read from sub_events rather than the
-      // events.first_date/last_date cache, which is only written at confirm and is NULL
-      // for a proposal still being built.
+      // Rooms are bounded by the event's declared run (client, 22 Jul 2026): the From/To
+      // captured at the top of the wizard and stored on the event, so a guest may stay the
+      // whole event even when a function isn't on every day. Falls back to the functions'
+      // span for a proposal made before that window was captured. Never the
+      // events.first_date/last_date cache, which is only written at confirm.
       const [span] = (await tx.execute(sql`
-        SELECT min(event_date)::text AS "firstDate", max(event_date)::text AS "lastDate"
-        FROM sub_events WHERE event_id = ${eventId}
+        SELECT COALESCE(e.planned_from, min(se.event_date))::text AS "firstDate",
+               COALESCE(e.planned_to,   max(se.event_date))::text AS "lastDate"
+        FROM events e
+        LEFT JOIN sub_events se ON se.event_id = e.id
+        WHERE e.id = ${eventId}
+        GROUP BY e.id
       `)) as unknown as { firstDate: string | null; lastDate: string | null }[]
 
       if (span?.firstDate && span.lastDate) {

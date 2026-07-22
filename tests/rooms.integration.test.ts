@@ -515,6 +515,30 @@ d('room inventory hard cap (client, 21 Jul 2026)', () => {
     ])
     expect(ok.totalRooms).toBe(2)
   })
+
+  it('bounds room dates by the DECLARED event window, not just the functions (client, 22 Jul 2026)', async () => {
+    const unitId = await palaceId()
+    // Only one function, on the 10th — but the proposal declares the event runs 10-12 Nov.
+    const eventId = await eventOn('2026-11-10')
+    await db
+      .update(schema.events)
+      .set({ plannedFrom: '2026-11-10', plannedTo: '2026-11-12' })
+      .where(eq(schema.events.id, eventId))
+
+    // A room may now run the whole declared window — checkout up to the morning after the 12th,
+    // even though no function is scheduled past the 10th.
+    const ok = await rooms.saveRoomRequirements(actor, eventId, [
+      { unitId, roomType: 'deluxe', count: 2, checkIn: '2026-11-10', checkOut: '2026-11-13' },
+    ])
+    expect(ok.totalRooms).toBe(2)
+
+    // …but not one night beyond it.
+    await expect(
+      rooms.saveRoomRequirements(actor, eventId, [
+        { unitId, roomType: 'deluxe', count: 2, checkIn: '2026-11-10', checkOut: '2026-11-14' },
+      ]),
+    ).rejects.toThrow(/after the event ends/)
+  })
 })
 
 d('room shortfalls — the notification behind "someone booked it first"', () => {
