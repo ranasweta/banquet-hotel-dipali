@@ -7,6 +7,7 @@ import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { TimePicker12 } from '@/components/ui/time-picker-12'
 import {
   Select,
   SelectContent,
@@ -73,8 +74,8 @@ export function RequestChange({ sub }: { sub: SubEvent }) {
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1"><Label className="text-xs">Date</Label><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="w-40" /></div>
-        <div className="space-y-1"><Label className="text-xs">Start</Label><Input type="time" value={start} onChange={(e) => setStart(e.target.value)} className="w-28" /></div>
-        <div className="space-y-1"><Label className="text-xs">End</Label><Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} className="w-28" /></div>
+        <div className="space-y-1"><Label className="text-xs">Start</Label><TimePicker12 value={start} onChange={setStart} /></div>
+        <div className="space-y-1"><Label className="text-xs">End</Label><TimePicker12 value={end} onChange={setEnd} /></div>
         <div className="w-48 space-y-1">
           <Label className="text-xs">Venue (optional)</Label>
           <Select value={venueId} onValueChange={(v) => { if (v) setVenueId(v) }} items={venues.map((x) => ({ value: x.id, label: x.name }))}>

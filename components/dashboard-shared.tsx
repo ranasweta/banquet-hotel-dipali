@@ -3,6 +3,7 @@ import { ArrowRight, MapPin, CircleCheck } from 'lucide-react'
 import type { AgendaFunction } from '@/lib/dashboard'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { formatTime, formatTimeRange } from '@/lib/time'
 
 /** An agenda row, with the Banquet menu fields optional so plain Booking agendas fit too. */
 export type AgendaItem = AgendaFunction & { tierName?: string | null; menuComplete?: boolean | null }
@@ -284,20 +285,9 @@ export function relativeDay(iso: string, asOf: string): string {
   return formatDay(iso)
 }
 
-export function formatTime(hms: string): string {
-  const [hStr, mStr] = hms.split(':')
-  let h = Number(hStr)
-  const m = Number(mStr)
-  const ampm = h >= 12 ? 'PM' : 'AM'
-  h = h % 12 || 12
-  return m === 0 ? `${h} ${ampm}` : `${h}:${mStr} ${ampm}`
-}
-
-/** A window whose end ≤ start runs past midnight (schema BR-C1); flag it with +1. */
-export function formatTimeRange(start: string, end: string): string {
-  const overnight = end <= start
-  return `${formatTime(start)} – ${formatTime(end)}${overnight ? ' +1' : ''}`
-}
+// Time formatting now lives in lib/time so entry (TimePicker12) and every display share it;
+// re-exported here so the dashboards that import from this module are unaffected.
+export { formatTime, formatTimeRange }
 
 export function daysUntilDue(dateISO: string, asOf: string): number {
   return Math.round((parseISO(dateISO).getTime() - parseISO(asOf).getTime()) / 86_400_000)
