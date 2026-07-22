@@ -74,7 +74,15 @@ export const users = pgTable("users", {
 export const properties = pgTable("properties", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	name: text().notNull(),
+	// The Banquet Manager responsible for this property's venues (migration 0017). One
+	// manager may own several — Regency covers Dipali Grand. NULL shows on no scoped board.
+	banquetManagerId: uuid("banquet_manager_id"),
 }, (table) => [
+	foreignKey({
+			columns: [table.banquetManagerId],
+			foreignColumns: [users.id],
+			name: "properties_banquet_manager_id_fkey"
+		}),
 	unique("properties_name_key").on(table.name),
 ]);
 

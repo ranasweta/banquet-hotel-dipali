@@ -322,6 +322,22 @@ export async function seed(
          AND r.name = 'lodge_manager'
          AND u.full_name LIKE '%' || lu.name || '%'`
 
+    // Give each property its Banquet Manager, so their 15-day board is scoped to their own
+    // venues (client, 22 Jul 2026). Regency covers Dipali Grand, which is why the link lives
+    // on the property — one manager owns several. There is no Residency property (Residency
+    // is lodging only), so the Residency manager owns nothing and their board is empty until
+    // a Residency venue exists.
+    await tx`
+      UPDATE properties p
+         SET banquet_manager_id = u.id
+        FROM users u JOIN roles r ON r.id = u.role_id
+       WHERE r.name = 'banquet_manager'
+         AND (
+           (p.name = 'Palace'       AND u.full_name = 'Banquet Manager — Palace') OR
+           (p.name = 'Regency'      AND u.full_name = 'Banquet Manager — Regency') OR
+           (p.name = 'Dipali Grand' AND u.full_name = 'Banquet Manager — Regency')
+         )`
+
     // --- Settings ---------------------------------------------------------
     await tx`
       INSERT INTO settings ${tx(SETTINGS, 'key', 'value')}

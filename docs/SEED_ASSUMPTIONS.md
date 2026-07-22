@@ -919,6 +919,32 @@ printed card is a mistake rather than history — and that delete is gated on
 `menu_master:delete`, which makes it **the only place in the system where the `delete`
 action means anything**. Every other DELETE route still asks for `create_edit`.
 
+### F19. The Banquet Manager is the 15-day board, scoped to their own venues
+Client, 22 Jul 2026: "for banquet manager only keep next 15 days and dashboard, that's it,
+nothing more. also name each banquet manager with their respective lodge... only their lodge,
+regency is the dipali grand."
+
+**Sidebar (migration 0016).** Trimmed to Dashboard + Next 15 days. Every read grant that only
+gave a tab (bookings, menus, menu_master, rooms, maintenance, approvals) is revoked so the
+pages bounce him. `calendar` stays (the board reads it), `billing` stays (his lock sign-off,
+no tab). The three tabs `calendar` drives are hidden by a role allowlist in the nav, since
+permission alone cannot split them.
+
+**Names (migration 0016).** Banquet Manager — Palace / Regency / Residency, mirroring the
+Lodge Managers.
+
+**Scope (migration 0017).** Each manager's board shows only functions at venues they own.
+The link lives on `properties.banquet_manager_id`, not on the user, because one manager owns
+several — Regency covers Dipali Grand ("regency is the dipali grand"). A bundle that spans
+properties shows to every owner of a member venue.
+
+**The Residency wrinkle, unresolved.** There are three banquet PROPERTIES — Palace, Regency,
+Dipali Grand — and no Residency property (Residency is lodging only, rooms with no venues).
+So the Residency banquet manager owns nothing and sees an empty board. The mechanism is
+correct; the inventory has no venues for that manager. Open: is a Residency banquet manager
+wanted at all, or should that seat map to a property, or will Residency venues be added? The
+name and the empty board stand until the client says.
+
 ---
 
 ## E. Still needed from the client

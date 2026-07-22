@@ -50,6 +50,10 @@ export async function getOperationsHorizon(
   from: string,
   days: number,
   today = new Date().toISOString().slice(0, 10),
+  // A Banquet Manager sees only the venues they own (client, 22 Jul 2026). Their user id,
+  // matched against properties.banquet_manager_id — one manager may own several properties
+  // (Regency covers Dipali Grand). null (everyone else) shows every function.
+  scopeBanquetManagerId: string | null = null,
 ): Promise<{ from: string; to: string; days: OpsDay[] }> {
   const rows = (await db.execute(sql`
     SELECT se.id AS "subEventId", se.event_date::text AS date, se.name,
@@ -66,6 +70,20 @@ export async function getOperationsHorizon(
     WHERE se.event_date >= ${from}::date
       AND se.event_date < (${from}::date + ${days}::int)
       AND e.status IN ('confirmed','in_progress','completed','locked','billed','closed')
+      -- The function is the manager's if its own venue's property is theirs, OR (for a
+      -- bundle booking) any member venue's property is theirs. Bundles can span properties,
+      -- so a shared bundle shows for every manager who owns a piece of it.
+      AND (
+        ${scopeBanquetManagerId}::uuid IS NULL
+        OR (se.venue_id IS NOT NULL AND EXISTS (
+              SELECT 1 FROM venues sv JOIN properties sp ON sp.id = sv.property_id
+               WHERE sv.id = se.venue_id AND sp.banquet_manager_id = ${scopeBanquetManagerId}::uuid))
+        OR (se.bundle_id IS NOT NULL AND EXISTS (
+              SELECT 1 FROM venue_bundle_members vbm
+                JOIN venues sv ON sv.id = vbm.venue_id
+                JOIN properties sp ON sp.id = sv.property_id
+               WHERE vbm.bundle_id = se.bundle_id AND sp.banquet_manager_id = ${scopeBanquetManagerId}::uuid))
+      )
     ORDER BY se.event_date, se.start_time, "venueName"
   `)) as unknown as (Omit<OpsFunction, 'segments' | 'chefDishes' | 'addons'>)[]
 

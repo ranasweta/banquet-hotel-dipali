@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { z } from 'zod'
-import { requirePermission } from '@/lib/auth'
+import { banquetScopeFor, requirePermission } from '@/lib/auth'
 import { badRequest, ok, route } from '@/lib/api'
 import { getOperationsHorizon } from '@/lib/daysheet'
 
@@ -27,12 +27,13 @@ const querySchema = z.object({
  * deliberately contains no rupees.
  */
 export const GET = route(async (req: NextRequest) => {
-  await requirePermission('calendar', 'view')
+  const user = await requirePermission('calendar', 'view')
 
   const parsed = querySchema.safeParse(Object.fromEntries(new URL(req.url).searchParams))
   if (!parsed.success) throw badRequest('from must be YYYY-MM-DD and days 1–31')
 
   const from = parsed.data.from ?? new Date().toLocaleDateString('en-CA')
   const days = parsed.data.days ?? DEFAULT_DAYS
-  return ok(await getOperationsHorizon(from, days))
+  // Scoped for a Banquet Manager to their own venues; everyone else sees all.
+  return ok(await getOperationsHorizon(from, days, undefined, banquetScopeFor(user)))
 })

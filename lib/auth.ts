@@ -62,6 +62,20 @@ export function lodgeScopeFor(user: CurrentUser): string | null {
   return user.lodgingUnitId
 }
 
+/**
+ * The Banquet Manager the operations board should be scoped to, or null for everyone else.
+ *
+ * A Banquet Manager sees only the venues they own (client, 22 Jul 2026), matched against
+ * properties.banquet_manager_id — so this is simply their own id. One manager can own
+ * several properties (Regency covers Dipali Grand), which is why the ownership lives on the
+ * property, not here. A manager who owns none gets an empty board, not an error: unlike a
+ * lodge with no rooms, an empty schedule is a legible state, not a misconfiguration to shout
+ * about.
+ */
+export function banquetScopeFor(user: CurrentUser): string | null {
+  return user.roleName === 'banquet_manager' ? user.id : null
+}
+
 /** The signed-in user, or a 401. */
 export async function requireAuth(): Promise<CurrentUser> {
   const user = await getCurrentUser()
