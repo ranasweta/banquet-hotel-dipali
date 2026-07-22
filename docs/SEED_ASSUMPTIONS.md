@@ -36,7 +36,7 @@ Rule 9 originally capped a room's check-out at "the morning after the last **fun
 Testing showed guests stay the whole event even when a function isn't on every day (a 25-27
 Jul wedding with one function on the 25th still needs a room to the 27th). So rooms are now
 bounded by the proposal's **declared From/To window**, stored on the event as
-`planned_from`/`planned_to` (migration **0012**) and set from the wizard's step-1 dates.
+`planned_from`/`planned_to` (migration **0018**) and set from the wizard's step-1 dates.
 
 - `getEventRoomWindow` and `saveRoomRequirements` clamp against `planned_from`/`planned_to`,
   falling back to the functions' `min/max(event_date)` for a proposal made before this.

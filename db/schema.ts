@@ -195,7 +195,7 @@ export const events = pgTable("events", {
 	status: eventStatus().default('enquiry').notNull(),
 	firstDate: date("first_date"),
 	lastDate: date("last_date"),
-	// The proposal's declared run (migration 0012). Rooms are bounded by this window, not by
+	// The proposal's declared run (migration 0018). Rooms are bounded by this window, not by
 	// the functions' dates; confirm never rewrites it, unlike first_date/last_date above.
 	plannedFrom: date("planned_from"),
 	plannedTo: date("planned_to"),
