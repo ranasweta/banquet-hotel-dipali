@@ -26,7 +26,13 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     .where(eq(schema.events.id, id))
     .limit(1)
   if (!event) throw notFound('Event not found')
-  if (event.status !== 'enquiry') throw badRequest('Documents can only be uploaded on an enquiry')
+  // KYC can be added after the date is held (client, 22 Jul 2026) — Aadhaar is no longer a
+  // confirm gate, so an image often arrives once the booking is already confirmed. Uploads
+  // are open on any live booking; only a locked or cancelled one is closed to changes.
+  const UPLOADABLE = new Set(['enquiry', 'confirmed', 'in_progress', 'completed'])
+  if (!UPLOADABLE.has(event.status)) {
+    throw badRequest('This booking is locked or cancelled — its documents can no longer be changed.')
+  }
 
   const form = await req.formData()
   const kind = kindSchema.parse(form.get('kind'))

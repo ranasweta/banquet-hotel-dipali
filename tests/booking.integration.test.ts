@@ -4,7 +4,8 @@
  *   - a wedding without 3 contacts cannot confirm;
  *   - two parallel confirms on the same slot: exactly one wins, the loser gets a 409.
  *
- * Plus the other confirm gates (Aadhaar on file, 25% advance, missing rate = BR-R1).
+ * Plus the other confirm gates (25% advance, missing rate = BR-R1) — and that KYC is no
+ * longer one of them: an enquiry confirms with no Aadhaar on file (client, 22 Jul 2026).
  * Drives confirmEvent directly against the test database with data built in-line.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -134,9 +135,14 @@ d('confirm gates', () => {
     await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/3 contact/)
   })
 
-  it('refuses confirm without Aadhaar front and back', async () => {
+  it('confirms without Aadhaar on file — KYC is optional now (client, 22 Jul 2026)', async () => {
+    // The old gate demanded aadhaar_front + aadhaar_back before confirm. KYC images can now be
+    // captured after the date is held, so a fully-satisfied enquiry confirms without them.
     const id = await makeEnquiry({ docs: false })
-    await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/Aadhaar/)
+    const res = await confirmEvent(actor, id, advance(ENOUGH_ADVANCE))
+    expect(res.code).toMatch(/^E-/)
+    const [ev] = await db.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, id))
+    expect(ev!.status).toBe('confirmed')
   })
 
   it('refuses confirm when the advance is below 25% (402)', async () => {

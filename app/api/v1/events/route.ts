@@ -8,14 +8,25 @@ import { badRequest, ok, route, unauthorized } from '@/lib/api'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
-const createSchema = z.object({
-  guest_name: z.string().trim().min(1).max(160),
-  event_type: z.string().min(1),
-  contacts: z
-    .array(z.object({ phone: z.string().trim().min(4).max(20), label: z.string().max(40).optional() }))
-    .min(1)
-    .max(6),
-})
+const createSchema = z
+  .object({
+    guest_name: z.string().trim().min(1).max(160),
+    event_type: z.string().min(1),
+    // The proposal's declared run (client, 22 Jul 2026): rooms are bounded by this window.
+    from_date: z.string().regex(ISO_DATE).optional(),
+    to_date: z.string().regex(ISO_DATE).optional(),
+    contacts: z
+      .array(z.object({
+        // Indian mobile numbers are exactly 10 digits (client, 22 Jul 2026).
+        phone: z.string().trim().regex(/^\d{10}$/, 'Enter a 10-digit mobile number'),
+        label: z.string().max(40).optional(),
+      }))
+      .min(1)
+      .max(6),
+  })
+  .refine((v) => !v.from_date || !v.to_date || v.to_date >= v.from_date, {
+    message: 'The To date cannot be before the From date',
+  })
 
 /** POST /events — create an enquiry with its guest contacts (FR-1.11). */
 export const POST = route(async (req: NextRequest) => {
@@ -47,6 +58,8 @@ export const POST = route(async (req: NextRequest) => {
         code: code!.code,
         guestName: input.guest_name,
         eventType: input.event_type,
+        plannedFrom: input.from_date ?? null,
+        plannedTo: input.to_date ?? null,
         createdBy: actor.id,
       })
       .returning({ id: schema.events.id, code: schema.events.code })

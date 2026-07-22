@@ -138,18 +138,23 @@ export function BookingWizard() {
     if (trimmed.length < requiredContacts) {
       return toast.error(`${requiredContacts} contact number${requiredContacts > 1 ? 's are' : ' is'} required for a ${selectedType?.displayName}`)
     }
+    if (trimmed.some((p) => !/^\d{10}$/.test(p))) {
+      return toast.error('Each contact must be a 10-digit mobile number')
+    }
     setBusy(true)
     try {
       const contactsPayload = trimmed.map((phone, i) => ({ phone, label: i === 0 ? 'primary' : undefined }))
+      // The declared run (from/to) rides along so rooms can be bounded by the whole event
+      // window server-side, not just the functions' dates (client, 22 Jul 2026).
       if (!eventId) {
         const { event } = await api<{ event: { id: string } }>('/events', {
           method: 'POST',
-          body: JSON.stringify({ guest_name: guestName, event_type: eventType, contacts: contactsPayload }),
+          body: JSON.stringify({ guest_name: guestName, event_type: eventType, from_date: fromDate, to_date: toDate, contacts: contactsPayload }),
         })
         setEventId(event.id)
         toast.success('Proposal created — now add the Aadhaar images.')
       } else {
-        await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, contacts: contactsPayload }) })
+        await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, from_date: fromDate, to_date: toDate, contacts: contactsPayload }) })
         toast.success('Contacts saved.')
       }
     } catch (e) {
@@ -345,8 +350,11 @@ export function BookingWizard() {
               <div key={i} className="flex gap-2">
                 <Input
                   value={c}
-                  placeholder={i === 0 ? 'Primary contact' : `Contact ${i + 1}`}
-                  onChange={(e) => setContacts((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder={i === 0 ? 'Primary 10-digit mobile' : `Contact ${i + 1}`}
+                  // Digits only, capped at 10 — Indian mobile numbers (client, 22 Jul 2026).
+                  onChange={(e) => setContacts((prev) => prev.map((x, j) => (j === i ? e.target.value.replace(/\D/g, '').slice(0, 10) : x)))}
                 />
                 {contacts.length > 1 && (
                   <Button variant="ghost" size="icon" onClick={() => setContacts((prev) => prev.filter((_, j) => j !== i))}>
@@ -367,8 +375,8 @@ export function BookingWizard() {
           <div>
             <Label className="mb-2 block">Aadhaar — front &amp; back</Label>
             <p className="mb-3 text-sm text-muted-foreground">
-              Capture the card live with the camera, or upload an image. Required to confirm
-              (FR-1.10); stored encrypted.
+              Capture the card live with the camera, or upload an image. Optional — you can add
+              it now, or later from the booking&apos;s page; stored encrypted.
               {!eventId && ' Save the contacts first to enable this.'}
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -377,7 +385,10 @@ export function BookingWizard() {
             </div>
           </div>
 
-          <Nav onBack={() => setStep(0)} onNext={() => setStep(2)} busy={busy} nextDisabled={!eventId || !docs.aadhaar_front || !docs.aadhaar_back} />
+          {/* Aadhaar is no longer a gate (client, 22 Jul 2026): it can be skipped here and
+              added later from the booking's page. Only the proposal itself must exist to move
+              on — that is what `eventId` checks. */}
+          <Nav onBack={() => setStep(0)} onNext={() => setStep(2)} busy={busy} nextDisabled={!eventId} />
         </StepCard>
       )}
 
@@ -1073,7 +1084,10 @@ function ReviewStep({
                       </tr>
                       <tr>
                         <td className="px-3 py-2">
-                          {f.menu
+                          {/* Guard the per-plate rate: a menu whose price hasn't come back
+                              yet must degrade to "no menu", never crash the whole review
+                              step through formatPaise(undefined). */}
+                          {f.menu && Number.isFinite(f.menu.perPlatePaise)
                             ? `Food — ${f.menu.tierName}, ${f.pax} pax × ${formatPaise(f.menu.perPlatePaise)}/plate`
                             : `Food — no menu chosen yet (${f.pax} pax)`}
                         </td>

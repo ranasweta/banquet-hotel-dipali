@@ -1,5 +1,5 @@
 import 'server-only'
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
@@ -39,7 +39,7 @@ function pgCode(err: unknown): string | undefined {
  * THE confirm transaction (FR-1.7, BR-P1). In ONE transaction it:
  *   1. locks the event and requires it to be an enquiry;
  *   2. checks the guest name, the contact count for the event type (3 for weddings),
- *      Aadhaar front+back on file, and at least one sub-event;
+ *      and at least one sub-event (Aadhaar is optional now — added later from the booking page);
  *   3. prices the proposal from rate cards, refusing if any venue has no rate (BR-R1);
  *   4. records the advance (if supplied) and requires recorded advance ≥ 25%;
  *   5. inserts one venue_bookings row per venue window — the GiST exclusion makes a slot
@@ -88,20 +88,10 @@ export async function confirmEvent(
         throw badRequest(`${need} contact number${need > 1 ? 's are' : ' is'} required to confirm`)
       }
 
-      // 2b. Aadhaar front + back on file (FR-1.10).
-      const docs = await tx
-        .select({ kind: schema.guestDocuments.kind })
-        .from(schema.guestDocuments)
-        .where(
-          and(
-            eq(schema.guestDocuments.eventId, eventId),
-            inArray(schema.guestDocuments.kind, ['aadhaar_front', 'aadhaar_back']),
-          ),
-        )
-      const kinds = new Set(docs.map((d) => d.kind))
-      if (!kinds.has('aadhaar_front') || !kinds.has('aadhaar_back')) {
-        throw badRequest('Aadhaar front and back images must be on file to confirm')
-      }
+      // 2b. Aadhaar is no longer required to confirm (client, 22 Jul 2026): KYC images can be
+      //     captured later from the booking's page. The block that demanded aadhaar_front +
+      //     aadhaar_back here was removed so a date can be held on the advance alone. This
+      //     relaxes the old FR-1.10 gate — see docs/SEED_ASSUMPTIONS.md.
 
       // 2c. At least one sub-event.
       const subs = await loadSubEventsForPricing(eventId, tx)
