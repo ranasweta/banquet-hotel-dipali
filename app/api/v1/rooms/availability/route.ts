@@ -10,6 +10,9 @@ const lineSchema = z
   .object({
     unit_id: z.string().uuid(),
     room_type: z.string().min(1),
+    // How many rooms this line wants, so sibling lines in the same request compete for
+    // inventory. Defaulted for older callers that don't send it (they contribute nothing).
+    count: z.number().int().nonnegative().default(0),
     check_in: z.string().regex(ISO_DATE),
     check_out: z.string().regex(ISO_DATE),
   })
@@ -42,6 +45,7 @@ export const POST = route(async (req: NextRequest) => {
     parsed.data.lines.map((l) => ({
       unitId: l.unit_id,
       roomType: l.room_type,
+      count: l.count,
       checkIn: l.check_in,
       checkOut: l.check_out,
     })),

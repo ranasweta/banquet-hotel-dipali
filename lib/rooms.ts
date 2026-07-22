@@ -275,15 +275,27 @@ export async function getLodgingDay(date: string, scopeUnitId?: string | null): 
  * the inventory, so two managers can both be drafting the same rooms and whoever confirms
  * first takes them. `excludeEventId` keeps an event from competing with its own existing
  * rows when its requirements are re-saved.
+ *
+ * A request may carry SEVERAL lines for the same lodge + category on overlapping nights
+ * (e.g. 33 + 6 deluxe). Those lines compete with EACH OTHER, not just with other events:
+ * every line's `count` is summed per night, so a proposal can never book more of a category
+ * than the lodge physically holds (client, 22 Jul 2026).
  */
 export type AvailabilityRequest = {
   unitId: string
   roomType: string
+  /** Rooms this line asks for, so sibling lines in the same request compete for inventory. */
+  count: number
   checkIn: string
   checkOut: string
 }
-export type AvailabilityLine = AvailabilityRequest & {
+export type AvailabilityLine = {
+  unitId: string
+  roomType: string
+  checkIn: string
+  checkOut: string
   total: number
+  /** Peak of (other committed events + this request's sibling lines) over the stay. */
   peakBooked: number
   available: number
 }
@@ -298,13 +310,13 @@ export async function getRoomAvailability(
   const values = sql.join(
     requests.map(
       (r, i) =>
-        sql`(${i}::int, ${r.unitId}::uuid, ${r.roomType}::text, ${r.checkIn}::date, ${r.checkOut}::date)`,
+        sql`(${i}::int, ${r.unitId}::uuid, ${r.roomType}::text, ${r.count}::int, ${r.checkIn}::date, ${r.checkOut}::date)`,
     ),
     sql`, `,
   )
 
   const rows = (await exec.execute(sql`
-    WITH req(idx, unit_id, room_type, check_in, check_out) AS (VALUES ${values}),
+    WITH req(idx, unit_id, room_type, cnt, check_in, check_out) AS (VALUES ${values}),
     -- One row per requested night. check_out is the morning of departure, so the last
     -- occupied night is check_out - 1.
     nights AS (
@@ -312,8 +324,7 @@ export async function getRoomAvailability(
       FROM req q, generate_series(q.check_in, q.check_out - 1, interval '1 day') gs
     ),
     taken AS (
-      SELECT n.idx, n.unit_id, n.room_type, n.d,
-             COALESCE(sum(rr.count), 0)::int AS booked
+      SELECT n.idx, n.d, COALESCE(sum(rr.count), 0)::int AS booked
       FROM nights n
       LEFT JOIN room_requirements rr
         ON rr.unit_id = n.unit_id
@@ -324,7 +335,19 @@ export async function getRoomAvailability(
       -- rr.event_id IS NULL keeps nights nobody has booked; the status filter drops
       -- enquiries, which hold no inventory.
       WHERE rr.event_id IS NULL OR e.status IN ${OCCUPIED_STATES}
-      GROUP BY 1, 2, 3, 4
+      GROUP BY n.idx, n.d
+    ),
+    -- Other lines in THIS SAME request competing for the same lodge+category on the same
+    -- night. Without it two deluxe lines on overlapping dates each ignore the other and a
+    -- proposal books more rooms than exist (client, 22 Jul 2026).
+    siblings AS (
+      SELECT n.idx, n.d, COALESCE(sum(q2.cnt), 0)::int AS sib
+      FROM nights n
+      LEFT JOIN req q2
+        ON q2.idx <> n.idx
+       AND q2.unit_id = n.unit_id AND q2.room_type = n.room_type
+       AND n.d >= q2.check_in AND n.d < q2.check_out
+      GROUP BY n.idx, n.d
     ),
     inv AS (
       SELECT unit_id, room_type, count(*)::int AS total
@@ -335,12 +358,13 @@ export async function getRoomAvailability(
            q.room_type      AS "roomType",
            q.check_in::text  AS "checkIn",
            q.check_out::text AS "checkOut",
-           COALESCE(inv.total, 0)                    AS total,
-           COALESCE(max(t.booked), 0)::int           AS "peakBooked",
-           GREATEST(COALESCE(inv.total, 0) - COALESCE(max(t.booked), 0), 0)::int AS available
+           COALESCE(inv.total, 0)                                               AS total,
+           COALESCE(max(t.booked + COALESCE(s.sib, 0)), 0)::int                 AS "peakBooked",
+           GREATEST(COALESCE(inv.total, 0) - COALESCE(max(t.booked + COALESCE(s.sib, 0)), 0), 0)::int AS available
     FROM req q
     LEFT JOIN inv ON inv.unit_id = q.unit_id AND inv.room_type = q.room_type
     LEFT JOIN taken t ON t.idx = q.idx
+    LEFT JOIN siblings s ON s.idx = q.idx AND s.d = t.d
     GROUP BY q.idx, q.unit_id, q.room_type, q.check_in, q.check_out, inv.total
     ORDER BY q.idx
   `)) as unknown as (AvailabilityLine & { idx: number })[]
@@ -922,7 +946,7 @@ export async function getReconciliation(eventId: string): Promise<Reconciliation
   // They are reported with a zero capacity rather than silently attributed somewhere.
   const measurable = reqs.filter((r) => r.unitId != null)
   const availability = await getRoomAvailability(
-    measurable.map((r) => ({ unitId: r.unitId!, roomType: r.roomType, checkIn: r.checkIn, checkOut: r.checkOut })),
+    measurable.map((r) => ({ unitId: r.unitId!, roomType: r.roomType, count: r.promised, checkIn: r.checkIn, checkOut: r.checkOut })),
     eventId,
   )
   const availByIdx = new Map(measurable.map((r, i) => [r, availability[i]!]))
