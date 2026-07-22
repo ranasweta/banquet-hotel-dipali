@@ -473,7 +473,7 @@ d('room inventory hard cap (client, 21 Jul 2026)', () => {
     // Palace has 3 suites, all taken on the 2nd. A 1st–4th stay must see zero free, even
     // though two of its three nights are wide open.
     const avail = await rooms.getRoomAvailability([
-      { unitId, roomType: 'suite', checkIn: '2026-11-01', checkOut: '2026-11-04' },
+      { unitId, roomType: 'suite', count: 1, checkIn: '2026-11-01', checkOut: '2026-11-04' },
     ])
     expect(avail[0]!.total).toBe(3)
     expect(avail[0]!.peakBooked).toBe(3)
@@ -538,6 +538,29 @@ d('room inventory hard cap (client, 21 Jul 2026)', () => {
         { unitId, roomType: 'deluxe', count: 2, checkIn: '2026-11-10', checkOut: '2026-11-14' },
       ]),
     ).rejects.toThrow(/after the event ends/)
+  })
+
+  it('sums SIBLING lines of the same category — one proposal cannot overbook a lodge (client, 22 Jul 2026)', async () => {
+    const unitId = await palaceId()
+    const eventId = await eventOn('2026-11-18', '2026-11-19')
+
+    // Palace holds 33 deluxe. Two lines, 33 + 6, over the same nights = 39. Each fits on its
+    // own (33 ≤ 33, 6 ≤ 33), but together they exceed inventory and must be refused — the bug
+    // was that each line ignored the other and the proposal booked 39 of 33.
+    await expect(
+      rooms.saveRoomRequirements(actor, eventId, [
+        { unitId, roomType: 'deluxe', count: 33, checkIn: '2026-11-18', checkOut: '2026-11-20' },
+        { unitId, roomType: 'deluxe', count: 6, checkIn: '2026-11-18', checkOut: '2026-11-20' },
+      ]),
+    ).rejects.toMatchObject({ status: 409 })
+
+    // Two lines on NON-overlapping nights don't compete: 33 on the 18th, another 33 on the
+    // 19th, is fine — the half-open stays never share a night.
+    const ok = await rooms.saveRoomRequirements(actor, eventId, [
+      { unitId, roomType: 'deluxe', count: 33, checkIn: '2026-11-18', checkOut: '2026-11-19' },
+      { unitId, roomType: 'deluxe', count: 33, checkIn: '2026-11-19', checkOut: '2026-11-20' },
+    ])
+    expect(ok.totalRooms).toBe(66)
   })
 })
 

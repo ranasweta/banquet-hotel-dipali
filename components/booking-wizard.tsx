@@ -868,14 +868,16 @@ function RoomEditor({
   // the round trip and the error toast.
   const latestCheckOut = toDate ? addDays(toDate, 1) : ''
 
-  /** key: unit|type|in|out -> what that lodge has free over those nights. */
-  const [free, setFree] = useState<Record<string, { available: number; total: number }>>({})
-  const keyOf = (r: RoomReq) => `${r.unit_id}|${r.room_type}|${r.check_in}|${r.check_out}`
+  /** Availability keyed by ROW INDEX — two lines can share a shape (same lodge, category and
+   *  dates) yet each takes real rooms, so a shared string key would collide and hide one. */
+  const [free, setFree] = useState<Record<number, { available: number; total: number }>>({})
+  const keyOf = (r: RoomReq) => `${r.unit_id}|${r.room_type}|${r.check_in}|${r.check_out}|${r.count}`
 
-  // Ask the server what is free whenever a line is complete. Debounced: the manager is
-  // still typing, and every keystroke on the count would otherwise be a query.
-  const complete = rooms.filter((r) => r.unit_id && r.room_type && r.check_in && r.check_out)
-  const signature = complete.map(keyOf).join(',')
+  // Ask the server what is free whenever a line is complete. Debounced: the manager is still
+  // typing, and every keystroke on the count would otherwise be a query. Counts ride along so
+  // sibling lines of the same category compete for the same rooms (client, 22 Jul 2026).
+  const complete = rooms.map((r, i) => ({ r, i })).filter(({ r }) => r.unit_id && r.room_type && r.check_in && r.check_out)
+  const signature = complete.map(({ r }) => keyOf(r)).join(',')
   useEffect(() => {
     if (!complete.length) return
     const t = setTimeout(() => {
@@ -883,16 +885,18 @@ function RoomEditor({
         method: 'POST',
         body: JSON.stringify({
           event_id: eventId ?? undefined,
-          lines: complete.map((r) => ({
-            unit_id: r.unit_id, room_type: r.room_type, check_in: r.check_in, check_out: r.check_out,
+          lines: complete.map(({ r }) => ({
+            unit_id: r.unit_id, room_type: r.room_type,
+            count: Number.isInteger(r.count) && r.count > 0 ? r.count : 0,
+            check_in: r.check_in, check_out: r.check_out,
           })),
         }),
       })
         .then((res) => {
-          const next: Record<string, { available: number; total: number }> = {}
-          complete.forEach((r, i) => {
-            const l = res.lines[i]
-            if (l) next[keyOf(r)] = { available: l.available, total: l.total }
+          const next: Record<number, { available: number; total: number }> = {}
+          complete.forEach(({ i }, k) => {
+            const l = res.lines[k]
+            if (l) next[i] = { available: l.available, total: l.total }
           })
           setFree(next)
         })
@@ -919,7 +923,7 @@ function RoomEditor({
     <div className="space-y-3">
       {rooms.length === 0 && <p className="text-sm text-muted-foreground">No rooms required. Add a line if the guest needs lodging.</p>}
       {rooms.map((r, i) => {
-        const avail = free[keyOf(r)]
+        const avail = free[i]
         const over = avail != null && r.count > avail.available
         return (
           <div key={i} className="space-y-1">

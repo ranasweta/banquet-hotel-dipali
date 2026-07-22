@@ -37,8 +37,8 @@ type Requirement = {
 }
 
 const label = (t: string) => t.replace(/_/g, ' ')
-const keyOf = (r: { unit_id: string; room_type: string; check_in: string; check_out: string }) =>
-  `${r.unit_id}|${r.room_type}|${r.check_in}|${r.check_out}`
+const keyOf = (r: { unit_id: string; room_type: string; check_in: string; check_out: string; count: number }) =>
+  `${r.unit_id}|${r.room_type}|${r.check_in}|${r.check_out}|${r.count}`
 
 /** `date` shifted by whole days, staying in YYYY-MM-DD. UTC so a timezone cannot shift it. */
 function addDays(date: string, n: number): string {
@@ -67,7 +67,9 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
   const [win, setWin] = useState<{ firstDate: string | null; lastDate: string | null; latestCheckOut: string | null }>({
     firstDate: null, lastDate: null, latestCheckOut: null,
   })
-  const [free, setFree] = useState<Record<string, { available: number; total: number }>>({})
+  // Keyed by ROW INDEX: two lines can share a shape (same lodge, category, dates) yet each
+  // holds real rooms, so a shared string key would collide and hide one.
+  const [free, setFree] = useState<Record<number, { available: number; total: number }>>({})
 
   const load = useCallback(async () => {
     const [reqs, opts] = await Promise.all([
@@ -86,8 +88,8 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
     load().catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load rooms'))
   }, [load])
 
-  const complete = (rows ?? []).filter((r) => r.unit_id && r.room_type && r.check_in && r.check_out)
-  const signature = complete.map(keyOf).join(',')
+  const complete = (rows ?? []).map((r, i) => ({ r, i })).filter(({ r }) => r.unit_id && r.room_type && r.check_in && r.check_out)
+  const signature = complete.map(({ r }) => keyOf(r)).join(',')
   useEffect(() => {
     if (!complete.length) return
     const t = setTimeout(() => {
@@ -95,16 +97,19 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
         method: 'POST',
         body: JSON.stringify({
           event_id: eventId,
-          lines: complete.map((r) => ({
-            unit_id: r.unit_id, room_type: r.room_type, check_in: r.check_in, check_out: r.check_out,
+          // Counts ride along so sibling lines of the same category compete (client, 22 Jul 2026).
+          lines: complete.map(({ r }) => ({
+            unit_id: r.unit_id, room_type: r.room_type,
+            count: Number.isInteger(r.count) && r.count > 0 ? r.count : 0,
+            check_in: r.check_in, check_out: r.check_out,
           })),
         }),
       })
         .then((res) => {
-          const next: Record<string, { available: number; total: number }> = {}
-          complete.forEach((r, i) => {
-            const l = res.lines[i]
-            if (l) next[keyOf(r)] = { available: l.available, total: l.total }
+          const next: Record<number, { available: number; total: number }> = {}
+          complete.forEach(({ i }, k) => {
+            const l = res.lines[k]
+            if (l) next[i] = { available: l.available, total: l.total }
           })
           setFree(next)
         })
@@ -123,9 +128,9 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
     )
   }
 
-  /** Does this line ask for more than the lodge has free over its nights? */
-  const overOn = (r: Requirement) => {
-    const a = free[keyOf(r)]
+  /** Does this line ask for more than the lodge has free over its nights? Keyed by row index. */
+  const overOn = (i: number, r: Requirement) => {
+    const a = free[i]
     return a != null && r.count > a.available
   }
 
@@ -225,11 +230,11 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
                     <Input
                       type="number"
                       min={1}
-                      max={free[keyOf(r)]?.available || undefined}
-                      className={cn('w-20', overOn(r) && 'border-destructive')}
+                      max={free[i]?.available || undefined}
+                      className={cn('w-20', overOn(i, r) && 'border-destructive')}
                       value={r.count}
                       disabled={!editable}
-                      aria-invalid={overOn(r) || undefined}
+                      aria-invalid={overOn(i, r) || undefined}
                       onChange={(e) => update(i, { count: Number(e.target.value) })}
                     />
                   </td>
