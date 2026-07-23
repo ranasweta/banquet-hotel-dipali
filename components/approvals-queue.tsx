@@ -23,6 +23,7 @@ type ExceptionRow = {
   eventType: string
   raisedByName: string
   raisedAt: string
+  decidedByName: string | null
   decidedAt: string | null
   remark: string | null
 }
@@ -51,6 +52,11 @@ function age(iso: string): string {
   if (ms < 3_600_000) return 'just now'
   if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`
   return `${Math.floor(ms / 86_400_000)}d ago`
+}
+
+/** Absolute date of a decision, for the permanent record ("23 Jul 2026"). */
+function decidedOn(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
 export function ApprovalsQueue({ canDecide }: { canDecide: boolean }) {
@@ -129,7 +135,7 @@ export function ApprovalsQueue({ canDecide }: { canDecide: boolean }) {
       ) : (
         <div className="space-y-2">
           {rows.map((r) => (
-            <ExceptionCard key={r.id} row={r} canDecide={canDecide && r.status === 'pending'} onDecided={load} />
+            <ExceptionCard key={r.id} row={r} canDecide={canDecide} onDecided={load} />
           ))}
         </div>
       )}
@@ -142,6 +148,28 @@ function ExceptionCard({ row, canDecide, onDecided }: { row: ExceptionRow; canDe
   const [rejecting, setRejecting] = useState(false)
   const [remark, setRemark] = useState('')
   const [picks, setPicks] = useState('1')
+  const [countering, setCountering] = useState(false)
+  const [counterReason, setCounterReason] = useState('')
+
+  async function raiseCounter() {
+    if (!counterReason.trim()) {
+      toast.error('A reason is required')
+      return
+    }
+    setBusy(true)
+    try {
+      await api(`/exceptions/${row.id}/counter`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: counterReason.trim() }),
+      })
+      toast.success(`${row.eventCode}: counter-change raised`)
+      await onDecided()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not raise counter-change')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function decide(action: 'approve' | 'reject' | 'approve_modified', modified?: Record<string, unknown>) {
     if (action === 'reject' && !remark.trim()) {
@@ -181,11 +209,18 @@ function ExceptionCard({ row, canDecide, onDecided }: { row: ExceptionRow; canDe
             <div className="mt-1 text-sm">{row.summary}</div>
             <div className="mt-0.5 text-xs text-muted-foreground">
               raised by {row.raisedByName} · {age(row.raisedAt)}
+              {row.status !== 'pending' && (
+                <span>
+                  {' · '}
+                  {row.status.replace('_', ' ')} by {row.decidedByName ?? '—'}
+                  {row.decidedAt ? ` on ${decidedOn(row.decidedAt)}` : ''}
+                </span>
+              )}
               {row.remark && <span className="text-foreground"> · remark: “{row.remark}”</span>}
             </div>
           </div>
 
-          {canDecide && (
+          {canDecide && row.status === 'pending' && (
             <div className="flex shrink-0 flex-col items-end gap-2">
               {!rejecting ? (
                 <div className="flex items-center gap-1.5">
@@ -226,6 +261,33 @@ function ExceptionCard({ row, canDecide, onDecided }: { row: ExceptionRow; canDe
                     {busy && <Loader2 className="size-3.5 animate-spin" />} Confirm
                   </Button>
                   <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setRejecting(false); setRemark('') }}>Cancel</Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* A settled decision is never edited — the Authority revises it by raising a new,
+              linked counter-change with a reason (tester, 23 Jul 2026). Not offered on a
+              counter-change itself, to avoid endless chains. */}
+          {canDecide && row.status !== 'pending' && row.kind !== 'counter_change' && (
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              {!countering ? (
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => setCountering(true)}>
+                  Raise counter-change
+                </Button>
+              ) : (
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    placeholder="What to change & why (required)"
+                    value={counterReason}
+                    onChange={(e) => setCounterReason(e.target.value)}
+                    className="h-7 w-72"
+                    autoFocus
+                  />
+                  <Button size="sm" disabled={busy} onClick={raiseCounter}>
+                    {busy && <Loader2 className="size-3.5 animate-spin" />} Raise
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={busy} onClick={() => { setCountering(false); setCounterReason('') }}>Cancel</Button>
                 </div>
               )}
             </div>

@@ -68,6 +68,13 @@ function summarize(kind: string, payload: Record<string, unknown>): string {
       return `discount of ₹${(Number(payload.amountPaise) / 100).toLocaleString('en-IN')} over the cap`
     case 'overdue_wedding_balance':
       return `overdue wedding balance`
+    case 'counter_change': {
+      // The Authority revising a settled decision. Name what it revises and why — the actual
+      // menu/room change is made through the normal tools, this row is the logged directive.
+      const orig = (payload.originalSummary as string | undefined) ?? 'a prior decision'
+      const reason = (payload.reason as string | undefined) ?? ''
+      return `Revision of “${orig}”${reason ? ` — ${reason}` : ''}`
+    }
     default:
       return kind
   }
@@ -86,6 +93,7 @@ export type ExceptionRow = {
   eventType: string
   raisedByName: string
   raisedAt: string
+  decidedByName: string | null
   decidedAt: string | null
   remark: string | null
 }
@@ -104,10 +112,11 @@ export async function listExceptions(opts: { status?: string; mineId?: string } 
     SELECT x.id, x.kind::text AS kind, x.status::text AS status, x.payload,
            x.raised_at AS "raisedAt", x.decided_at AS "decidedAt", x.remark,
            ev.id AS "eventId", ev.code AS "eventCode", ev.guest_name AS "guestName", ev.event_type AS "eventType",
-           u.full_name AS "raisedByName"
+           u.full_name AS "raisedByName", du.full_name AS "decidedByName"
     FROM exceptions x
     JOIN events ev ON ev.id = x.event_id
     JOIN users u ON u.id = x.raised_by
+    LEFT JOIN users du ON du.id = x.decided_by
     ${where}
     ORDER BY (x.status = 'pending') DESC, x.raised_at DESC
   `)) as unknown as (Omit<ExceptionRow, 'summary'> & { payload: Record<string, unknown> })[]
@@ -123,6 +132,7 @@ export async function listExceptions(opts: { status?: string; mineId?: string } 
     eventType: r.eventType,
     raisedByName: r.raisedByName,
     raisedAt: r.raisedAt,
+    decidedByName: r.decidedByName,
     decidedAt: r.decidedAt,
     remark: r.remark,
   }))
@@ -233,6 +243,69 @@ export async function decideException(
     }
     throw err
   }
+}
+
+/**
+ * Raises a counter-change against an already-decided exception (tester, 23 Jul 2026).
+ *
+ * Decisions are final and immutable. Rather than editing one, the Authority records a NEW,
+ * linked exception — kind `counter_change` — that captures the revised intent and a mandatory
+ * reason. It appears in the queue/log for the Authority and Auditor and is decided normally;
+ * because `applyDeferred` has no arm for this kind, resolving it is a no-op ('noted') and can
+ * never touch a guest's saved menu or rooms. The operational change is made through the normal
+ * booking/menu tools ("record & route"). The original stays exactly as it was decided.
+ */
+export async function raiseCounterChange(
+  actor: Actor,
+  originalId: string,
+  reason: string,
+): Promise<{ id: string }> {
+  if (!DECIDER_ROLES.has(actor.roleName)) {
+    throw forbidden('Only the Higher Authority can raise a counter-change.')
+  }
+  if (!reason.trim()) throw badRequest('A reason is required for a counter-change.')
+
+  return await db.transaction(async (tx) => {
+    const [orig] = await tx
+      .select()
+      .from(schema.exceptions)
+      .where(eq(schema.exceptions.id, originalId))
+      .for('update')
+      .limit(1)
+    if (!orig) throw notFound('Exception not found')
+    if (orig.status === 'pending') {
+      throw conflict('This approval has not been decided yet — decide it rather than countering it.')
+    }
+
+    const originalSummary = summarize(orig.kind, orig.payload as Record<string, unknown>)
+    const [created] = await tx
+      .insert(schema.exceptions)
+      .values({
+        eventId: orig.eventId,
+        kind: 'counter_change',
+        raisedBy: actor.id,
+        payload: {
+          supersedesId: orig.id,
+          reason: reason.trim(),
+          originalKind: orig.kind,
+          originalSummary,
+          originalStatus: orig.status,
+        },
+      })
+      .returning({ id: schema.exceptions.id })
+
+    await audit(tx, actor, {
+      entity: 'exceptions',
+      entityId: created.id,
+      eventId: orig.eventId,
+      action: 'insert',
+      field: orig.kind,
+      oldValue: orig.status,
+      newValue: `counter-change raised — ${reason.trim()}`,
+    })
+
+    return { id: created.id }
+  })
 }
 
 /** Applies (or applies-modified) the deferred change for an approved exception. */

@@ -66,9 +66,26 @@ function eachDay(from: string, to: string): string[] {
   }
   return days
 }
-function shiftDate(date: string, n: number): string {
+function firstOfMonth(date: string): string {
+  const [y, m] = date.split('-').map(Number)
+  return `${y}-${String(m).padStart(2, '0')}-01`
+}
+function lastOfMonth(date: string): string {
+  const [y, m] = date.split('-').map(Number)
+  // Day 0 of the next month is the last day of this one.
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+}
+function addMonths(date: string, n: number): string {
+  const [y, m] = date.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1 + n, 1)).toISOString().slice(0, 10)
+}
+function monthLabel(date: string): string {
   const [y, m, d] = date.split('-').map(Number)
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
 }
 function weekdayIndex(date: string): number {
   const [y, m, d] = date.split('-').map(Number)
@@ -104,10 +121,14 @@ export function LodgingCalendar() {
   const [loading, setLoading] = useState(true)
   const today = new Date().toLocaleDateString('en-CA')
 
-  const load = useCallback(async (start?: string) => {
+  // One whole month at a time (tester, 23 Jul 2026). `monthAnchor` is any day in the target
+  // month (undefined = the current month); we ask the server for that month's first→last day.
+  const load = useCallback(async (monthAnchor?: string) => {
     setLoading(true)
     try {
-      setData(await api<CalendarResponse>(`/rooms/calendar${start ? `?from=${start}` : ''}`))
+      const start = firstOfMonth(monthAnchor ?? new Date().toLocaleDateString('en-CA'))
+      const end = lastOfMonth(start)
+      setData(await api<CalendarResponse>(`/rooms/calendar?from=${start}&to=${end}`))
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load the lodging calendar')
     } finally {
@@ -176,24 +197,27 @@ export function LodgingCalendar() {
           <Button
             variant="outline"
             size="icon"
-            onClick={() => data && setFrom(shiftDate(data.from, -data.windowDays))}
+            onClick={() => data && setFrom(addMonths(data.from, -1))}
             disabled={loading}
-            aria-label="Previous 30 days"
+            aria-label="Previous month"
           >
             <ChevronLeft className="size-4" />
           </Button>
           <Button
             variant="outline"
             size="icon"
-            onClick={() => data && setFrom(shiftDate(data.from, data.windowDays))}
+            onClick={() => data && setFrom(addMonths(data.from, 1))}
             disabled={loading}
-            aria-label="Next 30 days"
+            aria-label="Next month"
           >
             <ChevronRight className="size-4" />
           </Button>
+          <span className="ml-1 min-w-40 text-base font-semibold tabular-nums">
+            {data ? monthLabel(data.from) : ''}
+          </span>
           {from && (
             <Button variant="ghost" size="sm" onClick={() => setFrom(undefined)}>
-              Today
+              This month
             </Button>
           )}
         </div>
@@ -234,7 +258,7 @@ export function LodgingCalendar() {
           const o = byDate.get(date) ?? { locked: 0, confirmed: 0, pending: 0 }
           const booked = o.locked + o.confirmed + o.pending
           const vacant = Math.max(0, capacity - booked)
-          const { day: dd, month } = formatDay(date)
+          const { day: dd } = formatDay(date)
           const isToday = date === today
           const isSelected = date === selected
           return (
@@ -254,9 +278,6 @@ export function LodgingCalendar() {
                 <span className={cn('text-[15px] tabular-nums', isToday && 'font-semibold text-primary')}>
                   {dd}
                 </span>
-                {(dd === '1' || date === days[0]) && (
-                  <span className="text-[10px] text-muted-foreground">{month}</span>
-                )}
               </div>
 
               <OccupancyBar locked={o.locked} soft={o.confirmed + o.pending} vacant={vacant} />

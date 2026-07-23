@@ -1,0 +1,17 @@
+-- ============================================================
+-- 0020 · Counter-change: the Authority can revise a settled approval (tester, 23 Jul 2026)
+-- ============================================================
+-- Approval decisions stay FINAL and immutable. When the Higher Authority wants to change one,
+-- they raise a NEW, linked exception — a "counter-change" — that records the revised intent and
+-- a mandatory reason, fully in the log for the Authority and the Auditor. It never auto-undoes
+-- the original's applied effect (menu picks, room lines); the booking manager makes the actual
+-- change through the normal tools. Decided as "record & route", not auto-reverse.
+--
+-- Storage: a new `exception_kind` value. The link to the original decision and the reason ride
+-- in the existing jsonb `payload` ({ supersedesId, reason, originalKind, originalSummary }), so
+-- no new column is needed. `applyDeferred` has no arm for this kind, so approving one is a
+-- no-op ('noted') by construction — it cannot touch a guest's saved menu or rooms.
+--
+-- ADD VALUE runs fine inside the migration transaction on PG16 because the value is not USED in
+-- this same transaction (no row is inserted here).
+ALTER TYPE exception_kind ADD VALUE IF NOT EXISTS 'counter_change';
