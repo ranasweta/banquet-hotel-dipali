@@ -8,6 +8,7 @@ import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
 import { formatTimeRange } from '@/lib/time'
 import { Badge } from '@/components/ui/badge'
+import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-picker'
@@ -165,6 +166,13 @@ export function EventDetailView({
               )}
             </CardContent>
           </Card>
+          {/* An enquiry isn't blocked yet — reopen the wizard to keep building it toward the
+              25% confirm. Everything stays editable until then. */}
+          {event.status === 'enquiry' && canEditBookings && (
+            <Link href={`/bookings/${event.id}/edit`} className={buttonVariants({ size: 'sm' })}>
+              Continue proposal →
+            </Link>
+          )}
           {['confirmed', 'in_progress', 'completed'].includes(event.status) && (
             <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
               Print Draft →

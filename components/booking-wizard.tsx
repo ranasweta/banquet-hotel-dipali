@@ -63,7 +63,7 @@ const SUGGESTED_FUNCTIONS = ['Mehndi', 'Haldi', 'Sangeet', 'Wedding', 'Reception
 /** Basis points. Rooms are the only taxed head (client, 20 Jul 2026); see lib/invoice.ts. */
 const ROOM_TAX_BP = 500
 
-export function BookingWizard() {
+export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}) {
   const router = useRouter()
   const [step, setStep] = useState(0)
   const [options, setOptions] = useState<Options | null>(null)
@@ -71,6 +71,8 @@ export function BookingWizard() {
   const [pools, setPools] = useState<MenuPool[]>([])
   const [eventId, setEventId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // True only while a resumed proposal is being pulled back into the form (client, 23 Jul 2026).
+  const [hydrating, setHydrating] = useState(Boolean(resumeEventId))
 
   // Step 1 — dates & event
   const [fromDate, setFromDate] = useState('')
@@ -104,6 +106,70 @@ export function BookingWizard() {
       })
       .catch(() => setTiers([]))
   }, [])
+
+  // Resuming a saved enquiry: rehydrate every step from the server so the manager can pick up
+  // where they left off and edit anything before the 25% confirm (client, 23 Jul 2026). The
+  // page only routes here for enquiries, so no post-confirm state can land in the wizard.
+  useEffect(() => {
+    if (!resumeEventId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [detail, roomRes] = await Promise.all([
+          api<{
+            event: {
+              guestName: string
+              eventType: string
+              contacts: { phone: string; label: string | null }[]
+              subEvents: SubEvent[]
+              documents: { kind: string }[]
+            }
+          }>(`/events/${resumeEventId}`),
+          api<{
+            requirements: RoomReq[]
+            window: { firstDate: string | null; lastDate: string | null }
+          }>(`/events/${resumeEventId}/room-requirements`),
+        ])
+        if (cancelled) return
+        const ev = detail.event
+        setEventId(resumeEventId)
+        setGuestName(ev.guestName)
+        setEventType(ev.eventType)
+        setContacts(ev.contacts.length ? ev.contacts.map((c) => c.phone) : [''])
+        setDocs({
+          aadhaar_front: ev.documents.some((d) => d.kind === 'aadhaar_front'),
+          aadhaar_back: ev.documents.some((d) => d.kind === 'aadhaar_back'),
+        })
+        setSubEvents(ev.subEvents)
+        // The declared run (planned_from/to), falling back to the functions' span server-side.
+        setFromDate(roomRes.window.firstDate ?? '')
+        setToDate(roomRes.window.lastDate ?? '')
+        setRooms(roomRes.requirements)
+
+        // Menu summary per function so the food line and the picker both show the saved tier.
+        const entries = await Promise.all(
+          ev.subEvents.map(async (s) => {
+            try {
+              const r = await api<{ menu: { tierName: string; perPlatePaise: number } | null }>(`/sub-events/${s.id}/menu`)
+              return r.menu ? ([s.id, { tierName: r.menu.tierName, perPlatePaise: r.menu.perPlatePaise }] as const) : null
+            } catch {
+              return null
+            }
+          }),
+        )
+        if (cancelled) return
+        setMenuBySub(Object.fromEntries(entries.filter((e): e is NonNullable<typeof e> => e !== null)))
+        void loadQuote(resumeEventId)
+      } catch (e) {
+        if (!cancelled) toast.error(e instanceof Error ? e.message : 'Could not load this proposal')
+      } finally {
+        if (!cancelled) setHydrating(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [resumeEventId])
 
   const selectedType = options?.eventTypes.find((t) => t.code === eventType)
   const requiredContacts = selectedType?.contactNumbers ?? 1
@@ -277,7 +343,7 @@ export function BookingWizard() {
     }
   }
 
-  if (!options) return <p className="text-sm text-muted-foreground">Loading…</p>
+  if (!options || hydrating) return <p className="text-sm text-muted-foreground">Loading…</p>
 
   // The proposal only distinguishes Wedding from everything else ("Others" → the `other`
   // type): Wedding drives the 3-contact rule and the silent food surcharge. The event's
@@ -306,7 +372,9 @@ export function BookingWizard() {
 
   return (
     <div className="space-y-6">
-      <Stepper step={step} />
+      {/* Free navigation only once the proposal exists (resume, or after the KYC save). Before
+          that the fresh flow keeps its step-0 gating and advances with the Next button. */}
+      <Stepper step={step} onStep={setStep} canStep={(i) => Boolean(eventId) || i === 0} />
 
       {step === 0 && (
         <StepCard title="Date & event">
@@ -327,7 +395,9 @@ export function BookingWizard() {
           )}
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Event">
-              <Select items={proposalTypes} value={eventType} onValueChange={(v) => setEventType(v ?? '')}>
+              {/* Event type is fixed once the proposal exists — it drives the contact rule and
+                  the food surcharge, and changing it can't be undone cleanly. */}
+              <Select items={proposalTypes} value={eventType} onValueChange={(v) => setEventType(v ?? '')} disabled={Boolean(eventId)}>
                 <SelectTrigger><SelectValue placeholder="Wedding or Others" /></SelectTrigger>
                 <SelectContent>
                   {proposalTypes.map((t) => (
@@ -335,6 +405,7 @@ export function BookingWizard() {
                   ))}
                 </SelectContent>
               </Select>
+              {eventId && <p className="text-xs text-muted-foreground">Fixed after the proposal is created.</p>}
             </Field>
             <Field label="Guest name">
               <Input value={guestName} onChange={(e) => setGuestName(e.target.value)} placeholder="Any name — it doesn't affect pricing" />
@@ -481,6 +552,7 @@ export function BookingWizard() {
           }))}
           rooms={rooms}
           roomRates={options.roomRates ?? []}
+          lodgingUnits={options.lodgingUnits ?? []}
           onBack={() => setStep(3)}
           onConfirmed={(code) => {
             toast.success(`Confirmed — ${code}`)
@@ -497,12 +569,23 @@ export function BookingWizard() {
  * legible at a glance, and a done step keeps its number as a tick so progress reads
  * left-to-right. Colour is never the only cue — position, number and tick all carry it.
  */
-function Stepper({ step }: { step: number }) {
+function Stepper({
+  step,
+  onStep,
+  canStep,
+}: {
+  step: number
+  onStep: (i: number) => void
+  canStep: (i: number) => boolean
+}) {
   return (
     <ol className="flex items-start">
       {STEPS.map((label, i) => {
         const done = i < step
         const current = i === step
+        // A step is reachable once its data can exist; clicking it jumps straight there so a
+        // resumed proposal doesn't have to be walked through in order (client, 23 Jul 2026).
+        const reachable = canStep(i) && !current
         return (
           <li key={label} className="relative flex flex-1 flex-col items-center gap-2">
             {/* Connector: drawn behind the marker, half on each side, so the ends never
@@ -525,24 +608,32 @@ function Stepper({ step }: { step: number }) {
                 )}
               />
             )}
-            <span
-              className={cn(
-                'relative z-10 grid size-8 place-items-center rounded-full border text-[13px] tabular-nums transition-colors',
-                current && 'border-primary bg-primary font-semibold text-primary-foreground',
-                done && 'border-primary/40 bg-card text-primary',
-                !done && !current && 'border-border bg-card text-muted-foreground',
-              )}
+            <button
+              type="button"
+              disabled={!reachable}
+              onClick={() => onStep(i)}
+              className="group flex flex-col items-center gap-2 outline-none enabled:cursor-pointer disabled:cursor-default"
             >
-              {done ? '✓' : i + 1}
-            </span>
-            <span
-              className={cn(
-                'text-center text-xs leading-tight',
-                current ? 'font-semibold text-primary' : 'text-muted-foreground',
-              )}
-            >
-              {label}
-            </span>
+              <span
+                className={cn(
+                  'relative z-10 grid size-8 place-items-center rounded-full border text-[13px] tabular-nums transition-colors',
+                  current && 'border-primary bg-primary font-semibold text-primary-foreground',
+                  done && 'border-primary/40 bg-card text-primary',
+                  !done && !current && 'border-border bg-card text-muted-foreground',
+                  reachable && 'group-hover:border-primary',
+                )}
+              >
+                {done ? '✓' : i + 1}
+              </span>
+              <span
+                className={cn(
+                  'text-center text-xs leading-tight',
+                  current ? 'font-semibold text-primary' : 'text-muted-foreground',
+                )}
+              >
+                {label}
+              </span>
+            </button>
           </li>
         )
       })}
@@ -1006,6 +1097,7 @@ function ReviewStep({
   functions,
   rooms,
   roomRates,
+  lodgingUnits,
   onBack,
   onConfirmed,
 }: {
@@ -1017,6 +1109,7 @@ function ReviewStep({
   functions: FunctionRow[]
   rooms: RoomReq[]
   roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
+  lodgingUnits: { id: string; name: string }[]
   onBack: () => void
   onConfirmed: (code: string) => void
 }) {
@@ -1051,6 +1144,25 @@ function ReviewStep({
       setBusy(false)
     }
   }
+
+  // Rooms grouped by lodge so the estimate reads lodge-by-lodge, each with its own sub-total
+  // (client, 23 Jul 2026). First-appearance order is preserved so the review mirrors the editor.
+  const roomGroups = (() => {
+    const order: string[] = []
+    const byUnit: Record<string, { r: RoomReq; i: number }[]> = {}
+    rooms.forEach((r, i) => {
+      if (!byUnit[r.unit_id]) {
+        byUnit[r.unit_id] = []
+        order.push(r.unit_id)
+      }
+      byUnit[r.unit_id].push({ r, i })
+    })
+    return order.map((unitId) => ({
+      unitId,
+      lodgeName: lodgingUnits.find((u) => u.id === unitId)?.name,
+      lines: byUnit[unitId],
+    }))
+  })()
 
   return (
     <StepCard title="Review & confirm">
@@ -1114,19 +1226,38 @@ function ReviewStep({
                     <tr className="bg-muted/40">
                       <td colSpan={2} className="px-3 py-1.5 text-xs font-semibold">Rooms</td>
                     </tr>
-                    {rooms.map((r, i) => {
-                      const rate = roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
-                      const nights = nightsBetween(r.check_in, r.check_out)
+                    {roomGroups.map((g) => {
+                      const groupSubtotal = g.lines.reduce((sum, { r }) => {
+                        const rate = roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
+                        return sum + rate * Math.max(0, r.count) * nightsBetween(r.check_in, r.check_out)
+                      }, 0)
                       return (
-                        <tr key={`${r.room_type}-${i}`}>
-                          <td className="px-3 py-2">
-                            <span className="capitalize">{r.room_type.replace(/_/g, ' ')}</span>
-                            {' — '}{r.count} room{r.count === 1 ? '' : 's'} × {nights} night{nights === 1 ? '' : 's'} × {formatPaise(rate)}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {formatPaise(rate * Math.max(0, r.count) * nights)}
-                          </td>
-                        </tr>
+                        <Fragment key={g.unitId || 'no-lodge'}>
+                          <tr>
+                            <td colSpan={2} className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
+                              {g.lodgeName ?? 'Lodge'}
+                            </td>
+                          </tr>
+                          {g.lines.map(({ r, i }) => {
+                            const rate = roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
+                            const nights = nightsBetween(r.check_in, r.check_out)
+                            return (
+                              <tr key={`${r.room_type}-${i}`}>
+                                <td className="px-3 py-2 pl-6">
+                                  <span className="capitalize">{r.room_type.replace(/_/g, ' ')}</span>
+                                  {' — '}{r.count} room{r.count === 1 ? '' : 's'} × {nights} night{nights === 1 ? '' : 's'} × {formatPaise(rate)}
+                                </td>
+                                <td className="px-3 py-2 text-right tabular-nums">
+                                  {formatPaise(rate * Math.max(0, r.count) * nights)}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                          <tr>
+                            <td className="px-3 py-2 pl-6 text-xs text-muted-foreground">{g.lodgeName ?? 'Lodge'} sub-total</td>
+                            <td className="px-3 py-2 text-right text-xs tabular-nums text-muted-foreground">{formatPaise(groupSubtotal)}</td>
+                          </tr>
+                        </Fragment>
                       )
                     })}
                     <tr>

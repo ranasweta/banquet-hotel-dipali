@@ -96,6 +96,12 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
                       {e.status.replace(/_/g, ' ')}
                     </span>
                     {e.stale && <Badge variant="outline" className="ml-2 text-amber-600">stale</Badge>}
+                    {/* An enquiry is still being built — reopen the wizard to keep going. */}
+                    {e.status === 'enquiry' && canCreate && (
+                      <Link href={`/bookings/${e.id}/edit`} className="ml-2 text-xs text-primary hover:underline">
+                        Continue →
+                      </Link>
+                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {e.proposalTotalPaise > 0 ? formatPaise(e.proposalTotalPaise) : '—'}
