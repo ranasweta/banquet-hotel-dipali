@@ -262,7 +262,8 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   // else, so every grant that would add a tab is revoked. `rooms` stays (their job) and
   // `billing` stays (no tab, but it carries their lock sign-off). Departs from PRD §2.1,
   // which gives them bookings/calendar/approvals — recorded in SEED_ASSUMPTIONS §F6.
-  bookings:    { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  // Higher Authority can now create & continue proposals as well (tester, 23 Jul 2026): view → edit.
+  bookings:    { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   // Client, 21-22 Jul 2026: the Banquet Manager approves nothing and, as of 22 Jul, his
   // whole screen is the 15-day board — Dashboard and Next 15 days, nothing else. `calendar`
   // stays at view because the board reads it; every other read grant is revoked below so the
@@ -278,13 +279,15 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   // would make the module ungovernable. Anyone else can be granted this from /admin/roles.
   lodging_calendar: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'view', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none' },
   maintenance: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none' },
-  // `view`, not `edit`: the Lodge Manager must see the outcome of the 35+ room exceptions
-  // they raise (BR-L2), but deciding one is the Higher Authority's call, not theirs.
-  // `view` for the Banquet Manager, not `edit`: he sees the outcome of what he is reading
-  // around, but deciding is the Authority's (client, 21 Jul 2026).
-  approvals:   { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'view', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  // Approvals is a deciders-only screen now (tester, 23 Jul 2026): only the Higher Authority
+  // and the Auditor get it. The Booking and Lodge Managers still raise exceptions through their
+  // own flows and hear the outcome via notifications and the event's audit trail — but they no
+  // longer see the approvals queue itself.
+  approvals:   { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   billing:     { booking_manager: 'none', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
-  roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  // Roles & Permissions (and the Users screen it shares) is the Auditor's alone (tester,
+  // 23 Jul 2026); the Higher Authority no longer sees it.
+  roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none' },
   audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
 }
 

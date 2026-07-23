@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, rupeesToPaise } from '@/lib/money'
+import { todayISO } from '@/lib/time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -163,7 +164,7 @@ function PaymentSection({ eventId, ledger, editable, onChanged }: { eventId: str
             </Select>
           </div>
           <div className="w-40 space-y-1"><Label className="text-xs">Receipt no.</Label><Input value={receipt} onChange={(e) => setReceipt(e.target.value)} /></div>
-          <div className="w-40 space-y-1"><Label className="text-xs">Received on</Label><Input type="date" value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} /></div>
+          <div className="w-40 space-y-1"><Label className="text-xs">Received on</Label><Input type="date" max={todayISO()} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} /></div>
           <Button onClick={record} disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />} Record</Button>
         </div>
       )}

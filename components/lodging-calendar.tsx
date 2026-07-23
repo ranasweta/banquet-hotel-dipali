@@ -198,12 +198,17 @@ export function LodgingCalendar() {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-0.5 rounded-lg border bg-card p-0.5">
-          <UnitTab label="All units" active={unit === ALL_UNITS} onClick={() => setUnit(ALL_UNITS)} />
-          {units.map((u) => (
-            <UnitTab key={u.id} label={u.name} active={unit === u.id} onClick={() => setUnit(u.id)} />
-          ))}
-        </div>
+        {/* A one-lodge user (a Lodge Manager) sees only their own lodge, so "All units" would
+            just duplicate it with an identical count. Show the switch only when more than one
+            lodge is actually in scope — e.g. the Auditor (tester, 23 Jul 2026). */}
+        {units.length > 1 && (
+          <div className="flex flex-wrap items-center gap-0.5 rounded-lg border bg-card p-0.5">
+            <UnitTab label="All units" active={unit === ALL_UNITS} onClick={() => setUnit(ALL_UNITS)} />
+            {units.map((u) => (
+              <UnitTab key={u.id} label={u.name} active={unit === u.id} onClick={() => setUnit(u.id)} />
+            ))}
+          </div>
+        )}
 
         <Legend />
       </div>

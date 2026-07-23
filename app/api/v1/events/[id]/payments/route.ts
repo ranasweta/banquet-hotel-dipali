@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
 import { recordPayment } from '@/lib/payments'
+import { todayISO } from '@/lib/time'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const bodySchema = z.object({
@@ -10,7 +11,10 @@ const bodySchema = z.object({
   amount_paise: z.number().int().positive(),
   mode: z.enum(['cash', 'upi', 'bank', 'cheque']),
   receipt_no: z.string().trim().min(1).max(60),
-  received_on: z.string().regex(ISO_DATE),
+  received_on: z
+    .string()
+    .regex(ISO_DATE)
+    .refine((d) => d <= todayISO(), { message: 'The received-on date cannot be in the future' }),
   note: z.string().max(300).optional(),
 })
 

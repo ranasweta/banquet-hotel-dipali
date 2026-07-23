@@ -6,7 +6,7 @@ import { Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, rupeesToPaise } from '@/lib/money'
-import { formatTimeRange } from '@/lib/time'
+import { formatTimeRange, todayISO } from '@/lib/time'
 import { TimePicker12 } from '@/components/ui/time-picker-12'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -1298,7 +1298,7 @@ function ReviewStep({
               <Input value={receipt} onChange={(e) => setReceipt(e.target.value)} />
             </Field>
             <Field label="Received on">
-              <Input type="date" value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
+              <Input type="date" max={todayISO()} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
             </Field>
           </div>
         </>

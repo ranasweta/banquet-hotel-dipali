@@ -20,3 +20,13 @@ export function formatTimeRange(start: string, end: string): string {
   const overnight = end <= start
   return `${formatTime(start)} – ${formatTime(end)}${overnight ? ' +1' : ''}`
 }
+
+/**
+ * Today as 'YYYY-MM-DD' in the hotel's timezone (IST). The single source for bounding a
+ * "received on" date: money can't be recorded as received in the future (tester, 23 Jul 2026).
+ * Fixing the zone to IST keeps the client `max` and the server check in agreement regardless
+ * of where the browser is, and avoids the UTC off-by-one in the early-morning IST window.
+ */
+export function todayISO(timeZone = 'Asia/Kolkata'): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone })
+}
