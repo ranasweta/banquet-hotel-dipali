@@ -18,6 +18,7 @@ import { EventMaintenance } from '@/components/event-maintenance'
 import { RequestChange } from '@/components/request-change'
 import { EventLockInvoice } from '@/components/event-lock-invoice'
 import { EventTrail } from '@/components/event-trail'
+import { DownloadPdfButton } from '@/components/download-pdf-button'
 
 type SubEvent = {
   id: string
@@ -174,9 +175,12 @@ export function EventDetailView({
             </Link>
           )}
           {['confirmed', 'in_progress', 'completed'].includes(event.status) && (
-            <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
-              Print Draft →
-            </Link>
+            <>
+              <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
+                Print Draft →
+              </Link>
+              <DownloadPdfButton eventId={event.id} className="text-sm text-primary hover:underline" />
+            </>
           )}
         </div>
       </div>

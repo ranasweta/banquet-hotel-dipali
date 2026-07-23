@@ -1,12 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
+import { todayISO } from '@/lib/time'
+import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DownloadPdfButton } from '@/components/download-pdf-button'
 import {
   Table,
   TableBody,
@@ -35,9 +38,22 @@ const STATUS_STYLES: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300',
 }
 
+// The heading filters (tester, 23 Jul 2026). "Upcoming" is future-dated proposals specifically,
+// the rest are plain status filters. Applied client-side over the already-fetched list.
+const FILTERS: { value: string; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'upcoming', label: 'Upcoming' },
+  { value: 'enquiry', label: 'Enquiry' },
+  { value: 'confirmed', label: 'Confirmed' },
+  { value: 'in_progress', label: 'In progress' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+]
+
 export function BookingsList({ canCreate }: { canCreate: boolean }) {
   const [events, setEvents] = useState<EventRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('all')
 
   useEffect(() => {
     api<{ events: EventRow[] }>('/events')
@@ -46,15 +62,43 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
       .finally(() => setLoading(false))
   }, [])
 
+  const shown = useMemo(() => {
+    const today = todayISO()
+    return events.filter((e) => {
+      if (filter === 'all') return true
+      // Future-dated: the first function is today or later. Functionless enquiries (no date)
+      // are not "upcoming" by date and fall out here, as intended.
+      if (filter === 'upcoming') return e.firstDate != null && e.firstDate >= today
+      return e.status === filter
+    })
+  }, [events, filter])
+
   return (
     <div className="space-y-4">
-      {canCreate && (
-        <div className="flex justify-end">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-0.5 rounded-lg border bg-card p-0.5">
+          {FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              onClick={() => setFilter(f.value)}
+              className={cn(
+                'rounded-md px-3 py-1 text-sm transition-colors',
+                filter === f.value
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {canCreate && (
           <Link href="/bookings/new" className={buttonVariants()}>
             New proposal
           </Link>
-        </div>
-      )}
+        )}
+      </div>
       <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -65,21 +109,24 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
               <TableHead>Dates</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Proposal</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground">Loading…</TableCell>
+                <TableCell colSpan={7} className="text-muted-foreground">Loading…</TableCell>
               </TableRow>
-            ) : events.length === 0 ? (
+            ) : shown.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-muted-foreground">
-                  No proposals yet.{canCreate ? ' Start one with “New proposal”.' : ''}
+                <TableCell colSpan={7} className="text-muted-foreground">
+                  {events.length === 0
+                    ? `No proposals yet.${canCreate ? ' Start one with “New proposal”.' : ''}`
+                    : 'No proposals match this filter.'}
                 </TableCell>
               </TableRow>
             ) : (
-              events.map((e) => (
+              shown.map((e) => (
                 <TableRow key={e.id}>
                   <TableCell className="font-medium tabular-nums">
                     <Link href={`/bookings/${e.id}`} className="text-primary hover:underline">
@@ -96,15 +143,27 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
                       {e.status.replace(/_/g, ' ')}
                     </span>
                     {e.stale && <Badge variant="outline" className="ml-2 text-amber-600">stale</Badge>}
-                    {/* An enquiry is still being built — reopen the wizard to keep going. */}
-                    {e.status === 'enquiry' && canCreate && (
-                      <Link href={`/bookings/${e.id}/edit`} className="ml-2 text-xs text-primary hover:underline">
-                        Continue →
-                      </Link>
-                    )}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {e.proposalTotalPaise > 0 ? formatPaise(e.proposalTotalPaise) : '—'}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-3 whitespace-nowrap">
+                      {/* View opens the complete proposal for any status; Edit reopens the wizard
+                          and is only for enquiries (confirmed changes go via change-requests). */}
+                      <Link href={`/bookings/${e.id}`} className="text-xs text-primary hover:underline">
+                        View
+                      </Link>
+                      {e.status === 'enquiry' && canCreate && (
+                        <Link href={`/bookings/${e.id}/edit`} className="text-xs text-primary hover:underline">
+                          Edit
+                        </Link>
+                      )}
+                      {/* A shareable PDF exists only once the proposal is priced (confirmed+). */}
+                      {['confirmed', 'in_progress', 'completed'].includes(e.status) && (
+                        <DownloadPdfButton eventId={e.id} label="PDF" className="text-xs text-primary hover:underline" />
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))
