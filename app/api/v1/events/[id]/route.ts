@@ -6,6 +6,7 @@ import { requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
 import { badRequest, conflict, notFound, ok, route } from '@/lib/api'
 import { loadEventDetail } from '@/lib/events'
+import { canAuthorityEditConfirmed } from '@/lib/post-confirm'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -62,7 +63,10 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
       .for('update')
       .limit(1)
     if (!event) throw notFound('Event not found')
-    if (event.status !== 'enquiry') {
+    // Enquiries: anyone with create_edit. A confirmed booking: Higher Authority / Auditor may
+    // edit guest / contacts / declared dates directly (tester, 23 Jul 2026) — none of these
+    // touch venue holds. Everyone else, and any later status, still routes to change requests.
+    if (event.status !== 'enquiry' && !canAuthorityEditConfirmed(event.status, actor)) {
       throw conflict('This event is confirmed. Post-confirmation changes need a change request (coming in M8).')
     }
 

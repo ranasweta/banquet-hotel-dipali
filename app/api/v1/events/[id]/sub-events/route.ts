@@ -5,6 +5,7 @@ import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
 import { badRequest, conflict, notFound, ok, route } from '@/lib/api'
+import { addConfirmedFunction, canAuthorityEditConfirmed } from '@/lib/post-confirm'
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -58,25 +59,41 @@ export async function assertCapacity(input: z.infer<typeof subEventSchema>): Pro
   }
 }
 
-async function assertEnquiry(eventId: string): Promise<void> {
-  const [event] = await db
-    .select({ status: schema.events.status })
-    .from(schema.events)
-    .where(eq(schema.events.id, eventId))
-    .limit(1)
-  if (!event) throw notFound('Event not found')
-  if (event.status !== 'enquiry') {
-    throw conflict('This event is confirmed. Changing sub-events needs a change request (coming in M8).')
-  }
-}
-
-/** POST /events/:id/sub-events — add a function to the event. */
+/**
+ * POST /events/:id/sub-events — add a function. Enquiries: anyone with bookings create_edit.
+ * A confirmed booking: Higher Authority / Auditor only — they go through addConfirmedFunction,
+ * which also blocks the venue window and recomputes totals (lib/post-confirm). Everyone else on
+ * a confirmed booking is sent to the change-request flow.
+ */
 export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   const actor = await requirePermission('bookings', 'create_edit')
   const { id } = await ctx.params
   const input = subEventSchema.parse(await req.json())
-  await assertEnquiry(id)
   await assertCapacity(input)
+
+  const [event] = await db
+    .select({ status: schema.events.status })
+    .from(schema.events)
+    .where(eq(schema.events.id, id))
+    .limit(1)
+  if (!event) throw notFound('Event not found')
+
+  if (canAuthorityEditConfirmed(event.status, actor)) {
+    const created = await addConfirmedFunction(actor, id, {
+      name: input.name,
+      eventDate: input.event_date,
+      startTime: input.start_time,
+      endTime: input.end_time,
+      venueId: input.venue_id,
+      bundleId: input.bundle_id,
+      pax: input.pax,
+      paxOverrideNote: input.pax_override_note,
+    })
+    return ok({ subEvent: created }, 201)
+  }
+  if (event.status !== 'enquiry') {
+    throw conflict('This event is confirmed. Changing sub-events needs a change request (coming in M8).')
+  }
 
   const [sub] = await db
     .insert(schema.subEvents)

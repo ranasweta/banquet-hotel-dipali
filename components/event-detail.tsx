@@ -114,6 +114,10 @@ export function EventDetailView({
   const kycEditable =
     canEditBookings && !['locked', 'billed', 'closed', 'cancelled'].includes(event.status)
 
+  // The Higher Authority and Auditor may reopen a CONFIRMED booking in the wizard (tester,
+  // 23 Jul 2026); everyone else's post-confirm changes go through the change-request flow.
+  const isAuthority = role === 'higher_authority' || isAuditor
+
   async function uploadDoc(kind: 'aadhaar_front' | 'aadhaar_back', file: File) {
     try {
       const fd = new FormData()
@@ -172,6 +176,11 @@ export function EventDetailView({
           {event.status === 'enquiry' && canEditBookings && (
             <Link href={`/bookings/${event.id}/edit`} className={buttonVariants({ size: 'sm' })}>
               Continue proposal →
+            </Link>
+          )}
+          {event.status === 'confirmed' && isAuthority && (
+            <Link href={`/bookings/${event.id}/edit`} className={buttonVariants({ size: 'sm' })}>
+              Edit booking →
             </Link>
           )}
           {['confirmed', 'in_progress', 'completed'].includes(event.status) && (

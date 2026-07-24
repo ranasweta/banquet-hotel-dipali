@@ -5,9 +5,10 @@ import { loadEventDetail } from '@/lib/events'
 import { BookingWizard } from '@/components/booking-wizard'
 
 /**
- * Continue a saved proposal. Only enquiries are editable this way — once the 25% advance is
- * recorded (confirm), changes route through the approval flow, so a confirmed/locked event is
- * sent back to its read-only detail page rather than reopened in the wizard.
+ * Continue / edit a proposal in the wizard. An enquiry is editable by anyone with bookings
+ * create_edit. A CONFIRMED booking is editable only by the Higher Authority or Auditor (tester,
+ * 23 Jul 2026) — their function changes re-block the venue holds; everyone else, and any later
+ * status, is sent back to the detail page (changes there go through the change-request flow).
  */
 export default async function EditBookingPage({
   params,
@@ -22,16 +23,22 @@ export default async function EditBookingPage({
   const { id } = await params
   const detail = await loadEventDetail(id)
   if (!detail) notFound()
-  if (detail.status !== 'enquiry') redirect(`/bookings/${id}`)
+
+  const isAuthority = user.roleName === 'higher_authority' || user.roleName === 'auditor'
+  const editable = detail.status === 'enquiry' || (detail.status === 'confirmed' && isAuthority)
+  if (!editable) redirect(`/bookings/${id}`)
+
+  const confirmedEdit = detail.status === 'confirmed'
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Continue proposal</h1>
+          <h1 className="text-2xl font-semibold">{confirmedEdit ? 'Edit booking' : 'Continue proposal'}</h1>
           <p className="text-muted-foreground">
-            Edit anything below and finish at Payment review — the dates block only once a 25%
-            advance is recorded.
+            {confirmedEdit
+              ? 'This booking is confirmed. Your edits — functions, rooms, contacts and dates — save as you make them, and the venue holds move with the functions.'
+              : 'Edit anything below and finish at Payment review — the dates block only once a 25% advance is recorded.'}
           </p>
         </div>
         <Link href={`/bookings/${id}`} className="shrink-0 text-sm font-medium text-primary underline-offset-4 hover:underline">

@@ -50,7 +50,7 @@ const FILTERS: { value: string; label: string }[] = [
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
-export function BookingsList({ canCreate }: { canCreate: boolean }) {
+export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boolean; canEditConfirmed: boolean }) {
   const [events, setEvents] = useState<EventRow[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
@@ -154,7 +154,7 @@ export function BookingsList({ canCreate }: { canCreate: boolean }) {
                       <Link href={`/bookings/${e.id}`} className="text-xs text-primary hover:underline">
                         View
                       </Link>
-                      {e.status === 'enquiry' && canCreate && (
+                      {((e.status === 'enquiry' && canCreate) || (e.status === 'confirmed' && canEditConfirmed)) && (
                         <Link href={`/bookings/${e.id}/edit`} className="text-xs text-primary hover:underline">
                           Edit
                         </Link>

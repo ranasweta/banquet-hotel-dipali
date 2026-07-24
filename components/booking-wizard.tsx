@@ -73,6 +73,9 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
   const [busy, setBusy] = useState(false)
   // True only while a resumed proposal is being pulled back into the form (client, 23 Jul 2026).
   const [hydrating, setHydrating] = useState(Boolean(resumeEventId))
+  // The resumed event's status: an Authority editing a `confirmed` booking skips the advance/
+  // confirm at the end, since the edits save incrementally (tester, 23 Jul 2026).
+  const [eventStatus, setEventStatus] = useState<string>('enquiry')
 
   // Step 1 — dates & event
   const [fromDate, setFromDate] = useState('')
@@ -120,6 +123,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
             event: {
               guestName: string
               eventType: string
+              status: string
               contacts: { phone: string; label: string | null }[]
               subEvents: SubEvent[]
               documents: { kind: string }[]
@@ -133,6 +137,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
         if (cancelled) return
         const ev = detail.event
         setEventId(resumeEventId)
+        setEventStatus(ev.status)
         setGuestName(ev.guestName)
         setEventType(ev.eventType)
         setContacts(ev.contacts.length ? ev.contacts.map((c) => c.phone) : [''])
@@ -553,10 +558,15 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
           rooms={rooms}
           roomRates={options.roomRates ?? []}
           lodgingUnits={options.lodgingUnits ?? []}
+          alreadyConfirmed={eventStatus !== 'enquiry'}
           onBack={() => setStep(3)}
           onConfirmed={(code) => {
             toast.success(`Confirmed — ${code}`)
             router.push('/calendar')
+          }}
+          onDone={() => {
+            toast.success('Changes saved')
+            router.push(`/bookings/${eventId}`)
           }}
         />
       )}
@@ -1098,8 +1108,10 @@ function ReviewStep({
   rooms,
   roomRates,
   lodgingUnits,
+  alreadyConfirmed,
   onBack,
   onConfirmed,
+  onDone,
 }: {
   eventId: string
   quote: Quote | null
@@ -1110,8 +1122,12 @@ function ReviewStep({
   rooms: RoomReq[]
   roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
   lodgingUnits: { id: string; name: string }[]
+  // An Authority editing an already-confirmed booking: edits save as they're made, so there's
+  // no advance to collect and nothing to re-confirm — the step just closes.
+  alreadyConfirmed: boolean
   onBack: () => void
   onConfirmed: (code: string) => void
+  onDone: () => void
 }) {
   const [amount, setAmount] = useState('')
   const [mode, setMode] = useState('upi')
@@ -1282,34 +1298,46 @@ function ReviewStep({
             added to the payment review once logged.
           </p>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Advance received (₹)">
-              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </Field>
-            <Field label="Mode">
-              <Select items={[{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }, { value: 'bank', label: 'Bank' }, { value: 'cheque', label: 'Cheque' }]} value={mode} onValueChange={(v) => setMode(v ?? 'upi')}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {['cash', 'upi', 'bank', 'cheque'].map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Receipt no.">
-              <Input value={receipt} onChange={(e) => setReceipt(e.target.value)} />
-            </Field>
-            <Field label="Received on">
-              <Input type="date" max={todayISO()} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
-            </Field>
-          </div>
+          {alreadyConfirmed ? (
+            <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+              This booking is already confirmed. Your edits — functions, rooms, contacts and dates —
+              are saved as you make them; the venue holds move with the functions. No advance is
+              collected here.
+            </p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Field label="Advance received (₹)">
+                <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              </Field>
+              <Field label="Mode">
+                <Select items={[{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }, { value: 'bank', label: 'Bank' }, { value: 'cheque', label: 'Cheque' }]} value={mode} onValueChange={(v) => setMode(v ?? 'upi')}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['cash', 'upi', 'bank', 'cheque'].map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label="Receipt no.">
+                <Input value={receipt} onChange={(e) => setReceipt(e.target.value)} />
+              </Field>
+              <Field label="Received on">
+                <Input type="date" max={todayISO()} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
+              </Field>
+            </div>
+          )}
         </>
       )}
 
       <div className="flex justify-between pt-2">
         <Button variant="outline" onClick={onBack} disabled={busy}>Back</Button>
-        <Button onClick={confirm} disabled={busy || !quote || quote.missing.length > 0}>
-          {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
-          Confirm proposal
-        </Button>
+        {alreadyConfirmed ? (
+          <Button onClick={onDone} disabled={busy}>Save &amp; finish</Button>
+        ) : (
+          <Button onClick={confirm} disabled={busy || !quote || quote.missing.length > 0}>
+            {busy && <Loader2 className="mr-2 size-4 animate-spin" />}
+            Confirm proposal
+          </Button>
+        )}
       </div>
     </StepCard>
   )
