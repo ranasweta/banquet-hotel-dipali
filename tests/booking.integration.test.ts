@@ -159,16 +159,21 @@ d('confirm gates', () => {
       sql`SELECT id FROM lodging_units WHERE name = 'Palace'`,
     )) as unknown as { id: string }[]
 
+    // BR-L2 fires on the TOTAL room count (>= 35). No single category holds 35 rooms and the
+    // hard inventory cap (rule 9) enforces that, so the threshold is reached across two Palace
+    // categories (33 deluxe + 2 suite). Check-out is the morning after the single-day run —
+    // rule 9 (amended 22 Jul 2026) caps room dates to the declared window, so the stay ends 09-02.
     await rooms.saveRoomRequirements(actor, id, [
-      { unitId: unit!.id, roomType: 'deluxe', count: 35, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: unit!.id, roomType: 'deluxe', count: 33, checkIn: '2026-09-01', checkOut: '2026-09-02' },
+      { unitId: unit!.id, roomType: 'suite', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-02' },
     ])
     await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/35 or more rooms/)
 
     // Trimming below the threshold withdraws the request and confirm goes through — with a
     // bigger advance, because rooms and their 5% tax count toward the 25% base (BR-P1 as
-    // amended 20 Jul 2026): 2 deluxe × 2 nights lifts what a quarter comes to.
+    // amended 20 Jul 2026): 2 deluxe × 1 night lifts what a quarter comes to.
     await rooms.saveRoomRequirements(actor, id, [
-      { unitId: unit!.id, roomType: 'deluxe', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: unit!.id, roomType: 'deluxe', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-02' },
     ])
     const ok = await confirmEvent(actor, id, advance(5_000_000))
     expect(ok.code).toMatch(/^E-/)
