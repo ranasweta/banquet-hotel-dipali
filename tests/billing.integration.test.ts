@@ -92,10 +92,25 @@ d('discount cap (BR-D2)', () => {
     expect(await discounts.effectiveDiscountPaise(e)).toBe(1_500_000)
   })
 
-  it('requires a remark and refuses room head via this endpoint', async () => {
+  it('requires a remark; room is a valid head now (client, 25 Jul 2026)', async () => {
     const e = await makeEvent()
     await expect(discounts.addDiscount(actor, e, { head: 'venue', amountPaise: 1000, remark: '' })).rejects.toThrow(/remark/)
-    await expect(discounts.addDiscount(actor, e, { head: 'room', amountPaise: 1000, remark: 'x' })).rejects.toThrow(/allocation/)
+    // Rooms are bulk-booked now, so a room discount is a normal head (it used to be refused).
+    const r = await discounts.addDiscount(actor, e, { head: 'room', amountPaise: 1000, remark: 'room disc' })
+    expect(r.deferred).toBe(false)
+  })
+
+  it('takes a percentage of a head and recomputes live as the bill changes (client, 25 Jul 2026)', async () => {
+    const e = await makeEvent({ proposalPaise: 10_000_000 })
+    const [venue] = await db.select({ id: schema.venues.id }).from(schema.venues).limit(1)
+    await db.insert(schema.subEvents).values({ eventId: e, name: 'Fn', eventDate: '2026-09-01', startTime: '11:00', endTime: '15:00', venueId: venue!.id, pax: 100, venueRatePaise: 2_000_000 })
+    // 20% of the ₹20,000 venue subtotal = ₹4,000.
+    const r = await discounts.addDiscount(actor, e, { head: 'venue', percentBp: 2000, remark: '20% venue' })
+    expect(r.deferred).toBe(false)
+    expect(await discounts.effectiveDiscountPaise(e)).toBe(400_000)
+    // Live: raise the venue rate and the same 20% now takes more (₹30,000 → ₹6,000).
+    await db.update(schema.subEvents).set({ venueRatePaise: 3_000_000 }).where(eq(schema.subEvents.eventId, e))
+    expect(await discounts.effectiveDiscountPaise(e)).toBe(600_000)
   })
 })
 

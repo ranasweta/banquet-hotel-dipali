@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
-import { formatPaise, rupeesToPaise } from '@/lib/money'
+import { formatPaise } from '@/lib/money'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,45 +19,52 @@ import {
 import { cn } from '@/lib/utils'
 
 /**
- * Discounts, shown on Payment review (client, 20 Jul 2026) rather than tucked under Billing
- * — that is where the money is read, so it is where it should be adjustable.
+ * Discounts, shown on the Payment review at the end of the proposal — that is where the bill is
+ * read, so it is where it is adjusted (client, 25 Jul 2026).
  *
- * The rule is unchanged: the COMBINED discount across every head stays ≤ 10% of the
- * proposal total and applies immediately; crossing the cap records the discount but holds
- * it behind one `discount_over_cap` request per proposal, so it takes effect only on
- * approval (BR-D2). Note the cap is measured against `proposal_total_paise`, which excludes
- * rooms by design — see SEED_ASSUMPTIONS §F10.
- *
- * Fetches its own list so the section can sit wherever it is needed without the parent
- * having to know about discounts.
+ * A discount is a **percentage of a head** — Venue / Menu / Rooms, or Overall for the whole
+ * bill. Its rupee value is live: it recomputes from the current subtotal, so a pax or room
+ * change flows straight through. The COMBINED effective discount stays ≤ 10% of the total bill
+ * (venue + food + rooms, pre-tax) and applies immediately; crossing the cap holds it behind one
+ * `discount_over_cap` request until the Higher Authority approves it (BR-D2).
  */
 
 type DiscountRow = {
   id: string
   head: string
+  percentBp: number | null
   amountPaise: number
   remark: string
   status: 'effective' | 'pending' | 'rejected'
   givenAt: string
 }
+type Bases = { venue: number; menu: number; room: number; overall: number }
 
 const DISC_STATUS: Record<string, string> = {
   effective: 'text-emerald-600',
   pending: 'text-amber-600',
   rejected: 'text-muted-foreground line-through',
 }
+const HEADS = [
+  { value: 'venue', label: 'Venue' },
+  { value: 'menu', label: 'Menu' },
+  { value: 'room', label: 'Rooms' },
+  { value: 'overall', label: 'Overall' },
+]
 
-export function EventDiscounts({ eventId, editable }: { eventId: string; editable: boolean }) {
+export function EventDiscounts({ eventId, editable, onChanged }: { eventId: string; editable: boolean; onChanged?: () => void | Promise<void> }) {
   const [discs, setDiscs] = useState<DiscountRow[]>([])
+  const [bases, setBases] = useState<Bases | null>(null)
   const [head, setHead] = useState('venue')
-  const [amount, setAmount] = useState('')
+  const [percent, setPercent] = useState('')
   const [remark, setRemark] = useState('')
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const d = await api<{ discounts: DiscountRow[] }>(`/events/${eventId}/discounts`)
+      const d = await api<{ discounts: DiscountRow[]; bases: Bases }>(`/events/${eventId}/discounts`)
       setDiscs(d.discounts)
+      setBases(d.bases)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load discounts')
     }
@@ -68,24 +75,30 @@ export function EventDiscounts({ eventId, editable }: { eventId: string; editabl
     void load()
   }, [load])
 
+  const pct = Number(percent)
+  const headBase = bases ? bases[head as keyof Bases] : 0
+  // Live preview of what this % works out to against the chosen head's current subtotal.
+  const previewPaise =
+    Number.isFinite(pct) && pct > 0 && pct <= 100 ? Math.round((headBase * pct) / 100) : null
+
   async function add() {
-    const rupees = Number(amount)
-    if (!Number.isFinite(rupees) || rupees <= 0 || !remark.trim()) {
-      toast.error('Enter a positive amount and a remark')
+    if (!Number.isFinite(pct) || pct <= 0 || pct > 100 || !remark.trim()) {
+      toast.error('Enter a percentage (1–100) and a remark')
       return
     }
     setBusy(true)
     try {
       const res = await api<{ deferred: boolean }>(`/events/${eventId}/discounts`, {
         method: 'POST',
-        body: JSON.stringify({ head, amount_paise: rupeesToPaise(rupees), remark: remark.trim() }),
+        body: JSON.stringify({ head, percent_bp: Math.round(pct * 100), remark: remark.trim() }),
       })
       toast[res.deferred ? 'info' : 'success'](
         res.deferred ? 'Over the 10% cap — sent to the GM for approval.' : 'Discount applied',
       )
-      setAmount('')
+      setPercent('')
       setRemark('')
       await load()
+      await onChanged?.()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not add discount')
     } finally {
@@ -97,6 +110,7 @@ export function EventDiscounts({ eventId, editable }: { eventId: string; editabl
     try {
       await api(`/discounts/${id}`, { method: 'DELETE' })
       await load()
+      await onChanged?.()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not remove')
     }
@@ -107,14 +121,15 @@ export function EventDiscounts({ eventId, editable }: { eventId: string; editabl
       <h3 className="mb-2 text-sm font-medium">Discounts</h3>
       {discs.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          None. The combined discount stays ≤ 10% of the proposal (over that needs GM approval).
+          None. The combined discount stays ≤ 10% of the total bill (over that needs GM approval).
         </p>
       ) : (
         <ul className="mb-2 space-y-1 text-sm">
           {discs.map((x) => (
             <li key={x.id} className="flex items-center justify-between gap-2">
               <span>
-                <span className="capitalize">{x.head}</span> · {x.remark}
+                <span className="capitalize">{x.head}</span>
+                {x.percentBp != null && <span className="text-muted-foreground"> · {x.percentBp / 100}%</span>} · {x.remark}
                 <Badge variant="outline" className={cn('ml-2 capitalize', DISC_STATUS[x.status])}>
                   {x.status}
                 </Badge>
@@ -135,30 +150,20 @@ export function EventDiscounts({ eventId, editable }: { eventId: string; editabl
         <div className="flex flex-wrap items-end gap-2">
           <div className="w-32 space-y-1">
             <Label className="text-xs">Head</Label>
-            <Select
-              value={head}
-              onValueChange={(v) => {
-                if (v) setHead(v)
-              }}
-              items={[
-                { value: 'venue', label: 'Venue' },
-                { value: 'menu', label: 'Menu' },
-                { value: 'overall', label: 'Overall' },
-              ]}
-            >
+            <Select value={head} onValueChange={(v) => { if (v) setHead(v) }} items={HEADS}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="venue">Venue</SelectItem>
-                <SelectItem value="menu">Menu</SelectItem>
-                <SelectItem value="overall">Overall</SelectItem>
+                {HEADS.map((h) => (
+                  <SelectItem key={h.value} value={h.value}>{h.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
-          <div className="w-28 space-y-1">
-            <Label className="text-xs">Amount ₹</Label>
-            <Input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <div className="w-24 space-y-1">
+            <Label className="text-xs">Percent %</Label>
+            <Input inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} placeholder="e.g. 20" />
           </div>
           <div className="grow space-y-1">
             <Label className="text-xs">Remark (required)</Label>
@@ -167,6 +172,11 @@ export function EventDiscounts({ eventId, editable }: { eventId: string; editabl
           <Button variant="outline" onClick={add} disabled={busy}>
             <Plus className="size-4" /> Add
           </Button>
+          {previewPaise != null && (
+            <p className="w-full text-xs text-muted-foreground">
+              {pct}% of {head} ({formatPaise(headBase)}) = <span className="font-medium text-foreground">− {formatPaise(previewPaise)}</span>
+            </p>
+          )}
         </div>
       )}
     </div>

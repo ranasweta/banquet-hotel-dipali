@@ -75,10 +75,13 @@ clarifying questions arriving before implementation rather than after mistakes.
      rule. Booking a bundle inserts one `venue_bookings` row per member venue.
    - Confirm requires recorded advance ≥ 25% BEFORE inserting `venue_bookings`
      rows (BR-P1). The base is `proposal_total_paise` **plus the room estimate and
-     its tax** (client, 20 Jul 2026) — rooms are deliberately outside
-     `proposal_total_paise` because that column is BR-D2's denominator.
-   - Combined discounts ≤ 10% of proposal total unless an approved exception
-     exists (BR-D2); per-room caps Rs. 500 / Rs. 1,000 for suites (BR-D1).
+     its tax** (client, 20 Jul 2026) — `proposal_total_paise` is the venue+food
+     total; rooms live outside that column and are added on for the advance base.
+   - Combined discounts ≤ 10% of the **total bill** — `proposal_total_paise` + rooms,
+     pre-tax (BR-D2, amended 25 Jul 2026; was venue+food only). A discount is a
+     **percentage of a head** (menu / venue / room / overall) recomputed live from
+     the current bill; over the cap → Higher Authority approval. Per-room caps
+     (BR-D1) are retired now that rooms are booked in bulk.
    Each runs in ONE db transaction; rely on the PK/exclusion constraints to
    win races, and translate constraint violations into friendly errors.
 4. **Snapshots, not references**: menus copy tier name, price, surcharge, and

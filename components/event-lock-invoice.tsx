@@ -9,7 +9,6 @@ import { formatPaise, rupeesToPaise } from '@/lib/money'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { EventDiscounts } from '@/components/event-discounts'
 import {
   Table,
   TableBody,
@@ -152,13 +151,8 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
             <Row label="Balance due" value={formatPaise(invoice.balancePaise)} bold accent={invoice.balancePaise > 0 ? 'text-amber-600' : 'text-emerald-600'} />
           </dl>
 
-          {/* Discounts belong with the money, not under a separate Billing tab
-              (client, 20 Jul 2026). The 10% combined cap is unchanged (BR-D2). */}
-          {!invoice.finalised && (
-            <div className="mt-4 border-t pt-3">
-              <EventDiscounts eventId={eventId} editable={isAuditor} />
-            </div>
-          )}
+          {/* Discounts moved to the Billing section (client, 25 Jul 2026), where they can be
+              applied from confirmed rather than only once the event is completed. */}
 
           {isAuditor && !invoice.finalised && (
             <div className="mt-4 flex flex-wrap items-end gap-2 border-t pt-3">

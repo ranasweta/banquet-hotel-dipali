@@ -486,6 +486,7 @@ export const discounts = pgTable("discounts", {
 	refId: uuid("ref_id"),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+	percentBp: integer("percent_bp"),
 	remark: text().notNull(),
 	exceptionId: uuid("exception_id"),
 	givenBy: uuid("given_by").notNull(),
@@ -507,6 +508,7 @@ export const discounts = pgTable("discounts", {
 			name: "discounts_given_by_fkey"
 		}),
 	check("discounts_amount_paise_check", sql`amount_paise > 0`),
+	check("discounts_percent_bp_check", sql`percent_bp IS NULL OR (percent_bp > 0 AND percent_bp <= 10000)`),
 ]);
 
 export const payments = pgTable("payments", {

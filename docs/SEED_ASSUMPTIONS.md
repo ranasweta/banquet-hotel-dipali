@@ -424,14 +424,17 @@ Interpretations made while building the menu module, recorded so they can be cha
 - **The combined-10% cap (BR-D2) counts room-allocation discounts too.** The effective
   discount total = Σ `room_allocations.discount_paise` (BR-D1-capped at allocation, M5) + Σ
   ledger discounts whose exception is absent or approved. Adding a ledger discount that would
-  push the combined total over 10% of the proposal is recorded but held behind a pending
+  push the combined total over 10% of the total bill (proposal + rooms, pre-tax — amended
+  25 Jul 2026, was venue+food only) is recorded but held behind a pending
   `discount_over_cap` exception; it does not count until approved. **Caveat:** the M5
   allocation path checks only the per-room cap, not the combined 10% — so an allocation
   discount can consume 10% headroom without escalating; the combined check fires when ledger
   discounts are added. Acceptable for now; revisit if allocation discounts grow large.
-- **The discounts endpoint covers menu/venue/overall heads only.** Per-room discounts are the
-  allocation's `discount_paise` (M5) — routing them through the ledger too would double-count
-  a room. `head='room'` on the endpoint returns a redirect-to-allocation error.
+- **Discounts are per-head percentages (client, 25 Jul 2026).** Heads are menu / venue /
+  **room** / overall; a row stores `percent_bp` and its rupee value recomputes live from the
+  head's current subtotal, so a pax/room change flows through. Rooms are a normal head now
+  (bulk-booked); the old per-room allocation caps (BR-D1) are retired. The Booking Manager
+  gains billing `edit` to apply them; over the 10% cap still routes to the Higher Authority.
 - **Over-cap discount apply/reject reuses the M6 decide path unchanged.** The discount row is
   written immediately with its `exception_id`; approval flips the exception to approved (the
   effective query then counts it — no M6 code needed), rejection leaves it uncounted. Deleting
