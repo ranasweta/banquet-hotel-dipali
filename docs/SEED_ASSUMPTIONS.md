@@ -613,17 +613,18 @@ rooms + 2 dormitory blocks dies with F2, which moves the dormitories out of Pala
 **Seeded:** `LODGING_UNITS = ['Palace','Regency','Residency']` — the old
 `'Grand / Regency A-block'` unit is retired into Residency and its two PRD §3.3 rates carried
 over (B12). Palace is 35 deluxe + 3 suite = 38, the 2 extra deluxe invented to reach the
-client's count. Residency is 20 deluxe @ Rs. 7,000 + 8 presidential @ Rs. 11,000 = 28; the
-20/8 split and every room number are invented, the rates are B12's on the reading that the
-unit the client calls Residency is the one the PRD called the Grand.
+client's count. Residency is **27 deluxe @ Rs. 5,000 + 2 suite @ Rs. 8,000 = 29**, confirmed
+by the client 25 Jul 2026 (migration 0021). This supersedes the earlier assumption — 20
+deluxe @ Rs. 7,000 + 8 presidential @ Rs. 11,000 = 28, whose split, room numbers and
+B12-inherited rates were all invented.
 
 Note Residency returns as a **lodging unit only**, not a property: the 2026 proposal still
 prices no venue there, so the 19 Jul removal of Upper Hall and the Residency *property*
 stands. `PROPERTIES` is unchanged and Dipali Grand remains a venue property (Signature,
 Lotus Lawn, both really priced on proposal p. 3).
 
-**Questions:** where are Palace's other 2 rooms, and do the Grand's rates really become
-Residency's? If not, all 28 Residency rows are wrong.
+**Questions:** where are Palace's other 2 rooms? (The Grand-rates question for Residency is
+**resolved** — the client supplied its own 27/2 split and Rs. 5,000 / 8,000 rates, 25 Jul 2026.)
 
 ### F2. Dormitories are in Regency, blocks A and B — contradicts PRD §3.3
 The client states the dormitory is in Regency across blocks A and B. PRD §3.3 says the
@@ -653,8 +654,8 @@ they were previously sourced**. The merge also widens BR-D1's per-room discount 
 
 **Seeded:** Regency is now 34 deluxe + 15 suite = 49 (was 34 + 11 semi-suite + 4 suite), the
 11 former semi-suites repriced to Rs. 7,000. Executive Deluxe needed no merge — the Grand
-had zero rooms (B12) — but Residency's deluxe inherits its Rs. 7,000, which is why Residency
-deluxe costs more than Palace deluxe at Rs. 5,000. `db/seed-data.test.ts` now asserts
+had zero rooms (B12); Residency's deluxe once inherited its Rs. 7,000 but is now the
+client-confirmed Rs. 5,000 (see F1, 25 Jul 2026). `db/seed-data.test.ts` now asserts
 semi-suite is gone rather than asserting its rate. **Question:** confirm the merged rates,
 or supply the real ones (expected with F1's list).
 

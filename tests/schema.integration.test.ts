@@ -167,7 +167,7 @@ d('seed', () => {
     })
   })
 
-  it('loads Palace at 36 + 1 dormitory, Regency at 49 + 1, Residency at 28', async () => {
+  it('loads Palace at 36 + 1 dormitory, Regency at 49 + 1, Residency at 29', async () => {
     const rows = await sql<{ name: string; rooms: number; dorms: number }[]>`
       SELECT lu.name,
              count(*) FILTER (WHERE r.room_type <> 'dormitory')::int AS rooms,
@@ -179,7 +179,7 @@ d('seed', () => {
     // One 18-bed dormitory at Palace, one at Regency.
     expect(byUnit.Palace).toEqual({ rooms: 36, dorms: 1 })
     expect(byUnit.Regency).toEqual({ rooms: 49, dorms: 1 })
-    expect(byUnit.Residency).toEqual({ rooms: 28, dorms: 0 })
+    expect(byUnit.Residency).toEqual({ rooms: 29, dorms: 0 }) // 27 deluxe + 2 suite (client, 25 Jul 2026)
     expect(byUnit['Grand / Regency A-block']).toBeUndefined()
   })
 

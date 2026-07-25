@@ -11,6 +11,7 @@ import {
   CalendarDays,
   ChefHat,
   FileText,
+  History,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -44,6 +45,7 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   { href: '/maintenance', label: 'Maintenance', module: 'maintenance', icon: Wrench },
   { href: '/chef', label: 'Chef requests', module: 'menus', icon: ChefHat },
   { href: '/approvals', label: 'Approvals', module: 'approvals', icon: BadgeCheck },
+  { href: '/approvals/history', label: 'Approvals history', module: 'approvals', icon: History },
   { href: '/change-requests', label: 'Change requests', module: 'calendar', icon: Repeat2 },
   { href: '/reports', label: 'Reports', module: 'audit', icon: BarChart3 },
   { href: '/admin/menus', label: 'Menu master', module: 'menu_master', icon: UtensilsCrossed },
@@ -121,9 +123,13 @@ export function AppNav({
   // and change requests all share the `calendar` module, so permission alone cannot show
   // one without the others — hence a role allowlist here.
   const BANQUET_ONLY = new Set(['/', '/day-sheet'])
-  const items = NAV.filter((item) => canView(item.module)).filter(
-    (item) => user.roleName !== 'banquet_manager' || BANQUET_ONLY.has(item.href),
-  )
+  // The approvals history is the deciders' record — hidden from everyone else, the same way
+  // the page redirects non-deciders. Higher Authority and Auditor are the deciders.
+  const DECIDER_ROLES = new Set(['higher_authority', 'auditor'])
+  const DECIDER_ONLY = new Set(['/approvals/history'])
+  const items = NAV.filter((item) => canView(item.module))
+    .filter((item) => user.roleName !== 'banquet_manager' || BANQUET_ONLY.has(item.href))
+    .filter((item) => !DECIDER_ONLY.has(item.href) || DECIDER_ROLES.has(user.roleName))
 
   // ── Shared pieces, rendered at both sizes (desktop aside + mobile drawer) ──────────────
   const links = (opts: { collapsed: boolean; onNavigate?: () => void }) => (

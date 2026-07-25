@@ -127,7 +127,7 @@ const ROOM_TAX_BP = 500
  * count × nights × the cheapest active rack rate for that type, plus 5% tax.
  *
  * Two things to know about the rate. It is the chosen lodge's rate for that category —
- * Residency deluxe is Rs. 7,000 where Palace deluxe is Rs. 5,000, so the lodge matters. And the
+ * Regency deluxe is Rs. 4,500 where Palace deluxe is Rs. 5,000, so the lodge matters. And the
  * tax is rounded PER LINE and summed, matching lib/invoice.ts, so the number quoted here and
  * the number on the Draft cannot differ by a rounding paisa.
  *

@@ -501,12 +501,14 @@ export function MenuPicker({
                   <div className="flex items-center gap-2">
                     <span
                       className={cn(
-                        'text-xs tabular-nums',
-                        complete ? 'text-emerald-600' : 'text-muted-foreground',
+                        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium tabular-nums',
+                        complete
+                          ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                          : 'bg-muted text-muted-foreground',
                       )}
                     >
-                      {complete && <Check className="mr-0.5 inline size-3" />}
-                      {unlocked ? `${count} picked` : `${count} / ${need}`}
+                      {complete && <Check className="size-3" />}
+                      {unlocked ? `${count} picked` : `${count} of ${need}`}
                     </span>
                     {editable && !allIncluded && (
                       <Button

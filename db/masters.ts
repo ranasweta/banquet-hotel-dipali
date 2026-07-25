@@ -7,6 +7,7 @@
  * docs/SEED_ASSUMPTIONS.md.
  */
 import { rupeesToPaise } from '../lib/money'
+import { termsPlainText } from '../lib/terms'
 
 export const PROPERTIES = ['Palace', 'Regency', 'Dipali Grand'] as const
 export type PropertyName = (typeof PROPERTIES)[number]
@@ -189,25 +190,25 @@ export const PALACE_ROOMS: RoomSeed[] = [
 ]
 
 /**
- * Residency: 28 rooms. STILL AN ASSUMPTION — the client has not supplied its breakdown
- * (21 Jul 2026: "residency is still not clear, we can stick to our assumption for now").
- * The 20/8 split and the room numbers are invented; the rates are the proposal's Executive
- * Deluxe Rs. 7,000 and Presidential Suite Rs. 11,000. See SEED_ASSUMPTIONS §F1.
+ * Residency: 29 rooms — 27 Deluxe at Rs. 5,000 + 2 Suite at Rs. 8,000. Confirmed by the
+ * client 25 Jul 2026, replacing the earlier assumption (20 Deluxe @ Rs. 7,000 + 8
+ * Presidential Suite @ Rs. 11,000). Room numbers stay internal — rooms are booked in bulk by
+ * lodge and category. See SEED_ASSUMPTIONS §F1.
  */
 export const RESIDENCY_ROOMS: RoomSeed[] = [
-  ...Array.from({ length: 20 }, (_, i) => ({
+  ...Array.from({ length: 27 }, (_, i) => ({
     block: null,
     roomNo: `R${101 + i}`,
     roomType: 'deluxe',
     beds: 2,
-    rackRatePaise: rupeesToPaise(7_000),
+    rackRatePaise: rupeesToPaise(5_000),
   })),
-  ...Array.from({ length: 8 }, (_, i) => ({
+  ...Array.from({ length: 2 }, (_, i) => ({
     block: null,
     roomNo: `R${201 + i}`,
-    roomType: 'presidential_suite',
+    roomType: 'suite',
     beds: 2,
-    rackRatePaise: rupeesToPaise(11_000),
+    rackRatePaise: rupeesToPaise(8_000),
   })),
 ]
 
@@ -349,7 +350,9 @@ export const SETTINGS: { key: string; value: string }[] = [
   { key: 'large_allocation_rooms', value: '35' }, // BR-L2
   {
     key: 'terms_and_conditions',
-    // FR-7.6: static text supplied by the client, maintained by Admin in masters.
-    value: 'PLACEHOLDER — the hotel has not supplied its Terms & Conditions text yet. Admin must set this before any invoice is finalised (FR-7.6).',
+    // FR-7.6: the client's Terms & Conditions (client PDF, 25 Jul 2026), transcribed in
+    // lib/terms.ts and printed as the styled annexure after every proposal. This flat
+    // snapshot is the record of the terms in force when a bill is drafted.
+    value: termsPlainText(),
   },
 ]

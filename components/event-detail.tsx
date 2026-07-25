@@ -18,7 +18,6 @@ import { EventMaintenance } from '@/components/event-maintenance'
 import { RequestChange } from '@/components/request-change'
 import { EventLockInvoice } from '@/components/event-lock-invoice'
 import { EventTrail } from '@/components/event-trail'
-import { DownloadPdfButton } from '@/components/download-pdf-button'
 
 type SubEvent = {
   id: string
@@ -183,14 +182,11 @@ export function EventDetailView({
               Edit booking →
             </Link>
           )}
-          {['confirmed', 'in_progress', 'completed'].includes(event.status) && (
-            <>
-              <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
-                Print Draft →
-              </Link>
-              <DownloadPdfButton eventId={event.id} className="text-sm text-primary hover:underline" />
-            </>
-          )}
+          {/* The proposal Draft prints at any stage — an enquiry (Draft) or a confirmed
+              booking (Draft 2). Save-as-PDF from the print dialog produces the shareable file. */}
+          <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
+            Print Draft →
+          </Link>
         </div>
       </div>
 

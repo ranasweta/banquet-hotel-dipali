@@ -80,7 +80,11 @@ export async function lockChecklist(
     { key: 'changes', label: 'No change requests pending', done: row.pendingCr === 0, blocking: true },
     { key: 'banquet', label: 'Banquet Manager day-sheet sign-off', done: row.banquet, blocking: true },
     { key: 'lodge', label: 'Lodge Manager rooms reconciliation sign-off', done: !row.hasRooms || row.lodge, blocking: true },
-    { key: 'maintenance', label: 'Maintenance closed', done: row.maint, blocking: true },
+    // Maintenance is optional (client, 25 Jul 2026). Most bookings log no maintenance, and a
+    // booking must not be held from locking waiting on a sign-off that is not owed. It stays on
+    // the checklist so Maintenance can still close it when they do log something, but it no
+    // longer blocks the lock — an event with no entries simply bills Rs 0.
+    { key: 'maintenance', label: 'Maintenance closed', done: row.maint, blocking: false },
     { key: 'payments', label: 'Advance / payments recorded', done: Number(row.paid) > 0, blocking: true },
   ]
   const canLock = row.status === 'completed' && items.every((i) => !i.blocking || i.done)

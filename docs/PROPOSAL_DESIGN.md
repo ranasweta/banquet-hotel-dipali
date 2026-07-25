@@ -287,12 +287,16 @@ wins, the other gets a 409 (`tests/booking.integration.test.ts`).
 
 ## 12. Documents, print & PDF
 
-- **Proforma / Draft** — `GET /events/:id/proforma` (confirmed+; `bookings:view`), rendered by
-  `components/invoice-print.tsx`. **Draft** = provisional; **Draft 2** = the amount payable,
-  issued once and locked. The words "invoice"/"final" never reach the guest.
-- **Download PDF** — a real one-click `.pdf` (not the print dialog), generated client-side from
-  the same proforma data (`components/download-pdf-button.tsx` + `lib/pdf/proposal-pdf.tsx`), so
-  the figures match the on-screen Draft. Offered on the detail page and confirmed proposal rows.
+- **Proforma / Draft** — `GET /events/:id/proforma` (any stage; `bookings:view`), rendered by
+  `components/invoice-print.tsx` as a designed A4 document: the proposal first, then the Terms &
+  Conditions annexure (`lib/terms.ts`), watermarked on every page. **Draft** = an enquiry's
+  provisional estimate; **Draft 2** = a confirmed (or later) booking's proposal. The words
+  "invoice"/"final" never reach the guest. An enquiry Draft prices the venue live off the rate
+  card until the confirm snapshot exists, so it is complete rather than blocked (client, 25 Jul 2026).
+- **Print → Save as PDF** — "Print Draft" is available at every stage and opens the print view;
+  the browser print dialog (Ctrl/Cmd+P → Save as PDF, A4, background graphics on) produces the
+  shareable file. The old client-side `@react-pdf` one-click download was retired 25 Jul 2026 —
+  it could not reproduce the designed template.
 - Aadhaar bytes are never returned without a permission check; never logged.
 
 ---
@@ -393,7 +397,7 @@ GET|POST /change-requests | POST /change-requests/:id/decide  post-confirm amend
 | State machine + cron transitions | `lib/events.ts` |
 | Approvals + counter-change | `lib/approvals.ts` |
 | Invoice / proforma / bill math | `lib/invoice.ts` |
-| PDF | `lib/pdf/proposal-pdf.tsx`, `components/download-pdf-button.tsx` |
+| Proposal print + T&C annexure | `components/invoice-print.tsx`, `lib/terms.ts` (print → Save as PDF) |
 | Permissions matrix | `db/masters.ts` (+ migrations under `db/migrations/`) |
 | Schema (constraints, triggers) | `db/schema.sql` / `db/schema.ts` |
 | Detail / list / calendars | `components/event-detail.tsx`, `bookings-list.tsx`, `calendar-board.tsx`, `lodging-calendar.tsx` |

@@ -44,8 +44,8 @@ export const GET = route(async () => {
     // (type, count, dates) — the billable rate lands when the Lodge Manager allocates real
     // rooms — so the wizard prices it at the type's lowest rack rate as an estimate.
     db.execute(sql`
-      -- Per lodge: Residency deluxe is Rs. 7,000 where Palace deluxe is Rs. 5,000, so a
-      -- single min() across lodges would under-quote the guest (21 Jul 2026).
+      -- Per lodge: Regency deluxe is Rs. 4,500 where Palace deluxe is Rs. 5,000, so a
+      -- single min() across lodges would under-quote the guest (rates differ per lodge).
       SELECT unit_id AS "unitId", room_type AS "roomType", min(rack_rate_paise)::bigint AS "rackRatePaise"
       FROM rooms WHERE is_active
       GROUP BY unit_id, room_type
