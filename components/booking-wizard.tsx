@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select'
 import { AadhaarCapture } from '@/components/aadhaar-capture'
 import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-picker'
+import { EventDiscounts } from '@/components/event-discounts'
 import { cn } from '@/lib/utils'
 
 type EventType = { code: string; displayName: string; contactNumbers: number; isWedding: boolean }
@@ -49,6 +50,7 @@ type SubEvent = {
 type RoomReq = { unit_id: string; room_type: string; count: number; check_in: string; check_out: string }
 type Quote = {
   totalPaise: number
+  discountPaise: number
   advanceRequiredPaise: number
   lines: { subEventId: string; name: string; ratePaise: number | null }[]
   missing: { subEventId: string; name: string }[]
@@ -568,6 +570,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
             toast.success('Changes saved')
             router.push(`/bookings/${eventId}`)
           }}
+          onDiscountChanged={() => loadQuote(eventId)}
         />
       )}
     </div>
@@ -1112,6 +1115,7 @@ function ReviewStep({
   onBack,
   onConfirmed,
   onDone,
+  onDiscountChanged,
 }: {
   eventId: string
   quote: Quote | null
@@ -1128,6 +1132,7 @@ function ReviewStep({
   onBack: () => void
   onConfirmed: (code: string) => void
   onDone: () => void
+  onDiscountChanged: () => void
 }) {
   const [amount, setAmount] = useState('')
   const [mode, setMode] = useState('upi')
@@ -1179,6 +1184,8 @@ function ReviewStep({
       lines: byUnit[unitId],
     }))
   })()
+
+  const grossPaise = quote ? quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise : 0
 
   return (
     <StepCard title="Review & confirm">
@@ -1284,10 +1291,22 @@ function ReviewStep({
                 )}
                 <tr className="font-medium">
                   <td className="px-3 py-2">Estimated total</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(grossPaise)}</td>
                 </tr>
+                {quote.discountPaise > 0 && (
+                  <>
+                    <tr className="text-emerald-700 dark:text-emerald-400">
+                      <td className="px-3 py-2">Less discounts</td>
+                      <td className="px-3 py-2 text-right tabular-nums">− {formatPaise(quote.discountPaise)}</td>
+                    </tr>
+                    <tr className="font-medium">
+                      <td className="px-3 py-2">Net total</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatPaise(grossPaise - quote.discountPaise)}</td>
+                    </tr>
+                  </>
+                )}
                 <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">Advance required (25% of the total, rooms included)</td>
+                  <td className="px-3 py-2">Advance required (25% of the {quote.discountPaise > 0 ? 'discounted ' : ''}total, rooms included)</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.advanceRequiredPaise)}</td>
                 </tr>
               </tbody>
@@ -1297,6 +1316,12 @@ function ReviewStep({
             Rooms are a rack-rate estimate until the Lodge Manager allocates them; maintenance is
             added to the payment review once logged.
           </p>
+
+          {/* Per-head percentage discounts — applied here so the total and the 25% advance
+              reflect them before you confirm (client, 25 Jul 2026). */}
+          <div className="rounded-lg border p-3">
+            <EventDiscounts eventId={eventId} editable onChanged={onDiscountChanged} />
+          </div>
 
           {alreadyConfirmed ? (
             <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
