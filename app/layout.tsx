@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Inter, Noto_Serif } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
@@ -27,6 +27,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Hotel Dipali — Banquet Management",
   description: "Banquet & event management for Hotel Dipali",
+};
+
+// Mobile-friendly by default; never disable zoom (a11y). Covers the notch via viewport-fit.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

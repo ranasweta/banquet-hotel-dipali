@@ -13,12 +13,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const permissions = await getPermissionMatrix(user.roleId)
 
   // A proper app shell: the frame is exactly the viewport and each pane scrolls inside
-  // itself. Previously `min-h-dvh` let a long sidebar (the Auditor sees every module)
-  // stretch the whole page, which also stopped the calendars from ever fitting one screen.
+  // itself. Below lg the shell stacks — a top bar (from AppNav) over the content; at lg+
+  // the sidebar docks on the left. Padding tightens on phones (tester, 25 Jul 2026).
   return (
-    <div className="flex h-dvh overflow-hidden">
+    <div className="flex h-dvh flex-col overflow-hidden lg:flex-row">
       <AppNav user={{ fullName: user.fullName, roleName: user.roleName }} permissions={permissions} />
-      <main className="flex-1 overflow-auto p-6">{children}</main>
+      <main className="flex-1 overflow-auto p-4 lg:p-6">{children}</main>
     </div>
   )
 }
