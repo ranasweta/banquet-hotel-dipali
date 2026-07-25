@@ -220,10 +220,13 @@ export function CalendarBoard() {
       {/* Grid */}
       {/* One header row plus one row per visible week, each sharing the leftover
           height equally — that is what keeps the month inside a single screen. */}
-      <div
-        className="grid min-h-0 flex-1 grid-cols-7 gap-px overflow-hidden rounded-lg border bg-border"
-        style={{ gridTemplateRows: `auto repeat(${gridDays / 7}, minmax(0, 1fr))` }}
-      >
+      {/* Horizontal scroll on phones keeps the day cells legible; at lg+ the month fits the
+          width with no scroll (tester, 25 Jul 2026). */}
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
+        <div
+          className="grid h-full min-w-[42rem] grid-cols-7 gap-px bg-border lg:min-w-0"
+          style={{ gridTemplateRows: `auto repeat(${gridDays / 7}, minmax(0, 1fr))` }}
+        >
         {WEEKDAYS.map((w) => (
           <div
             key={w}
@@ -278,6 +281,7 @@ export function CalendarBoard() {
             </button>
           )
         })}
+        </div>
       </div>
 
       {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
