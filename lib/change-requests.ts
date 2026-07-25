@@ -113,7 +113,7 @@ export async function requestChange(
 
 export type DecideChangeInput = { action: 'approve' | 'reject'; remark?: string }
 
-/** The Banquet Manager decides a change request; approval re-books the venue slot. */
+/** The Higher Authority decides a change request; approval re-books the venue slot. */
 export async function decideChange(actor: Actor, crId: string, input: DecideChangeInput): Promise<{ status: string }> {
   if (!DECIDER_ROLES.has(actor.roleName)) throw forbidden('Only the Higher Authority can decide venue/timing changes.')
   if (input.action === 'reject' && !input.remark?.trim()) throw badRequest('A remark is required when rejecting.')
