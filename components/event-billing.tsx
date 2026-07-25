@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
+import { EventDiscounts } from '@/components/event-discounts'
 import {
   Select,
   SelectContent,
@@ -65,6 +66,10 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
           accent={ledger.balancePaise > 0 ? 'text-amber-600' : 'text-emerald-600'}
         />
       </div>
+
+      {/* Per-head percentage discounts, where the bill total is read (client, 25 Jul 2026).
+          Refreshes the money summary above on change so the balance tracks. */}
+      <EventDiscounts eventId={eventId} editable={editable} onChanged={load} />
 
       <PaymentSection eventId={eventId} ledger={ledger} editable={editable} onChanged={load} />
     </div>

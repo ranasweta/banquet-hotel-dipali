@@ -360,7 +360,8 @@ CREATE TABLE discounts (
   event_id     uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
   head         discount_head NOT NULL,
   ref_id       uuid,                            -- sub_event / room_allocation the discount targets
-  amount_paise bigint NOT NULL CHECK (amount_paise > 0),
+  amount_paise bigint NOT NULL CHECK (amount_paise > 0),  -- rupee value (a % row stores its at-save value here too)
+  percent_bp   int CHECK (percent_bp IS NULL OR (percent_bp > 0 AND percent_bp <= 10000)), -- % of the head's live subtotal (bp); NULL = fixed rupee (client, 25 Jul 2026)
   remark       text NOT NULL,
   exception_id uuid REFERENCES exceptions(id),  -- set when over the 10% cap (BR-D2)
   given_by     uuid NOT NULL REFERENCES users(id),

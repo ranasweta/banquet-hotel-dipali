@@ -285,7 +285,9 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   // own flows and hear the outcome via notifications and the event's audit trail — but they no
   // longer see the approvals queue itself.
   approvals:   { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
-  billing:     { booking_manager: 'none', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  // Booking Manager gains billing edit (client, 25 Jul 2026): he gives per-head discounts on
+  // the Payment review; over the 10% cap routes to the Higher Authority.
+  billing:     { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   // Roles & Permissions (and the Users screen it shares) is the Auditor's alone (tester,
   // 23 Jul 2026); the Higher Authority no longer sees it.
   roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none' },
