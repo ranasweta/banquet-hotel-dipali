@@ -33,8 +33,15 @@ type HeadSubtotals = { venue: number; menu: number; room: number; overall: numbe
 async function headSubtotals(eventId: string, exec: Pick<typeof db, 'execute'> = db): Promise<HeadSubtotals> {
   const [row] = (await exec.execute(sql`
     SELECT
-      COALESCE((SELECT sum(se.venue_rate_paise) FROM sub_events se
-                 WHERE se.event_id = ${eventId} AND se.venue_rate_paise > 0), 0)::bigint AS venue,
+      COALESCE((SELECT sum(COALESCE(NULLIF(se.venue_rate_paise, 0),
+                 (SELECT rc.rate_paise FROM venue_rate_cards rc
+                   WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
+                       OR (se.bundle_id IS NOT NULL AND rc.bundle_id = se.bundle_id))
+                     AND rc.event_type = e.event_type
+                     AND rc.effective_from <= se.event_date
+                   ORDER BY rc.effective_from DESC LIMIT 1), 0))
+                 FROM sub_events se JOIN events e ON e.id = se.event_id
+                WHERE se.event_id = ${eventId}), 0)::bigint AS venue,
       (COALESCE((SELECT sum(se.pax::bigint * (m.base_rate_paise + m.surcharge_paise))
                    FROM sub_event_menus m JOIN sub_events se ON se.id = m.sub_event_id
                   WHERE se.event_id = ${eventId}), 0)
@@ -128,19 +135,17 @@ export async function addDiscount(
       .limit(1)
     if (!ev) throw notFound('Event not found')
     if (LOCKED_STATES.has(ev.status)) throw conflict('This event is locked — discounts can no longer change.')
-    if (ev.proposalTotalPaise <= 0) {
-      throw badRequest('Price the proposal first (confirm the booking) before applying a discount.')
-    }
 
     const subs = await headSubtotals(eventId, tx)
     // The row's rupee value now, for the cap check; a % row recomputes live thereafter.
     const thisAmount = hasPct ? Math.round((subs[input.head as keyof HeadSubtotals] * input.percentBp!) / MAX_BP) : input.amountPaise!
-    if (thisAmount <= 0) throw badRequest('This head has no charge to discount yet.')
+    if (thisAmount <= 0) throw badRequest('This head has no charge to discount yet — price the proposal first.')
 
     const existing = await effectiveDiscountPaise(eventId, tx)
-    // 10% of the TOTAL BILL: proposal total (venue + food) + rooms, pre-tax (client, 25 Jul 2026,
-    // amends BR-D2 — rooms used to be outside the base).
-    const capBasePaise = ev.proposalTotalPaise + subs.room
+    // 10% of the TOTAL BILL, pre-tax (client, 25 Jul 2026, amends BR-D2). A confirmed booking
+    // uses its stored proposal total (venue+food) plus rooms; an enquiry being confirmed has no
+    // stored total yet, so it uses the live overall (venue+food+rooms).
+    const capBasePaise = ev.proposalTotalPaise > 0 ? ev.proposalTotalPaise + subs.room : subs.overall
     const capPaise = percentOfPaise(capBasePaise, discount_cap_pct)
     const combinedPaise = existing + thisAmount
     const overCap = combinedPaise > capPaise

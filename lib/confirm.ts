@@ -6,6 +6,7 @@ import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
 import { occupancyParts } from '@/lib/occupancy'
 import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal, roomEstimatePaise } from '@/lib/pricing'
+import { effectiveDiscountPaise } from '@/lib/discounts'
 import { transitionEvent } from '@/lib/events'
 
 export type AdvancePayment = {
@@ -110,9 +111,11 @@ export async function confirmEvent(
       const extras = await foodAndAddonTotal(eventId, tx)
       const proposalTotal = pricing.totalPaise + extras.foodPaise + extras.addonPaise
       // Rooms count toward the advance (client, 20 Jul 2026) but stay OUT of
-      // proposal_total_paise, which BR-D2's 10% discount cap is measured against.
+      // proposal_total_paise. The 25% is on the DISCOUNTED total (client, 25 Jul 2026): a
+      // discount given at the Payment review lowers what a quarter comes to.
       const roomEst = await roomEstimatePaise(eventId, tx)
-      const advanceBase = proposalTotal + roomEst.roomsPaise + roomEst.roomsTaxPaise
+      const discount = await effectiveDiscountPaise(eventId, tx)
+      const advanceBase = Math.max(0, proposalTotal + roomEst.roomsPaise + roomEst.roomsTaxPaise - discount)
 
       // 3b. BR-L2: 35+ rooms need the Authority first. Rooms are booked in bulk on the
       //     proposal now, so this is the gate that matters — confirm is the moment those
