@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getCurrentUser, getPermissionMatrix } from '@/lib/auth'
 import { ApprovalsQueue } from '@/components/approvals-queue'
@@ -17,13 +18,20 @@ export default async function ApprovalsPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Approvals</h1>
-        <p className="text-muted-foreground">
-          {canDecide
-            ? 'Decide escalations — the approved change is applied automatically.'
-            : 'Exceptions you’ve raised and their outcomes. Only the Higher Authority can decide.'}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-2xl font-semibold">Approvals</h1>
+          <p className="text-muted-foreground">
+            {canDecide
+              ? 'Decide escalations — the approved change is applied automatically.'
+              : 'Exceptions you’ve raised and their outcomes. Only the Higher Authority can decide.'}
+          </p>
+        </div>
+        {canDecide && (
+          <Link href="/approvals/history" className="shrink-0 text-sm text-primary hover:underline">
+            View history →
+          </Link>
+        )}
       </div>
       <ApprovalsQueue canDecide={canDecide} />
     </div>

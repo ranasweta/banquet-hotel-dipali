@@ -9,7 +9,6 @@ import { todayISO } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { DownloadPdfButton } from '@/components/download-pdf-button'
 import {
   Table,
   TableBody,
@@ -159,10 +158,11 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
                           Edit
                         </Link>
                       )}
-                      {/* A shareable PDF exists only once the proposal is priced (confirmed+). */}
-                      {['confirmed', 'in_progress', 'completed'].includes(e.status) && (
-                        <DownloadPdfButton eventId={e.id} label="PDF" className="text-xs text-primary hover:underline" />
-                      )}
+                      {/* The proposal Draft prints at any stage — enquiry (Draft) or confirmed
+                          (Draft 2); Save-as-PDF from the print dialog makes the shareable file. */}
+                      <Link href={`/bookings/${e.id}/proforma`} className="text-xs text-primary hover:underline">
+                        Draft
+                      </Link>
                     </div>
                   </TableCell>
                 </TableRow>

@@ -100,11 +100,13 @@ export type ExceptionRow = {
 
 /**
  * Lists exceptions with event + requester context. `status` filters (default all);
- * `mineId` restricts to those a given user raised (so a requester sees their own outcomes).
+ * `mineId` restricts to those a given user raised (so a requester sees their own outcomes);
+ * `decidedOnly` keeps only settled rows (anything past `pending`) for the approvals history.
  */
-export async function listExceptions(opts: { status?: string; mineId?: string } = {}): Promise<ExceptionRow[]> {
+export async function listExceptions(opts: { status?: string; mineId?: string; decidedOnly?: boolean } = {}): Promise<ExceptionRow[]> {
   const conds = [] as ReturnType<typeof sql>[]
   if (opts.status) conds.push(sql`x.status = ${opts.status}::exception_status`)
+  if (opts.decidedOnly) conds.push(sql`x.status <> 'pending'`)
   if (opts.mineId) conds.push(sql`x.raised_by = ${opts.mineId}`)
   const where = conds.length ? sql`WHERE ${sql.join(conds, sql` AND `)}` : sql``
 

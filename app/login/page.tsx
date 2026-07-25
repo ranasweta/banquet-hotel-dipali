@@ -7,11 +7,12 @@ import { Eye, EyeOff, Loader2 } from 'lucide-react'
 import { api } from '@/lib/http'
 
 /**
- * Staff sign-in. Split layout: the property on the left, the form on the right.
+ * Staff sign-in. On lg+ the property sits on the left and the form on the right; on a phone
+ * the same photograph moves behind the form under a dark scrim, so the one screen every user
+ * meets is never a bare form on a flat background.
  *
- * The hero is a brand wash until a real photograph is supplied — dropping one in at
- * `public/hotel-lobby.jpg` is all it takes, no code change. A missing file must not leave
- * a broken frame on the one screen every user meets, so it fails back to the gradient.
+ * A missing photo must not leave a broken frame, so both the left panel and the mobile
+ * backdrop fail back to the brand gradient wash.
  *
  * Underlined inputs rather than boxes, to match the approved design. That gives up the
  * outline WCAG 1.4.11 usually leans on to identify a field, so each one keeps a visible
@@ -72,9 +73,27 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* Form side */}
-      <div className="flex w-full items-center justify-center bg-background p-6 lg:w-1/2">
-        <div className="w-full max-w-md rounded-xl border bg-card p-8 shadow-sm sm:p-10">
+      {/* Form side. On a phone the property photo sits behind under a scrim; on lg+ the left
+          panel carries the imagery and this side is a plain surface. */}
+      <div className="relative flex w-full items-center justify-center overflow-hidden bg-background p-6 lg:w-1/2">
+        {/* Mobile-only backdrop: the same property photo, darkened so the card and its labels
+            stay legible. Hidden at lg, where the left panel already shows it. */}
+        <div className="absolute inset-0 lg:hidden">
+          <div className="absolute inset-0 bg-gradient-to-br from-[var(--sidebar-primary)] via-secondary to-[var(--primary)]" />
+          <Image
+            src="/hotel-dipali-property.png"
+            alt=""
+            fill
+            priority
+            sizes="100vw"
+            className="object-cover object-bottom"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none'
+            }}
+          />
+          <div className="absolute inset-0 bg-black/55" />
+        </div>
+        <div className="relative w-full max-w-md rounded-xl border bg-card/95 p-8 shadow-xl backdrop-blur-sm sm:p-10 lg:bg-card lg:shadow-sm lg:backdrop-blur-none">
           <div className="flex flex-col items-center text-center">
             <Image
               src="/hotel-dipali-logo.png"

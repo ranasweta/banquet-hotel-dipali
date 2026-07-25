@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { loadMenus, loadRegencyRooms, WEDDING_SURCHARGE_PAISE } from './seed-data'
+import { RESIDENCY_ROOMS } from './masters'
 import { rupeesToPaise } from '../lib/money'
 
 describe('menus.seed.json', () => {
@@ -161,5 +162,24 @@ describe('rooms.regency.seed.json', () => {
     const dorms = regency.rooms.filter((r) => r.roomType === 'dormitory')
     expect(dorms).toHaveLength(1)
     expect(dorms[0]!.rackRatePaise).toBe(rupeesToPaise(50_000))
+  })
+})
+
+describe('RESIDENCY_ROOMS (client-confirmed, 25 Jul 2026)', () => {
+  const n = (type: string) => RESIDENCY_ROOMS.filter((r) => r.roomType === type).length
+
+  it('is 29 rooms — 27 deluxe + 2 suite, no dormitory', () => {
+    expect(RESIDENCY_ROOMS).toHaveLength(29)
+    expect(n('deluxe')).toBe(27)
+    expect(n('suite')).toBe(2)
+    expect(n('dormitory')).toBe(0)
+    // The Grand's Presidential Suite assumption is retired.
+    expect(n('presidential_suite')).toBe(0)
+  })
+
+  it('carries the confirmed rates — deluxe Rs. 5,000, suite Rs. 8,000', () => {
+    const rateFor = (type: string) => RESIDENCY_ROOMS.find((r) => r.roomType === type)?.rackRatePaise
+    expect(rateFor('deluxe')).toBe(rupeesToPaise(5_000))
+    expect(rateFor('suite')).toBe(rupeesToPaise(8_000))
   })
 })

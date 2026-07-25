@@ -64,14 +64,26 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     lines.push({ section, description, qty, ratePaise, gstRateBp: bp, amountPaise, taxPaise: taxOf(amountPaise, bp), functionLabel })
   }
 
-  // Venue — the rate-card snapshot on each sub-event (set at confirm).
+  // Venue — the rate-card snapshot on each sub-event (set at confirm). Before confirm the
+  // snapshot is 0, so an enquiry Draft prices the venue live off the rate card instead, and
+  // shows nothing only when no card exists yet (BR-R1). Post-confirm the snapshot always wins.
   const venues = (await exec.execute(sql`
-    SELECT se.name, se.venue_rate_paise AS "ratePaise", COALESCE(v.name, b.name) AS "venueName"
-    FROM sub_events se LEFT JOIN venues v ON v.id = se.venue_id LEFT JOIN venue_bundles b ON b.id = se.bundle_id
-    WHERE se.event_id = ${eventId} AND se.venue_rate_paise > 0
+    SELECT se.name, COALESCE(v.name, b.name) AS "venueName",
+           COALESCE(NULLIF(se.venue_rate_paise, 0),
+             (SELECT rc.rate_paise FROM venue_rate_cards rc
+               WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
+                   OR (se.bundle_id IS NOT NULL AND rc.bundle_id = se.bundle_id))
+                 AND rc.event_type = e.event_type
+                 AND rc.effective_from <= se.event_date
+               ORDER BY rc.effective_from DESC LIMIT 1),
+             0)::bigint AS "ratePaise"
+    FROM sub_events se
+    JOIN events e ON e.id = se.event_id
+    LEFT JOIN venues v ON v.id = se.venue_id LEFT JOIN venue_bundles b ON b.id = se.bundle_id
+    WHERE se.event_id = ${eventId}
     ORDER BY se.event_date, se.start_time
   `)) as unknown as { name: string; ratePaise: number; venueName: string }[]
-  for (const v of venues) push('venue', v.venueName, 1, Number(v.ratePaise), Number(v.ratePaise), v.name)
+  for (const v of venues) if (Number(v.ratePaise) > 0) push('venue', v.venueName, 1, Number(v.ratePaise), Number(v.ratePaise), v.name)
 
   // Food — pax × snapshotted per-plate, per sub-event with a saved menu.
   const food = (await exec.execute(sql`
@@ -283,7 +295,9 @@ export async function proformaData(eventId: string) {
     FROM events e WHERE e.id = ${eventId}
   `)) as unknown as { code: string; guestName: string; eventType: string; status: string; firstDate: string | null; lastDate: string | null }[]
   if (!event) throw notFound('Event not found')
-  if (event.status === 'enquiry') throw badRequest('Confirm the booking to produce an estimate.')
+  // Printable at any stage (client, 25 Jul 2026): an enquiry prints a provisional Draft, a
+  // confirmed booking prints a Draft 2. The venue is priced live off the rate card until the
+  // confirm snapshot exists, so the enquiry estimate is complete rather than blocked.
 
   const specs = await computeBillLines(db, eventId)
   const gross = specs.reduce((s, l) => s + l.amountPaise, 0)

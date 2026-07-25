@@ -16,9 +16,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // itself. Below lg the shell stacks — a top bar (from AppNav) over the content; at lg+
   // the sidebar docks on the left. Padding tightens on phones (tester, 25 Jul 2026).
   return (
-    <div className="flex h-dvh flex-col overflow-hidden lg:flex-row">
-      <AppNav user={{ fullName: user.fullName, roleName: user.roleName }} permissions={permissions} />
-      <main className="flex-1 overflow-auto p-4 lg:p-6">{children}</main>
+    <div className="flex h-dvh flex-col overflow-hidden lg:flex-row print:block print:h-auto print:overflow-visible">
+      {/* The nav is chrome, not content: `contents` keeps AppNav's panes as direct flex
+          children on screen, while `print:hidden` drops the whole thing when printing so a
+          proposal saved to PDF carries no sidebar. */}
+      <div className="contents print:hidden">
+        <AppNav user={{ fullName: user.fullName, roleName: user.roleName }} permissions={permissions} />
+      </div>
+      <main className="flex-1 overflow-auto p-4 lg:p-6 print:overflow-visible print:p-0">{children}</main>
     </div>
   )
 }
