@@ -4,8 +4,9 @@
  *   - maintenance is blocked before In Progress and after lock (and after close);
  *   - the day sheet shows every sub-event of a date with its menu.
  *
- * Plus: change requests move a confirmed sub-event's slot on Banquet-Manager approval, clash
- * cleanly (409) when the new slot is taken, need a remark to reject, and are Banquet-only.
+ * Plus: change requests move a confirmed sub-event's slot on Higher-Authority approval, clash
+ * cleanly (409) when the new slot is taken, need a remark to reject, and are Authority-only
+ * (the Banquet Manager approves nothing since 21 Jul 2026).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
@@ -26,6 +27,7 @@ if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping M8 tests\n'
 const bm = { id: '', roleName: 'booking_manager' }
 const bq = { id: '', roleName: 'banquet_manager' }
 const mt = { id: '', roleName: 'maintenance' }
+const ha = { id: '', roleName: 'higher_authority' }
 
 async function userId(role: string): Promise<string> {
   const [u] = await db.select({ id: schema.users.id }).from(schema.users).innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId)).where(eq(schema.roles.name, role)).limit(1)
@@ -69,6 +71,7 @@ beforeAll(async () => {
   bm.id = await userId('booking_manager')
   bq.id = await userId('banquet_manager')
   mt.id = await userId('maintenance')
+  ha.id = await userId('higher_authority')
 }, 90_000)
 
 async function cleanup() {
@@ -133,10 +136,10 @@ d('day sheet (FR-2.4)', () => {
 })
 
 d('change requests (FR-1.9)', () => {
-  it('moves a confirmed sub-event on Banquet-Manager approval and re-books the slot', async () => {
+  it('moves a confirmed sub-event on Higher-Authority approval and re-books the slot', async () => {
     const { subId, eventId } = await makeConfirmedSub('Crystal', '2026-11-01', '10:00', '14:00')
     const cr = await changes.requestChange(bm, subId, { payload: { eventDate: '2026-11-03' }, reason: 'guest asked' })
-    const res = await changes.decideChange(bq, cr.id, { action: 'approve' })
+    const res = await changes.decideChange(ha, cr.id, { action: 'approve' })
     expect(res.status).toBe('approved')
 
     const [se] = await db.select({ eventDate: schema.subEvents.eventDate }).from(schema.subEvents).where(eq(schema.subEvents.id, subId))
@@ -152,17 +155,18 @@ d('change requests (FR-1.9)', () => {
     const a = await makeConfirmedSub('Signature', '2026-11-10', '10:00', '14:00')
     await makeConfirmedSub('Signature', '2026-11-11', '10:00', '14:00') // occupies the target
     const cr = await changes.requestChange(bm, a.subId, { payload: { eventDate: '2026-11-11' } })
-    await expect(changes.decideChange(bq, cr.id, { action: 'approve' })).rejects.toMatchObject({ status: 409 })
+    await expect(changes.decideChange(ha, cr.id, { action: 'approve' })).rejects.toMatchObject({ status: 409 })
     // The original booking is untouched (still on the 10th).
     const [se] = await db.select({ eventDate: schema.subEvents.eventDate }).from(schema.subEvents).where(eq(schema.subEvents.id, a.subId))
     expect(se!.eventDate).toBe('2026-11-10')
   })
 
-  it('needs a remark to reject and is Banquet-Manager only', async () => {
+  it('needs a remark to reject and is Higher-Authority only', async () => {
     const { subId } = await makeConfirmedSub('Kohinoor', '2026-11-20', '10:00', '14:00')
     const cr = await changes.requestChange(bm, subId, { payload: { startTime: '11:00', endTime: '15:00' } })
-    await expect(changes.decideChange(bq, cr.id, { action: 'reject' })).rejects.toMatchObject({ status: 400 })
-    await expect(changes.decideChange(bm, cr.id, { action: 'approve' })).rejects.toMatchObject({ status: 403 })
+    await expect(changes.decideChange(ha, cr.id, { action: 'reject' })).rejects.toMatchObject({ status: 400 })
+    // The Banquet Manager no longer decides venue/timing moves (client, 21 Jul 2026).
+    await expect(changes.decideChange(bq, cr.id, { action: 'approve' })).rejects.toMatchObject({ status: 403 })
   })
 
   it('applies a pax change directly (no approval)', async () => {
