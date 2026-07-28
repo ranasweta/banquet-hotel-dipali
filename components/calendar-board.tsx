@@ -8,6 +8,7 @@ import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatTime } from '@/lib/time'
+import { titleCase } from '@/lib/text'
 
 /**
  * The venue calendar as a month/week grid (client, 20 Jul 2026), replacing the venues × dates
@@ -78,9 +79,6 @@ function longDate(date: string) {
   return parse(date).toLocaleDateString('en-US', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
   })
-}
-function titleCase(s: string) {
-  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 type Chip = { key: string; booking: Booking; label: string; carryover: boolean }
@@ -307,9 +305,9 @@ function BookingChip({ chip, venue }: { chip: Chip; venue: string }) {
         'truncate border-l-2 bg-muted/60 py-0.5 pl-1.5 text-[10px] leading-tight',
         carryover ? CARRYOVER_RULE : (STATUS_RULE[booking.status] ?? STATUS_RULE.confirmed),
       )}
-      title={`${booking.guestName} — ${titleCase(booking.subEventName)} · ${venue} · ${label} (${booking.eventCode}, ${titleCase(booking.status)})`}
+      title={`${titleCase(booking.guestName)} — ${titleCase(booking.subEventName)} · ${venue} · ${label} (${booking.eventCode}, ${titleCase(booking.status)})`}
     >
-      <span className="font-medium uppercase">{booking.guestName}</span>
+      <span className="font-medium uppercase">{titleCase(booking.guestName)}</span>
       {venue && <span className="text-muted-foreground"> · {venue}</span>}
     </span>
   )
@@ -361,7 +359,7 @@ function DayPanel({
           {chips.map((c) => (
             <li key={c.key} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
               <div className="min-w-0">
-                <span className="font-medium">{c.booking.guestName}</span>
+                <span className="font-medium">{titleCase(c.booking.guestName)}</span>
                 <span className="text-muted-foreground"> · {titleCase(c.booking.subEventName)}</span>
                 <div className="text-xs text-muted-foreground">
                   {venueName.get(c.booking.venueId)} · <span className="tabular-nums">{c.label}</span>

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
+import { titleCase } from '@/lib/text'
 import { todayISO } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
@@ -132,14 +133,14 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
                       {e.code}
                     </Link>
                   </TableCell>
-                  <TableCell>{e.guestName}</TableCell>
-                  <TableCell className="capitalize">{e.eventType.replace(/_/g, ' ')}</TableCell>
+                  <TableCell>{titleCase(e.guestName)}</TableCell>
+                  <TableCell>{titleCase(e.eventType)}</TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">
                     {e.firstDate ? `${e.firstDate}${e.lastDate && e.lastDate !== e.firstDate ? ` → ${e.lastDate}` : ''}` : '—'}
                   </TableCell>
                   <TableCell>
                     <span className={`inline-block rounded-full px-2 py-0.5 text-xs ${STATUS_STYLES[e.status] ?? STATUS_STYLES.enquiry}`}>
-                      {e.status.replace(/_/g, ' ')}
+                      {titleCase(e.status)}
                     </span>
                     {e.stale && <Badge variant="outline" className="ml-2 text-amber-600">stale</Badge>}
                   </TableCell>

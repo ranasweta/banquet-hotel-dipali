@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 type Inventory = { unitId: string; unitName: string; roomType: string; total: number }
 type Cell = {
@@ -105,9 +106,6 @@ function formatFull(date: string): string {
     year: 'numeric',
     timeZone: 'UTC',
   })
-}
-function titleCase(s: string): string {
-  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -483,7 +481,7 @@ function DayDetail({
                                 'rounded-md px-1.5 py-0.5 text-[11px] ring-1 ring-inset',
                                 STATE_CHIP[h.state],
                               )}
-                              title={`${h.guestName} · ${h.code} · ${titleCase(h.status)}${
+                              title={`${titleCase(h.guestName)} · ${h.code} · ${titleCase(h.status)}${
                                 h.state === 'pending' ? ' · awaiting Authority approval (35+ rooms)' : ''
                               }`}
                             >
