@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 type ExceptionRow = {
   id: string
@@ -46,7 +47,7 @@ const STATUS_STYLES: Record<string, string> = {
   pending: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200',
 }
 
-const label = (map: Record<string, string>, key: string) => map[key] ?? key.replace(/_/g, ' ')
+const label = (map: Record<string, string>, key: string) => map[key] ?? titleCase(key)
 
 /** Absolute date of a decision, for the permanent record ("23 Jul 2026"). */
 function decidedOn(iso: string): string {
@@ -95,7 +96,7 @@ export function ApprovalsHistory() {
       [
         r.decidedAt ? decidedOn(r.decidedAt) : '',
         r.eventCode,
-        r.guestName,
+        titleCase(r.guestName),
         label(KIND_LABEL, r.kind),
         label(STATUS_LABEL, r.status),
         r.raisedByName,
@@ -165,7 +166,7 @@ export function ApprovalsHistory() {
                     {label(STATUS_LABEL, r.status)}
                   </span>
                   <Link href={`/bookings/${r.eventId}`} className="font-medium tabular-nums hover:underline">{r.eventCode}</Link>
-                  <span className="text-sm text-muted-foreground">{r.guestName}</span>
+                  <span className="text-sm text-muted-foreground">{titleCase(r.guestName)}</span>
                 </div>
                 <div className="mt-1 text-sm">{r.summary}</div>
                 {r.remark && <div className="mt-0.5 text-xs text-foreground">Remark: “{r.remark}”</div>}

@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 type ExceptionRow = {
   id: string
@@ -108,7 +109,7 @@ export function ApprovalsQueue({ canDecide }: { canDecide: boolean }) {
                   {dash.upcomingHighValue.map((e) => (
                     <li key={e.id} className="flex items-center justify-between gap-2">
                       <Link href={`/bookings/${e.id}`} className="hover:underline">
-                        <span className="font-medium tabular-nums">{e.code}</span> · {e.guestName}
+                        <span className="font-medium tabular-nums">{e.code}</span> · {titleCase(e.guestName)}
                         {e.firstDate && <span className="text-muted-foreground"> · {e.firstDate}</span>}
                       </Link>
                       <span className="tabular-nums">{formatPaise(e.proposalTotalPaise)}</span>
@@ -182,7 +183,7 @@ function ExceptionCard({ row, canDecide, onDecided }: { row: ExceptionRow; canDe
         method: 'POST',
         body: JSON.stringify({ action, remark: remark.trim() || undefined, modified }),
       })
-      toast.success(`${row.eventCode}: ${res.decision.status.replace('_', ' ')}${res.decision.applied !== 'none' ? ` — ${res.decision.applied}` : ''}`)
+      toast.success(`${row.eventCode}: ${titleCase(res.decision.status)}${res.decision.applied !== 'none' ? ` — ${res.decision.applied}` : ''}`)
       await onDecided()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Decision failed')
@@ -201,10 +202,10 @@ function ExceptionCard({ row, canDecide, onDecided }: { row: ExceptionRow; canDe
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{KIND_LABEL[row.kind] ?? row.kind}</Badge>
               <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS_STYLES[row.status] ?? STATUS_STYLES.pending)}>
-                {row.status.replace('_', ' ')}
+                {titleCase(row.status)}
               </span>
               <Link href={`/bookings/${row.eventId}`} className="font-medium tabular-nums hover:underline">{row.eventCode}</Link>
-              <span className="text-sm text-muted-foreground">{row.guestName}</span>
+              <span className="text-sm text-muted-foreground">{titleCase(row.guestName)}</span>
             </div>
             <div className="mt-1 text-sm">{row.summary}</div>
             <div className="mt-0.5 text-xs text-muted-foreground">
@@ -212,7 +213,7 @@ function ExceptionCard({ row, canDecide, onDecided }: { row: ExceptionRow; canDe
               {row.status !== 'pending' && (
                 <span>
                   {' · '}
-                  {row.status.replace('_', ' ')} by {row.decidedByName ?? '—'}
+                  {titleCase(row.status)} by {row.decidedByName ?? '—'}
                   {row.decidedAt ? ` on ${decidedOn(row.decidedAt)}` : ''}
                 </span>
               )}

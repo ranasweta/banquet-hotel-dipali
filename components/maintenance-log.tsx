@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { EventMaintenance } from '@/components/event-maintenance'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 type EventRow = {
   id: string
@@ -110,7 +111,7 @@ function Section({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="min-w-0">
                     <span className="font-medium tabular-nums">{e.code}</span>{' '}
-                    <span className="font-medium">{e.guestName}</span>
+                    <span className="font-medium">{titleCase(e.guestName)}</span>
                     <div className="text-xs text-muted-foreground">
                       {e.firstDate ?? 'date TBD'} · {e.entryCount} {e.entryCount === 1 ? 'entry' : 'entries'}
                     </div>

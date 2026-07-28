@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 type CR = {
   id: string
@@ -87,9 +88,9 @@ function CRCard({ cr, canDecide, onDone }: { cr: CR; canDecide: boolean; onDone:
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS[cr.status])}>{cr.status}</span>
+              <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS[cr.status])}>{titleCase(cr.status)}</span>
               <Link href={`/bookings/${cr.eventId}`} className="font-medium tabular-nums hover:underline">{cr.eventCode}</Link>
-              <span className="text-sm text-muted-foreground">{cr.guestName}</span>
+              <span className="text-sm text-muted-foreground">{titleCase(cr.guestName)}</span>
             </div>
             <div className="mt-1 text-sm">{cr.summary}</div>
             <div className="mt-0.5 text-xs text-muted-foreground">

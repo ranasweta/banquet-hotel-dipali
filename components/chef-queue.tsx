@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 type Row = {
   id: string
@@ -109,7 +110,7 @@ export function ChefQueue({ canPrice }: { canPrice: boolean }) {
                   <li key={r.id} className="py-3">
                     <div className="font-medium">{r.description}</div>
                     <div className="text-xs text-muted-foreground">
-                      {r.eventCode} · {r.guestName} · {r.subEventName} · {r.eventDate} · {r.pax} pax · asked by {r.requestedByName}
+                      {r.eventCode} · {titleCase(r.guestName)} · {titleCase(r.subEventName)} · {r.eventDate} · {r.pax} pax · asked by {r.requestedByName}
                     </div>
                     {canPrice ? (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -161,7 +162,7 @@ export function ChefQueue({ canPrice }: { canPrice: boolean }) {
                   <span className="min-w-0">
                     <Link href={`/bookings/${r.eventId}`} className="font-medium hover:underline">{r.description}</Link>
                     <span className="block text-xs text-muted-foreground">
-                      {r.eventCode} · {r.subEventName}
+                      {r.eventCode} · {titleCase(r.subEventName)}
                       {r.remark ? ` · ${r.remark}` : ''}
                       {r.pricedByName ? ` · by ${r.pricedByName}` : ''}
                     </span>

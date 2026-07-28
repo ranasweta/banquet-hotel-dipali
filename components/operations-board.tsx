@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '@/lib/http'
 import { formatTimeRange } from '@/lib/time'
+import { titleCase } from '@/lib/text'
 
 /**
  * The Banquet Manager's board and the Chef's day view: what is happening, for how many
@@ -80,7 +81,7 @@ export function OperationsBoard({ days = 15 }: { days?: number }) {
                 <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                   <div>
                     <h3 className="font-semibold">
-                      {f.name} <span className="font-normal text-muted-foreground">· {f.guestName}</span>
+                      {titleCase(f.name)} <span className="font-normal text-muted-foreground">· {titleCase(f.guestName)}</span>
                     </h3>
                     <p className="text-sm text-muted-foreground">
                       {f.eventCode} · {f.venueName ?? 'Venue TBC'} · {formatTimeRange(f.startTime, f.endTime)}
