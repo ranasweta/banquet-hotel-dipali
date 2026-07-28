@@ -5,6 +5,7 @@ import { Loader2, Printer } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, paiseToWords } from '@/lib/money'
+import { plural, roomsAndNights, titleCase } from '@/lib/text'
 import { Button } from '@/components/ui/button'
 import type { ProposalDocument, ProposalFunction } from '@/lib/proposal'
 import {
@@ -77,7 +78,7 @@ function fmtTime(t: string): string {
 export function proposalDocumentName(doc: ProposalDocument): string {
   const stage = doc.doc.isDraft2 ? 'Draft 2' : 'Draft'
   const when = doc.event.plannedFrom ?? doc.event.firstDate
-  return [stage, doc.event.code, doc.event.guestName, when ? fmtDMY(when) : null]
+  return [stage, doc.event.code, titleCase(doc.event.guestName), when ? fmtDMY(when) : null]
     .filter(Boolean)
     .join(' - ')
     .replace(/[\\/:*?"<>|]/g, ' ')
@@ -226,14 +227,14 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                   <div className="cards avoid">
                     <div className="card">
                       <div className="card-label">Proposal prepared for</div>
-                      <div className="card-name">{event.guestName}</div>
+                      <div className="card-name">{titleCase(event.guestName)}</div>
                       <dl className="kv">
                         <dt>Event type</dt>
                         <dd>{event.eventTypeLabel}</dd>
                       </dl>
                       {contacts.map((c) => (
                         <dl className="kv" key={c.phone}>
-                          <dt>{CONTACT_LABEL[(c.label ?? '').toLowerCase()] ?? c.label ?? 'Contact'}</dt>
+                          <dt>{CONTACT_LABEL[(c.label ?? '').toLowerCase()] ?? (c.label ? titleCase(c.label) : 'Contact')}</dt>
                           <dd>{c.phone}</dd>
                         </dl>
                       ))}
@@ -258,13 +259,13 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         <dt>Pax</dt>
                         <dd>
                           {counts.pax} guests
-                          {functions.length > 1 && ` (${functions.map((f) => `${f.name} ${f.pax}`).join(', ')})`}
+                          {functions.length > 1 && ` (${functions.map((f) => `${titleCase(f.name)} ${f.pax}`).join(', ')})`}
                         </dd>
                       </dl>
                       <dl className="kv">
                         <dt>Rooms</dt>
                         <dd>
-                          {counts.rooms} rooms · {counts.roomNights} room-nights
+                          {roomsAndNights(counts.rooms, counts.roomNights)}
                         </dd>
                       </dl>
                     </div>
@@ -278,14 +279,14 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                       <div className="gl2">Venue · Food · Add-ons</div>
                       <div className="gv2">{formatPaise(totals.proposalPaise)}</div>
                       <div className="gs">
-                        {counts.functions} functions · {counts.pax} pax
+                        {plural(counts.functions, 'function')} · {counts.pax} pax
                       </div>
                     </div>
                     <div className="gt">
                       <div className="gl2">Accommodation</div>
                       <div className="gv2">{formatPaise(totals.roomsPaise)}</div>
                       <div className="gs">
-                        {counts.rooms} rooms · {counts.roomNights} nights
+                        {roomsAndNights(counts.rooms, counts.roomNights, 'night')}
                       </div>
                     </div>
                     <div className="gt">
@@ -316,7 +317,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                           <div className="fn-name">
                             Rooms
                             <em>
-                              {counts.rooms} rooms · {counts.roomNights} room-nights
+                              {roomsAndNights(counts.rooms, counts.roomNights)}
                             </em>
                           </div>
                           <div className="fn-meta">
@@ -351,7 +352,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                             ))}
                             <tr className="sub">
                               <td colSpan={3} className="lbl">
-                                Accommodation sub-total &nbsp;·&nbsp; {counts.rooms} rooms · {counts.roomNights} room-nights
+                                Accommodation sub-total &nbsp;·&nbsp; {roomsAndNights(counts.rooms, counts.roomNights)}
                               </td>
                               <td className="n val">{formatPaise(totals.roomsPaise)}</td>
                             </tr>
@@ -393,7 +394,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                             {extras.map((x) => (
                               <tr key={x.description}>
                                 <td>
-                                  <span className="it-name">{x.description}</span>
+                                  <span className="it-name">{titleCase(x.description)}</span>
                                 </td>
                                 <td className="c calc">{x.qty}</td>
                                 <td className="n calc">{formatPaise(x.ratePaise)}</td>
@@ -429,7 +430,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                           <div className="l">
                             Accommodation{' '}
                             <small>
-                              {counts.rooms} rooms · {counts.roomNights} room-nights
+                              {roomsAndNights(counts.rooms, counts.roomNights)}
                             </small>
                           </div>
                           <div className="v">{formatPaise(totals.roomsPaise)}</div>
@@ -574,7 +575,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         )}
                         {lodges.length > 0 && (
                           <li>
-                            <b>Rooms</b> — {counts.rooms} rooms / {counts.roomNights} room-nights, {lodges.map((l) => l.name).join(', ')}.
+                            <b>Rooms</b> — {roomsAndNights(counts.rooms, counts.roomNights)}, {lodges.map((l) => l.name).join(', ')}.
                           </li>
                         )}
                         <li>
@@ -583,7 +584,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         {functions.flatMap((f) => f.addons.filter((a) => a.ratePaise === 0)).length > 0 && (
                           <li>
                             <b>Complimentary</b> —{' '}
-                            {[...new Set(functions.flatMap((f) => f.addons.filter((a) => a.ratePaise === 0).map((a) => a.description)))].join(', ')}.
+                            {[...new Set(functions.flatMap((f) => f.addons.filter((a) => a.ratePaise === 0).map((a) => titleCase(a.description))))].join(', ')}.
                           </li>
                         )}
                       </ul>
@@ -673,7 +674,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
     <>
       <div className="fn avoid">
         <div className="fn-bar">
-          <div className="fn-name">{fn.name}</div>
+          <div className="fn-name">{titleCase(fn.name)}</div>
           <div className="fn-meta">
             <span className="mchip">{fmtDMY(fn.date)}</span>
             <span className="mchip">
@@ -735,7 +736,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
               a.ratePaise === 0 ? (
                 <tr key={a.description}>
                   <td>
-                    <span className="it-name">{a.description}</span>
+                    <span className="it-name">{titleCase(a.description)}</span>
                     <span className="it-desc">Shown at nil value.</span>
                   </td>
                   <td className="c calc">{a.qty}</td>
@@ -747,7 +748,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
               ) : (
                 <tr key={a.description}>
                   <td>
-                    <span className="it-name">Add-on — {a.description}</span>
+                    <span className="it-name">Add-on — {titleCase(a.description)}</span>
                   </td>
                   <td className="c calc">{a.qty}</td>
                   <td className="n calc">{formatPaise(a.ratePaise)}</td>
@@ -757,7 +758,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
             )}
             <tr className="sub">
               <td colSpan={3} className="lbl">
-                {fn.name} sub-total
+                {titleCase(fn.name)} sub-total
               </td>
               <td className="n val">{formatPaise(fn.subtotalPaise)}</td>
             </tr>
@@ -771,7 +772,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
             <div className="fn-name">
               Menu
               <em>
-                {fn.menu.tierName} · {fn.name}
+                {fn.menu.tierName} · {titleCase(fn.name)}
               </em>
             </div>
             <div className="fn-meta">
@@ -828,7 +829,7 @@ function Lodge({ lodge, multi }: { lodge: ProposalDocument['lodges'][number]; mu
         <tr key={`${l.roomType}-${l.checkIn}-${l.checkOut}`}>
           <td>
             <span className="it-name">
-              {l.roomType.replace(/_/g, ' ')}{' '}
+              {titleCase(l.roomType)}{' '}
               <span className="dates">
                 · {fmtDM(l.checkIn)} → {fmtDM(l.checkOut)}
               </span>
