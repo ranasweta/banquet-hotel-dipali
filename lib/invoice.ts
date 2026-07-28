@@ -32,7 +32,6 @@ const GST_BP: Record<string, number> = { venue: 0, food: 0, rooms: 500, maintena
 // "INV" would put the banned word in front of the guest; the number belongs to the Draft 2
 // document, so it carries that name instead (client: never "invoice", never "final").
 const INVOICE_PREFIX = 'D2-2026-'
-const LOCKED_PLUS = new Set(['locked', 'billed', 'closed'])
 
 const taxOf = (amountPaise: number, bp: number) => Math.round((amountPaise * bp) / 10000)
 
@@ -94,13 +93,16 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   `)) as unknown as { name: string; pax: number; tierName: string; perPlate: number }[]
   for (const f of food) push('food', `${f.tierName} × ${f.pax} pax`, f.pax, Number(f.perPlate), f.pax * Number(f.perPlate), f.name)
 
-  // Add-ons — separate food lines (FR-3.6).
+  // Add-ons — separate food lines (FR-3.6), under the FUNCTION they were ordered for. An
+  // add-on hangs off a sub-event, so leaving it unlabelled dropped it into an event-level
+  // Food group and the guest saw décor for the Sangeet sitting outside the Sangeet.
   const addons = (await exec.execute(sql`
-    SELECT a.description, a.qty, a.rate_paise AS "ratePaise"
+    SELECT se.name, a.description, a.qty, a.rate_paise AS "ratePaise"
     FROM sub_event_addons a JOIN sub_events se ON se.id = a.sub_event_id
     WHERE se.event_id = ${eventId}
-  `)) as unknown as { description: string; qty: number; ratePaise: number }[]
-  for (const a of addons) push('food', `Add-on: ${a.description}`, a.qty, Number(a.ratePaise), a.qty * Number(a.ratePaise))
+    ORDER BY se.event_date, se.start_time, a.description
+  `)) as unknown as { name: string; description: string; qty: number; ratePaise: number }[]
+  for (const a of addons) push('food', `Add-on: ${a.description}`, a.qty, Number(a.ratePaise), a.qty * Number(a.ratePaise), a.name)
 
   // Rooms — count × nights × the lodge's rate for that category. Read from the bulk booking
   // on the proposal, NOT from room_allocations: rooms stopped being assigned room-by-room on
@@ -263,23 +265,6 @@ export async function finaliseInvoice(actor: Actor, eventId: string): Promise<{ 
     await audit(tx, actor, { entity: 'invoices', entityId: inv.id, eventId, action: 'status', field: 'invoice_no', newValue: invoiceNo })
     return { invoiceNo }
   })
-}
-
-/** The full bill for the print view: invoice + event/guest details + T&C + sign-off list. */
-export async function invoicePrintData(eventId: string) {
-  const invoice = await getInvoice(eventId)
-  if (!invoice) throw notFound('No invoice drafted yet.')
-  const [event] = (await db.execute(sql`
-    SELECT e.code, e.guest_name AS "guestName", e.event_type AS "eventType", e.status::text AS status,
-           e.first_date::text AS "firstDate", e.last_date::text AS "lastDate"
-    FROM events e WHERE e.id = ${eventId}
-  `)) as unknown as { code: string; guestName: string; eventType: string; status: string; firstDate: string | null; lastDate: string | null }[]
-  const contacts = (await db.execute(sql`SELECT phone, label FROM event_contacts WHERE event_id = ${eventId}`)) as unknown as { phone: string; label: string | null }[]
-  const signoffs = (await db.execute(sql`
-    SELECT s.designation::text AS designation, u.full_name AS "signedBy", s.signed_at AS "signedAt"
-    FROM lock_signoffs s JOIN users u ON u.id = s.signed_by WHERE s.event_id = ${eventId}
-  `)) as unknown as { designation: string; signedBy: string; signedAt: string }[]
-  return { event, contacts, invoice, signoffs, lockedPlus: LOCKED_PLUS.has(event?.status ?? ''), proforma: false }
 }
 
 /**

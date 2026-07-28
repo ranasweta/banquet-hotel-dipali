@@ -186,6 +186,24 @@ d('proforma estimate (pre-lock)', () => {
   })
 })
 
+d('bill lines carry their function (FR-7.3)', () => {
+  it('an add-on bills under the function it was ordered for, not loose at event level', async () => {
+    const { eventId, subId } = await buildLockable()
+    await db.insert(schema.subEventAddons).values({ subEventId: subId, description: 'Extra lighting', qty: 2, ratePaise: 50_000 })
+
+    const lines = await invoice.computeBillLines(db, eventId)
+    const addon = lines.find((l) => l.description === 'Add-on: Extra lighting')!
+    // An add-on hangs off a sub-event, so it belongs beside that function's venue and food.
+    expect(addon.functionLabel).toBe('Reception')
+    expect(addon.amountPaise).toBe(100_000)
+    expect(lines.find((l) => l.section === 'venue')!.functionLabel).toBe('Reception')
+
+    // Rooms and maintenance stay event-level — they span the whole stay, not one function.
+    expect(lines.filter((l) => l.section === 'rooms').every((l) => l.functionLabel == null)).toBe(true)
+    expect(lines.filter((l) => l.section === 'maintenance').every((l) => l.functionLabel == null)).toBe(true)
+  })
+})
+
 d('post-lock immutability + audit (FR-10.x)', () => {
   it('post-lock edits return 409 and the trail records the lock', async () => {
     const { eventId, subId } = await buildLockable()

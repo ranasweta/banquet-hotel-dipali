@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { assertPaise, formatPaise, paiseToRupees, percentOfPaise, rupeesToPaise } from './money'
+import {
+  assertPaise,
+  formatPaise,
+  numberToIndianWords,
+  paiseToRupees,
+  paiseToWords,
+  percentOfPaise,
+  rupeesToPaise,
+} from './money'
 
 describe('rupeesToPaise', () => {
   it('converts whole rupees', () => {
@@ -57,6 +65,39 @@ describe('percentOfPaise', () => {
     expect(percentOfPaise(1, 25)).toBe(0)
     expect(percentOfPaise(3, 50)).toBe(2) // 1.5 rounds half-up
     expect(Number.isInteger(percentOfPaise(333_333, 33))).toBe(true)
+  })
+})
+
+describe('numberToIndianWords', () => {
+  it('groups in lakh and crore, not millions — the proposal is signed in India', () => {
+    expect(numberToIndianWords(0)).toBe('Zero')
+    expect(numberToIndianWords(7)).toBe('Seven')
+    expect(numberToIndianWords(19)).toBe('Nineteen')
+    expect(numberToIndianWords(20)).toBe('Twenty')
+    expect(numberToIndianWords(45)).toBe('Forty Five')
+    expect(numberToIndianWords(100)).toBe('One Hundred')
+    expect(numberToIndianWords(101)).toBe('One Hundred One')
+    expect(numberToIndianWords(1_000)).toBe('One Thousand')
+    expect(numberToIndianWords(15_100)).toBe('Fifteen Thousand One Hundred')
+    expect(numberToIndianWords(1_51_000)).toBe('One Lakh Fifty One Thousand')
+    expect(numberToIndianWords(1_00_00_000)).toBe('One Crore')
+    expect(numberToIndianWords(12_34_56_789)).toBe(
+      'Twelve Crore Thirty Four Lakh Fifty Six Thousand Seven Hundred Eighty Nine',
+    )
+  })
+
+  it('refuses anything that is not a whole non-negative number', () => {
+    expect(() => numberToIndianWords(-1)).toThrow(RangeError)
+    expect(() => numberToIndianWords(1.5)).toThrow(RangeError)
+  })
+})
+
+describe('paiseToWords', () => {
+  it('splits into the rupee and paise halves the proposal prints', () => {
+    // "Rupees Ninety Three Thousand Five Hundred and Zero Paise Only."
+    expect(paiseToWords(93_50_000)).toEqual({ rupees: 'Ninety Three Thousand Five Hundred', paise: 'Zero' })
+    expect(paiseToWords(65_050)).toEqual({ rupees: 'Six Hundred Fifty', paise: 'Fifty' })
+    expect(paiseToWords(0)).toEqual({ rupees: 'Zero', paise: 'Zero' })
   })
 })
 
