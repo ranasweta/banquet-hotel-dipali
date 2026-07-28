@@ -13,6 +13,7 @@ import {
   formatType,
 } from '@/components/dashboard-shared'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 /**
  * Higher Authority home: the oversight board. What is waiting on their decision, what money is
@@ -74,7 +75,7 @@ export function AuthorityDashboard({ data, user }: { data: AuthorityData; user: 
                       <span className="min-w-0">
                         <span className="line-clamp-1 font-medium">{x.summary}</span>
                         <span className="text-xs text-muted-foreground">
-                          {x.eventCode} · {x.guestName} · raised by {x.raisedByName}
+                          {x.eventCode} · {titleCase(x.guestName)} · raised by {x.raisedByName}
                         </span>
                       </span>
                       <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs capitalize text-muted-foreground">
@@ -104,7 +105,7 @@ export function AuthorityDashboard({ data, user }: { data: AuthorityData; user: 
                     <li key={p.eventId}>
                       <Link href={`/bookings/${p.eventId}`} className="flex items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                         <span className="min-w-0">
-                          <span className="line-clamp-1 font-medium">{p.guestName}</span>
+                          <span className="line-clamp-1 font-medium">{titleCase(p.guestName)}</span>
                           <span className="text-xs text-muted-foreground">{p.code} · {formatDay(p.eventDate)}</span>
                         </span>
                         <span className="shrink-0 text-right">
@@ -130,7 +131,7 @@ export function AuthorityDashboard({ data, user }: { data: AuthorityData; user: 
                   <li key={e.id}>
                     <Link href={`/bookings/${e.id}`} className="flex items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="min-w-0">
-                        <span className="line-clamp-1 font-medium">{e.guestName}</span>
+                        <span className="line-clamp-1 font-medium">{titleCase(e.guestName)}</span>
                         <span className="text-xs capitalize text-muted-foreground">
                           {e.code} · {formatType(e.eventType)}{e.firstDate ? ` · ${formatDay(e.firstDate)}` : ''}
                         </span>

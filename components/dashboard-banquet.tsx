@@ -11,6 +11,7 @@ import {
   formatTimeRange,
 } from '@/components/dashboard-shared'
 import { OperationsBoard } from '@/components/operations-board'
+import { titleCase } from '@/lib/text'
 
 /**
  * Banquet Manager home: the floor & kitchen view. Today's functions with their menu state, the
@@ -31,7 +32,7 @@ export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user:
               <p className="mt-1 text-sm text-muted-foreground">
                 {nextFn ? (
                   <>
-                    Next: <span className="font-medium text-foreground">{nextFn.guestName} {nextFn.name}</span> ·{' '}
+                    Next: <span className="font-medium text-foreground">{titleCase(nextFn.guestName)} {titleCase(nextFn.name)}</span> ·{' '}
                     {nextFn.venueName ?? 'venue TBD'} on {formatDay(nextFn.eventDate)}.
                   </>
                 ) : (
@@ -53,8 +54,8 @@ export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user:
                     {formatTimeRange(fn.startTime, fn.endTime)}
                   </span>
                   <span className="min-w-0 flex-1 text-base font-semibold">
-                    {fn.guestName}
-                    <span className="ml-2 font-normal text-primary-foreground/75">{fn.name}</span>
+                    {titleCase(fn.guestName)}
+                    <span className="ml-2 font-normal text-primary-foreground/75">{titleCase(fn.name)}</span>
                   </span>
                   <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/90">
                     <MapPin className="size-4" aria-hidden />
@@ -108,7 +109,7 @@ export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user:
                   <li key={cr.id}>
                     <Link href="/change-requests" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="line-clamp-1 font-medium">{cr.summary}</span>
-                      <span className="text-xs text-muted-foreground">{cr.eventCode} · {cr.guestName} · {cr.requestedByName}</span>
+                      <span className="text-xs text-muted-foreground">{cr.eventCode} · {titleCase(cr.guestName)} · {cr.requestedByName}</span>
                     </Link>
                   </li>
                 ))}
@@ -128,7 +129,7 @@ export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user:
                   <li key={g.subEventId}>
                     <Link href={`/bookings/${g.eventId}`} className="flex items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="min-w-0">
-                        <span className="line-clamp-1 font-medium">{g.guestName} <span className="font-normal text-muted-foreground">{g.name}</span></span>
+                        <span className="line-clamp-1 font-medium">{titleCase(g.guestName)} <span className="font-normal text-muted-foreground">{titleCase(g.name)}</span></span>
                         <span className="text-xs text-muted-foreground">{g.eventCode} · {formatDay(g.eventDate)}</span>
                       </span>
                       <span className={g.tierName ? 'shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300' : 'shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300'}>

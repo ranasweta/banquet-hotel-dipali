@@ -3,6 +3,7 @@ import { ChefHat, CalendarDays, UtensilsCrossed, Users, Clock, MapPin, CircleChe
 import type { ChefDashboard as ChefData } from '@/lib/dashboard'
 import { Hero, KpiTile, SectionCard, EmptyState, AgendaList, formatDay, formatTimeRange } from '@/components/dashboard-shared'
 import { OperationsBoard } from '@/components/operations-board'
+import { titleCase } from '@/lib/text'
 
 /**
  * Chef home: the kitchen's own board. What is waiting on a price from them, what they cook
@@ -23,7 +24,7 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
               <h1 className="text-xl font-semibold sm:text-2xl">Nothing to cook today</h1>
               <p className="mt-1 text-sm text-muted-foreground">
                 {upcoming[0]
-                  ? <>Next: <span className="font-medium text-foreground">{upcoming[0].guestName} {upcoming[0].name}</span> on {formatDay(upcoming[0].eventDate)}.</>
+                  ? <>Next: <span className="font-medium text-foreground">{titleCase(upcoming[0].guestName)} {titleCase(upcoming[0].name)}</span> on {formatDay(upcoming[0].eventDate)}.</>
                   : 'Nothing in the next week either.'}
               </p>
             </div>
@@ -41,8 +42,8 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
                     {formatTimeRange(fn.startTime, fn.endTime)}
                   </span>
                   <span className="min-w-0 flex-1 text-base font-semibold">
-                    {fn.guestName}
-                    <span className="ml-2 font-normal text-primary-foreground/75">{fn.name}</span>
+                    {titleCase(fn.guestName)}
+                    <span className="ml-2 font-normal text-primary-foreground/75">{titleCase(fn.name)}</span>
                   </span>
                   <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/90">
                     <MapPin className="size-4" aria-hidden />
@@ -96,7 +97,7 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
                     <Link href="/chef" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="line-clamp-1 font-medium">{r.description}</span>
                       <span className="text-xs text-muted-foreground">
-                        {r.eventCode} · {r.subEventName} · {formatDay(r.eventDate)} · {r.pax} pax
+                        {r.eventCode} · {titleCase(r.subEventName)} · {formatDay(r.eventDate)} · {r.pax} pax
                       </span>
                     </Link>
                   </li>
@@ -113,7 +114,7 @@ export function ChefDashboard({ data, user }: { data: ChefData; user: { fullName
                 {menuGaps.map((g) => (
                   <li key={g.subEventId} className="flex items-center justify-between gap-2">
                     <span className="min-w-0">
-                      <span className="line-clamp-1 font-medium">{g.guestName} <span className="font-normal text-muted-foreground">{g.name}</span></span>
+                      <span className="line-clamp-1 font-medium">{titleCase(g.guestName)} <span className="font-normal text-muted-foreground">{titleCase(g.name)}</span></span>
                       <span className="text-xs text-muted-foreground">{g.eventCode} · {formatDay(g.eventDate)}</span>
                     </span>
                     <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">

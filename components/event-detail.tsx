@@ -18,6 +18,7 @@ import { EventMaintenance } from '@/components/event-maintenance'
 import { RequestChange } from '@/components/request-change'
 import { EventLockInvoice } from '@/components/event-lock-invoice'
 import { EventTrail } from '@/components/event-trail'
+import { titleCase } from '@/lib/text'
 
 type SubEvent = {
   id: string
@@ -148,7 +149,7 @@ export function EventDetailView({
             </span>
           </div>
           <p className="mt-1 text-muted-foreground">
-            {event.guestName} · <span className="capitalize">{event.eventType.replace(/_/g, ' ')}</span>
+            {titleCase(event.guestName)} · <span>{titleCase(event.eventType)}</span>
             {event.firstDate && (
               <>
                 {' '}
@@ -255,7 +256,7 @@ export function EventDetailView({
             <Card key={s.id}>
               <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <CardTitle>{s.name}</CardTitle>
+                  <CardTitle>{titleCase(s.name)}</CardTitle>
                   <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                     <span className="flex items-center gap-1 tabular-nums">
                       <CalendarDays className="size-3.5" />

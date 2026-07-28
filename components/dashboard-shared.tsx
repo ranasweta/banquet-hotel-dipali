@@ -4,6 +4,7 @@ import type { AgendaFunction } from '@/lib/dashboard'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { formatTime, formatTimeRange } from '@/lib/time'
+import { titleCase } from '@/lib/text'
 
 /** An agenda row, with the Banquet menu fields optional so plain Booking agendas fit too. */
 export type AgendaItem = AgendaFunction & { tierName?: string | null; menuComplete?: boolean | null }
@@ -171,7 +172,7 @@ const STATUS_STYLES: Record<string, string> = {
 export function StatusPill({ status }: { status: string }) {
   return (
     <span className={cn('rounded-full px-2 py-0.5 text-xs', STATUS_STYLES[status] ?? STATUS_STYLES.completed)}>
-      {status.replace(/_/g, ' ')}
+      {titleCase(status)}
     </span>
   )
 }
@@ -210,8 +211,8 @@ export function AgendaList({
                     {formatTimeRange(fn.startTime, fn.endTime)}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                    {fn.guestName}
-                    <span className="ml-1.5 font-normal text-muted-foreground">{fn.name}</span>
+                    {titleCase(fn.guestName)}
+                    <span className="ml-1.5 font-normal text-muted-foreground">{titleCase(fn.name)}</span>
                   </span>
                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                     <MapPin className="size-3.5" aria-hidden />
@@ -294,7 +295,7 @@ export function daysUntilDue(dateISO: string, asOf: string): number {
 }
 
 export function formatType(code: string): string {
-  return code.replace(/_/g, ' ')
+  return titleCase(code)
 }
 
 export function groupBy<T, K>(items: T[], key: (t: T) => K): Map<K, T[]> {

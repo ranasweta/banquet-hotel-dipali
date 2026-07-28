@@ -14,6 +14,7 @@ import {
   formatType,
 } from '@/components/dashboard-shared'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 /**
  * Booking Manager home (also shown to Higher Authority and the Auditor for now): the pipeline
@@ -44,7 +45,7 @@ export function DashboardHome({
               <p className="mt-1 text-sm text-muted-foreground">
                 {nextFn ? (
                   <>
-                    Next up: <span className="font-medium text-foreground">{nextFn.guestName}</span> ·{' '}
+                    Next up: <span className="font-medium text-foreground">{titleCase(nextFn.guestName)}</span> ·{' '}
                     {nextFn.venueName ?? 'venue TBD'} on {formatDay(nextFn.eventDate)}.
                   </>
                 ) : (
@@ -69,8 +70,8 @@ export function DashboardHome({
                     {formatTimeRange(fn.startTime, fn.endTime)}
                   </span>
                   <span className="min-w-0 flex-1 text-base font-semibold">
-                    {fn.guestName}
-                    <span className="ml-2 font-normal text-primary-foreground/75">{fn.name}</span>
+                    {titleCase(fn.guestName)}
+                    <span className="ml-2 font-normal text-primary-foreground/75">{titleCase(fn.name)}</span>
                   </span>
                   <span className="inline-flex items-center gap-1.5 text-sm text-primary-foreground/90">
                     <MapPin className="size-4" aria-hidden />
@@ -119,7 +120,7 @@ export function DashboardHome({
                   <li key={x.id}>
                     <Link href="/approvals" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="line-clamp-1 font-medium">{x.summary}</span>
-                      <span className="text-xs text-muted-foreground">{x.eventCode} · {x.guestName} · {x.raisedByName}</span>
+                      <span className="text-xs text-muted-foreground">{x.eventCode} · {titleCase(x.guestName)} · {x.raisedByName}</span>
                     </Link>
                   </li>
                 ))}
@@ -127,7 +128,7 @@ export function DashboardHome({
                   <li key={cr.id}>
                     <Link href="/change-requests" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="line-clamp-1 font-medium">Change: {cr.summary}</span>
-                      <span className="text-xs text-muted-foreground">{cr.eventCode} · {cr.guestName} · {cr.requestedByName}</span>
+                      <span className="text-xs text-muted-foreground">{cr.eventCode} · {titleCase(cr.guestName)} · {cr.requestedByName}</span>
                     </Link>
                   </li>
                 ))}
@@ -147,7 +148,7 @@ export function DashboardHome({
                     <li key={p.eventId}>
                       <Link href={`/bookings/${p.eventId}`} className="flex items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                         <span className="min-w-0">
-                          <span className="line-clamp-1 font-medium">{p.guestName}</span>
+                          <span className="line-clamp-1 font-medium">{titleCase(p.guestName)}</span>
                           <span className="text-xs text-muted-foreground">{p.code} · event {formatDay(p.eventDate)}</span>
                         </span>
                         <span className="shrink-0 text-right">
@@ -180,8 +181,8 @@ export function DashboardHome({
               <li key={e.id}>
                 <Link href={`/bookings/${e.id}`} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 py-2.5 hover:bg-muted/50">
                   <span className="font-medium tabular-nums text-primary">{e.code}</span>
-                  <span className="min-w-0 flex-1 truncate font-medium">{e.guestName}</span>
-                  <span className="text-xs capitalize text-muted-foreground">{formatType(e.eventType)}</span>
+                  <span className="min-w-0 flex-1 truncate font-medium">{titleCase(e.guestName)}</span>
+                  <span className="text-xs text-muted-foreground">{formatType(e.eventType)}</span>
                   {e.contactPhone && (
                     <span className="inline-flex items-center gap-1 text-xs tabular-nums text-muted-foreground">
                       <Phone className="size-3" aria-hidden />

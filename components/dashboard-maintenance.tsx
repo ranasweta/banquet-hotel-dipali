@@ -2,6 +2,7 @@ import { Wrench, Activity, Lock, IndianRupee, ListChecks, CircleCheck } from 'lu
 import type { MaintenanceDashboard as MaintenanceData, MaintenanceEventRow } from '@/lib/dashboard'
 import { formatPaise } from '@/lib/money'
 import { Hero, KpiTile, SectionCard, EmptyState, StatusPill, formatDay } from '@/components/dashboard-shared'
+import { titleCase } from '@/lib/text'
 
 /**
  * Maintenance home: the team's work board. Events it may log against — In Progress or Completed
@@ -79,7 +80,7 @@ export function MaintenanceDashboard({ data, user }: { data: MaintenanceData; us
               {awaitingClose.map((e) => (
                 <li key={e.id} className="flex items-center justify-between gap-2">
                   <span className="min-w-0">
-                    <span className="line-clamp-1 font-medium">{e.guestName}</span>
+                    <span className="line-clamp-1 font-medium">{titleCase(e.guestName)}</span>
                     <span className="text-xs text-muted-foreground">
                       {e.code}{e.firstDate ? ` · ${formatDay(e.firstDate)}` : ''}
                     </span>
@@ -102,7 +103,7 @@ function EventRow({ e }: { e: MaintenanceEventRow }) {
   return (
     <li className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 py-2.5">
       <span className="font-medium tabular-nums">{e.code}</span>
-      <span className="min-w-0 flex-1 truncate font-medium">{e.guestName}</span>
+      <span className="min-w-0 flex-1 truncate font-medium">{titleCase(e.guestName)}</span>
       <StatusPill status={e.status} />
       <span className="text-xs tabular-nums text-muted-foreground">
         {e.entryCount} {e.entryCount === 1 ? 'entry' : 'entries'}

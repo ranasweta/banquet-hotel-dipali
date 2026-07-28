@@ -3,6 +3,7 @@ import { BedDouble, LogIn, LogOut, DoorOpen, ClipboardList, ShieldCheck, CircleC
 import type { LodgeDashboard as LodgeData, RoomMovement } from '@/lib/dashboard'
 import { Hero, KpiTile, SectionCard, EmptyState, formatDay } from '@/components/dashboard-shared'
 import { cn } from '@/lib/utils'
+import { titleCase } from '@/lib/text'
 
 /**
  * Lodge Manager home: today's arrivals & departures, live occupancy per property, events whose
@@ -96,7 +97,7 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
                   <li key={e.eventId}>
                     <Link href={`/bookings/${e.eventId}`} className="flex items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="min-w-0">
-                        <span className="line-clamp-1 font-medium">{e.guestName}</span>
+                        <span className="line-clamp-1 font-medium">{titleCase(e.guestName)}</span>
                         <span className="text-xs text-muted-foreground">
                           {e.code}{e.firstDate ? ` · ${formatDay(e.firstDate)}` : ''}
                         </span>
@@ -135,7 +136,7 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
                   <li key={x.id}>
                     <Link href="/approvals" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="line-clamp-1 font-medium">{x.summary}</span>
-                      <span className="text-xs text-muted-foreground">{x.eventCode} · {x.guestName}</span>
+                      <span className="text-xs text-muted-foreground">{x.eventCode} · {titleCase(x.guestName)}</span>
                     </Link>
                   </li>
                 ))}
@@ -159,7 +160,7 @@ function MovementList({ label, empty, rows, dateLabel }: { label: string; empty:
           {rows.map((r) => (
             <li key={r.allocId} className="flex items-center justify-between gap-2">
               <span className="min-w-0">
-                <span className="line-clamp-1 font-medium">{r.guestName}</span>
+                <span className="line-clamp-1 font-medium">{titleCase(r.guestName)}</span>
                 <span className="text-xs text-muted-foreground">{r.unitName} · Room {r.roomNo}</span>
               </span>
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{dateLabel} {formatDay(r.otherDate)}</span>

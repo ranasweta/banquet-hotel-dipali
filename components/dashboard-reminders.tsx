@@ -6,6 +6,7 @@ import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { titleCase } from '@/lib/text'
 
 type Reminder = {
   id: string
@@ -42,7 +43,7 @@ export function DashboardReminders() {
           {reminders.map((r) => (
             <li key={r.id} className="flex items-center justify-between gap-2">
               <Link href={`/bookings/${r.eventId}`} className="hover:underline">
-                <span className="font-medium tabular-nums">{r.eventCode}</span> · {r.guestName}
+                <span className="font-medium tabular-nums">{r.eventCode}</span> · {titleCase(r.guestName)}
                 <span className="text-muted-foreground"> · event {r.firstDate}</span>
               </Link>
               <span className="tabular-nums text-amber-600">balance {formatPaise(r.balancePaise)}</span>

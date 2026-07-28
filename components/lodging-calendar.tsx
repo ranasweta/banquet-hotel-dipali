@@ -485,7 +485,7 @@ function DayDetail({
                                 h.state === 'pending' ? ' · awaiting Authority approval (35+ rooms)' : ''
                               }`}
                             >
-                              {h.guestName} ×{h.count}
+                              {titleCase(h.guestName)} ×{h.count}
                               {h.state === 'pending' && ' (pending)'}
                             </span>
                           ))}
