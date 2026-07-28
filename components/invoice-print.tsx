@@ -64,6 +64,27 @@ function fmtTime(t: string): string {
   return `${hh}:${String(m).padStart(2, '0')} ${ap}`
 }
 
+/**
+ * What the document calls itself. Chrome writes the page title onto the saved PDF, so without
+ * this every proposal saves as "Hotel Dipali — Banquet Management" and a folder of them is
+ * indistinguishable. Guest-facing, so it uses the Draft / Draft 2 vocabulary and the booking
+ * code — never the word "invoice" (client, 20 Jul 2026):
+ *
+ *     Draft 2 - E-1042 - Rajesh Verma - 20 Nov 2026
+ *
+ * Characters a filesystem refuses are folded to spaces rather than left for Chrome to mangle.
+ */
+export function proposalDocumentName(doc: ProposalDocument): string {
+  const stage = doc.doc.isDraft2 ? 'Draft 2' : 'Draft'
+  const when = doc.event.plannedFrom ?? doc.event.firstDate
+  return [stage, doc.event.code, doc.event.guestName, when ? fmtDMY(when) : null]
+    .filter(Boolean)
+    .join(' - ')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function InvoicePrint({ eventId, proforma = false }: { eventId: string; proforma?: boolean }) {
   const [doc, setDoc] = useState<ProposalDocument | null>(null)
 
@@ -72,6 +93,17 @@ export function InvoicePrint({ eventId, proforma = false }: { eventId: string; p
       .then(setDoc)
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load'))
   }, [eventId, proforma])
+
+  // Name the saved PDF after the proposal, and hand the title back on the way out so the rest
+  // of the app keeps its own.
+  useEffect(() => {
+    if (!doc) return
+    const previous = document.title
+    document.title = proposalDocumentName(doc)
+    return () => {
+      document.title = previous
+    }
+  }, [doc])
 
   if (!doc) {
     return (
@@ -86,7 +118,8 @@ export function InvoicePrint({ eventId, proforma = false }: { eventId: string; p
       {/* Toolbar — never printed. */}
       <div className="mx-auto mb-3 flex max-w-[210mm] items-center justify-between gap-3 px-1 print:hidden">
         <p className="text-sm text-muted-foreground">
-          Press Print, then <span className="font-medium text-foreground">Save as PDF</span> (A4, background graphics on).
+          Press Print, then <span className="font-medium text-foreground">Save as PDF</span> — A4, background graphics
+          on, <span className="font-medium text-foreground">headers &amp; footers off</span>.
         </p>
         <Button variant="outline" onClick={() => window.print()}>
           <Printer className="size-4" /> Print
@@ -1177,30 +1210,30 @@ const CSS = `
 /* ══════════ T&C ANNEXURE — facsimile of the client's PDF ══════════ */
 .pd .tcpage{width:210mm; margin:14px auto 0; background:#fff; padding:12mm 11mm;
   box-shadow:0 18px 60px rgba(90,75,40,.22);
-  font-family:'Times New Roman',Times,serif; color:#000; font-size:9.5pt; line-height:1.3}
-.pd .tcbox{border:1.6px solid #000; padding:5mm 5mm 4mm; min-height:250mm;
+  font-family:'Times New Roman',Times,serif; color:#000; font-size:9pt; line-height:1.26}
+.pd .tcbox{border:1.6px solid #000; padding:4mm 4.5mm 3mm; min-height:250mm;
   display:flex; flex-direction:column}
 .pd .tcbox>.tcbody{flex:1}
-.pd .tchead{text-align:center; margin-bottom:3mm}
-.pd .tclogo{height:17mm; width:auto; margin:0 auto 1.5mm; display:block; mix-blend-mode:multiply}
-.pd .tcname{font-size:13pt; font-weight:700; letter-spacing:.01em}
-.pd .tcaddr{font-size:8.5pt; font-weight:700}
-.pd .tctitle{text-align:center; font-size:10.5pt; font-weight:700; margin:4mm 0 2.5mm}
-.pd .tcintro{font-size:9.5pt; text-align:justify; margin-bottom:1mm}
-.pd .tccl{margin-bottom:.6mm; break-inside:avoid; page-break-inside:avoid}
-.pd .tcn{font-size:9.5pt; font-weight:700}
-.pd .tccl ul{list-style:disc; margin:0 0 0 9mm; padding:0}
-.pd .tccl li{font-size:9.5pt; text-align:justify; margin-bottom:.4mm; line-height:1.28}
-.pd .tcaccept{margin-top:5mm}
-.pd .tcah{font-size:10pt; font-weight:700}
-.pd .tcaintro{font-size:9.5pt; margin-bottom:3mm}
+.pd .tchead{text-align:center; margin-bottom:2mm}
+.pd .tclogo{height:14mm; width:auto; margin:0 auto 1.2mm; display:block; mix-blend-mode:multiply}
+.pd .tcname{font-size:12.5pt; font-weight:700; letter-spacing:.01em}
+.pd .tcaddr{font-size:8.3pt; font-weight:700}
+.pd .tctitle{text-align:center; font-size:10pt; font-weight:700; margin:3mm 0 1.5mm}
+.pd .tcintro{font-size:9pt; text-align:justify; margin-bottom:1mm}
+.pd .tccl{margin-bottom:.5mm; break-inside:avoid; page-break-inside:avoid}
+.pd .tcn{font-size:9pt; font-weight:700}
+.pd .tccl ul{list-style:disc; margin:0 0 0 8mm; padding:0}
+.pd .tccl li{font-size:9pt; text-align:justify; margin-bottom:.3mm; line-height:1.2}
+.pd .tcaccept{margin-top:4mm}
+.pd .tcah{font-size:9.5pt; font-weight:700}
+.pd .tcaintro{font-size:9pt; margin-bottom:2.5mm}
 .pd table.tcfields{width:100%; border-collapse:collapse; margin-left:4mm}
-.pd table.tcfields td{border:none; background:none; padding:1.6mm 0; font-size:10.5pt;
+.pd table.tcfields td{border:none; background:none; padding:1.3mm 0; font-size:10pt;
   vertical-align:baseline}
 .pd .tcfl{font-weight:700; width:58mm; white-space:nowrap}
 .pd .tcfc{width:6mm; font-weight:700}
 .pd .tcfv{letter-spacing:.02em}
-.pd .tcfoot{margin-top:6mm}
+.pd .tcfoot{margin-top:3mm}
 .pd .tcsigs{display:flex; justify-content:space-between; padding:0 12mm; font-weight:700;
   font-size:10pt; text-align:center}
 .pd .tcsigs span{display:block}
@@ -1208,20 +1241,33 @@ const CSS = `
 
 @media print{
   .pd{background:#fff; padding:0}
+  /* margin:0 hands the margins to the document instead of the browser. Two things follow:
+     the gilt bar and masthead run to the sheet edge as the template draws them, and Chrome
+     is left no margin box to print its URL / date / page-number strip into. (The print
+     dialog's "Headers and footers" tick-box is still the authoritative switch — the toolbar
+     above says so.) Every measurement below is therefore the real printed margin. */
+  @page{size:A4; margin:0}
   .pd .page,.pd .tcpage{box-shadow:none; margin:0; width:auto}
-  @page{size:A4; margin:10mm 9mm}
-  .pd .pad{padding:0 7mm}
-  .pd .masthead{padding:7mm 7mm 5.5mm}
-  .pd .footer{padding:2.6mm 7mm}
+  .pd .pad{padding:0 13mm}
+  .pd .masthead{padding:9mm 13mm 6mm}
+  .pd .footer{padding:3mm 13mm 9mm}
+  /* The gilt bar and the closing rule repeat on every sheet; these keep the type off them
+     and off the paper edge, on page four as much as on page one. */
+  .pd table.sheet>thead>tr>td{padding-bottom:7mm}
+  .pd table.sheet>tfoot>tr>td{padding-bottom:10mm}
   .pd .avoid,.pd .fn,.pd .card,.pd .cards,.pd .summary,.pd .panel,.pd .pstep,.pd .bank,
   .pd .sign,.pd .pay,.pd .two,.pd .glance,.pd .note,.pd .footer,.pd .seg,
   .pd .fn table,.pd .fn thead,.pd .fn tr{break-inside:avoid; page-break-inside:avoid}
   .pd .pill-row,.pd .fn-bar{break-after:avoid; page-break-after:avoid}
   .pd table.sheet,.pd table.sheet>tbody,.pd table.sheet>tbody>tr,.pd table.sheet>tbody>tr>td{
     break-inside:auto; page-break-inside:auto}
-  /* The annexure is exactly two pages, each starting on a fresh sheet. */
-  .pd .tcpage{break-before:page; page-break-before:always; padding:0}
-  .pd .tcbox{min-height:265mm}
+  /* The annexure is exactly two sheets. Each is given the height of one, so the box border
+     closes on its own page instead of spilling its last centimetre onto a third — 295mm not
+     297mm, because a hair of slack is what stops sub-pixel rounding from doing exactly that.
+     The box then fills that height, which is what pins each signature block to the bottom. */
+  .pd .tcpage{break-before:page; page-break-before:always; break-inside:avoid;
+    height:295mm; padding:10mm}
+  .pd .tcbox{height:100%; min-height:0}
   .pd *{-webkit-print-color-adjust:exact !important; print-color-adjust:exact !important}
 }
 `
