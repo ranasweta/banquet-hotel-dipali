@@ -1,26 +1,33 @@
 import { redirect } from 'next/navigation'
 import { getCurrentUser, getPermissionMatrix } from '@/lib/auth'
+import { DECIDER_ROLES } from '@/lib/change-requests'
 import { ChangeRequestsQueue } from '@/components/change-requests-queue'
 
+/**
+ * The raiser's record of the venue/date/time changes they asked for.
+ *
+ * Deciding one no longer happens here (client's lead, 1 Aug 2026): a venue move is a section
+ * inside its proposal's approval bundle, so the Authority is sent there rather than made to
+ * work a second queue. The page survives for the person who FILED the request — their
+ * notification links here to see the outcome — and it is off the sidebar.
+ */
 export default async function ChangeRequestsPage() {
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const perms = await getPermissionMatrix(user.roleId)
   if (!perms.some((p) => p.module === 'calendar' && p.action === 'view')) redirect('/')
-  // Deciding venue/timing changes is the Banquet Manager's (calendar create_edit).
-  const canDecide = perms.some((p) => p.module === 'calendar' && p.action === 'create_edit')
+  if (DECIDER_ROLES.has(user.roleName)) redirect('/approvals')
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Change requests</h1>
         <p className="text-muted-foreground">
-          {canDecide
-            ? 'Approve or reject venue / date / time changes on confirmed bookings. Approval re-books the slot.'
-            : 'Requested venue / date / time changes and their outcomes.'}
+          Venue / date / time changes you have asked for, and their outcomes. The Higher
+          Authority decides them alongside the rest of the proposal.
         </p>
       </div>
-      <ChangeRequestsQueue canDecide={canDecide} />
+      <ChangeRequestsQueue canDecide={false} />
     </div>
   )
 }

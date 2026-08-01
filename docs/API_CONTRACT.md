@@ -135,7 +135,23 @@ races return 409 with a human-readable message.
   (CRON_SECRET header, or Auditor/Admin session)
 
 ## Approvals (module: approvals)
-- `GET  /exceptions?status=pending&mine=1` — Authority queue (`mine=1` = raised by caller)
+Bundled by proposal since 1 Aug 2026 (client's lead): the GM decides a BOOKING, not a request.
+The per-exception endpoints below are unchanged and still serve the history screen and any
+single-request flow; the bundle endpoints are what the approvals screen uses.
+
+- `GET  /approvals/bundles` — one row per proposal with pending asks: counts by section
+  (food / rooms / discount / timing), oldest ask, requesters. Deciders only.
+- `GET  /approvals/bundles/:eventId?settled=1` — that proposal's asks (exceptions AND change
+  requests, merged) plus the full proposal document, so the GM decides against what he can see.
+- `POST /approvals/bundles/:eventId/decide`
+  { decisions[]: { id, source: exception|change_request, action, remark?, modified? },
+    edits?: { event?, functions[]?, menus[]?, rooms[]?, addDiscounts[]?, removeDiscountIds[]?,
+              reason? } }
+  → ONE transaction. Edits apply first (they are the GM's real answer), then each ask is
+  settled; an ask answered by editing is recorded, not applied twice. `reason` is mandatory
+  when the booking is locked/billed/closed. 409 if a venue window was taken meanwhile — nothing
+  is saved. Returns { settled[], skipped[], changes[], invoiceReissued, invoiceNo, remaining }.
+- `GET  /exceptions?status=pending&mine=1` — flat queue (`mine=1` = raised by caller)
 - `GET  /approvals/dashboard` — pending load + biggest upcoming events (FR-6.3)
 - `POST /exceptions/:id/decide` { action: approve|reject|approve_modified, remark, modified? }
   → applies the deferred change on approval, notifies requester. Deciding is
@@ -149,9 +165,13 @@ races return 409 with a human-readable message.
 - `POST /events/:id/maintenance/close` — freeze entries + record the maintenance sign-off (FR-5.2)
 
 ## Change requests (module: bookings to raise, calendar to decide)
+Decided inside the proposal's approval bundle since 1 Aug 2026 — a venue move is the `timing`
+section of `POST /approvals/bundles/:eventId/decide`. The endpoints below still stand: the
+raiser reads their own outcomes here, and `/change-requests/:id/decide` remains for a
+single-request decision.
 - `GET  /change-requests?status=&event_id=` — the queue (pending first)
 - `POST /change-requests` { sub_event_id, payload{event_date/start_time/end_time/venue_id/bundle_id}, reason } (FR-1.9)
-- `POST /change-requests/:id/decide` { action: approve|reject, remark } — Banquet Manager;
+- `POST /change-requests/:id/decide` { action: approve|reject, remark } — Higher Authority;
   approval re-books the venue slot (409 if taken meanwhile)
 - `POST /sub-events/:id/pax` { pax, override_note } — a post-confirm pax change applies directly
 

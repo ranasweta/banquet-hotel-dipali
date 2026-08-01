@@ -23,6 +23,8 @@ type ChecklistItem = { key: string; label: string; done: boolean; blocking: bool
 type Checklist = { status: string; canLock: boolean; hasRooms: boolean; items: ChecklistItem[] }
 type Invoice = {
   id: string; invoiceNo: string | null; finalised: boolean
+  /** >1 once the Higher Authority has changed a billed booking and it was re-issued. */
+  version: number; supersedesNo: string | null
   grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number; advancesPaise: number; balancePaise: number
   lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number }[]
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string }[]
@@ -96,6 +98,13 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
             <h3 className="text-sm font-medium">
               Payment review {invoice.invoiceNo && <span className="tabular-nums">· {invoice.invoiceNo}</span>}
               {invoice.finalised ? <Badge variant="outline" className="ml-2 text-emerald-600">Draft 2</Badge> : <Badge variant="outline" className="ml-2 text-amber-600">Draft</Badge>}
+              {/* Re-issued after the Higher Authority changed a billed booking. Two numbers
+                  against one guest is confusing unless the screen says which replaced which. */}
+              {invoice.version > 1 && (
+                <Badge variant="outline" className="ml-2 text-violet-600">
+                  Revision {invoice.version}{invoice.supersedesNo && ` · replaces ${invoice.supersedesNo}`}
+                </Badge>
+              )}
             </h3>
             <Link href={`/bookings/${eventId}/invoice`} className="text-sm text-primary hover:underline">Print view →</Link>
           </div>

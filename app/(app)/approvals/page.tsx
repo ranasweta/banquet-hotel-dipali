@@ -23,7 +23,7 @@ export default async function ApprovalsPage() {
           <h1 className="text-2xl font-semibold">Approvals</h1>
           <p className="text-muted-foreground">
             {canDecide
-              ? 'Decide escalations — the approved change is applied automatically.'
+              ? 'One row per proposal. Open it to see every request on that booking together, decide them in one go, and edit the proposal itself.'
               : 'Exceptions you’ve raised and their outcomes. Only the Higher Authority can decide.'}
           </p>
         </div>

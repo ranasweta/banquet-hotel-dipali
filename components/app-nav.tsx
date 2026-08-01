@@ -17,7 +17,6 @@ import {
   Menu,
   PanelLeftClose,
   PanelLeftOpen,
-  Repeat2,
   ShieldCheck,
   Users,
   UtensilsCrossed,
@@ -46,7 +45,9 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   { href: '/chef', label: 'Chef requests', module: 'menus', icon: ChefHat },
   { href: '/approvals', label: 'Approvals', module: 'approvals', icon: BadgeCheck },
   { href: '/approvals/history', label: 'Approvals history', module: 'approvals', icon: History },
-  { href: '/change-requests', label: 'Change requests', module: 'calendar', icon: Repeat2 },
+  // No sidebar row for /change-requests: a venue move is decided inside its proposal's
+  // approval bundle now (1 Aug 2026). The page remains for the raiser, linked from their
+  // notification, so the outcome is still somewhere to be read.
   { href: '/reports', label: 'Reports', module: 'audit', icon: BarChart3 },
   { href: '/admin/menus', label: 'Menu master', module: 'menu_master', icon: UtensilsCrossed },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users', icon: ShieldCheck },

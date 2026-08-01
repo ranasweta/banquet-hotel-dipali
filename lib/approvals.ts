@@ -39,8 +39,12 @@ function pgCode(err: unknown): string | undefined {
   return undefined
 }
 
-/** A one-line, human summary of what an exception is asking for. */
-function summarize(kind: string, payload: Record<string, unknown>): string {
+/**
+ * A one-line, human summary of what an exception is asking for. Exported because the bundle
+ * screen (lib/approval-bundles.ts) prints the same sentence beside the proposal — two
+ * phrasings of one request is how a GM ends up deciding something other than what was asked.
+ */
+export function summarizeException(kind: string, payload: Record<string, unknown>): string {
   switch (kind) {
     case 'menu_increase': {
       // One request per FUNCTION, sent when its submit button is pressed (21 Jul 2026).
@@ -127,7 +131,7 @@ export async function listExceptions(opts: { status?: string; mineId?: string; d
     id: r.id,
     kind: r.kind,
     status: r.status,
-    summary: summarize(r.kind, r.payload),
+    summary: summarizeException(r.kind, r.payload),
     eventId: r.eventId,
     eventCode: r.eventCode,
     guestName: r.guestName,
@@ -180,64 +184,8 @@ export async function decideException(
   exceptionId: string,
   input: DecideInput,
 ): Promise<DecideResult> {
-  if (!DECIDER_ROLES.has(actor.roleName)) {
-    throw forbidden('Only the Higher Authority can decide exceptions.')
-  }
-  if (input.action === 'reject' && !input.remark?.trim()) {
-    throw badRequest('A remark is required when rejecting.')
-  }
-
   try {
-    return await db.transaction(async (tx) => {
-      const [exc] = await tx
-        .select()
-        .from(schema.exceptions)
-        .where(eq(schema.exceptions.id, exceptionId))
-        .for('update')
-        .limit(1)
-      if (!exc) throw notFound('Exception not found')
-      if (exc.status !== 'pending') throw conflict(`This exception was already ${exc.status}.`)
-
-      const newStatus =
-        input.action === 'approve' ? 'approved' : input.action === 'approve_modified' ? 'approved_modified' : 'rejected'
-      const payload = exc.payload as Record<string, unknown>
-      let applied = 'none'
-
-      if (input.action !== 'reject') {
-        applied = await applyDeferred(tx, exc.kind, payload, input.modified)
-      } else if (exc.kind === 'menu_increase') {
-        // Menu increases are NOT deferred any more — the picks were applied when the
-        // manager chose them, days before this decision (21 Jul 2026). A rejection therefore
-        // has something real to undo: it is "approve zero", rolling every requested pick
-        // back to what was already sanctioned and dropping the dishes chosen above it.
-        applied = await applyDeferred(tx, exc.kind, payload, { extraPicks: 0 })
-      }
-      // Other kinds defer their change until approval, so a rejection has nothing to undo;
-      // the rejected status and remark surface to the requester.
-
-      await tx
-        .update(schema.exceptions)
-        .set({
-          status: newStatus as 'approved',
-          decidedBy: actor.id,
-          decidedAt: new Date().toISOString(),
-          remark: input.remark?.trim() || null,
-        })
-        .where(eq(schema.exceptions.id, exceptionId))
-
-      // FR-6.2: audited, and the audit row is the requester's notification for now.
-      await audit(tx, actor, {
-        entity: 'exceptions',
-        entityId: exceptionId,
-        eventId: exc.eventId,
-        action: 'approval',
-        field: exc.kind,
-        oldValue: 'pending',
-        newValue: `${newStatus}${input.remark?.trim() ? ` — ${input.remark.trim()}` : ''}`,
-      })
-
-      return { id: exceptionId, status: newStatus, applied }
-    })
+    return await db.transaction(async (tx) => settleException(tx, actor, exceptionId, input))
   } catch (err) {
     if (err instanceof ApiError) throw err
     if (pgCode(err) === EXCLUSION_VIOLATION) {
@@ -245,6 +193,85 @@ export async function decideException(
     }
     throw err
   }
+}
+
+/**
+ * Settles ONE exception inside a caller-supplied transaction.
+ *
+ * Split out of `decideException` so a bundle decision (lib/approval-bundles.ts) can settle
+ * every ask on a proposal, and the GM's edits to that proposal, in a single transaction — a
+ * half-approved bundle is not a state anyone should be able to observe.
+ *
+ * `alreadyApplied` is the bundle's answer to a genuine ordering hazard: when the GM decides an
+ * ask BY EDITING the proposal — unticking the two extra starters rather than pressing Reject —
+ * the edit has already set the sanctioned pick count. Re-running the deferred change on top
+ * would roll the same dishes back a second time, against a menu that no longer looks the way
+ * the request described. So the ask is recorded as decided and nothing is re-applied.
+ */
+export async function settleException(
+  tx: Tx,
+  actor: Actor,
+  exceptionId: string,
+  input: DecideInput,
+  opts: { alreadyApplied?: boolean } = {},
+): Promise<DecideResult> {
+  if (!DECIDER_ROLES.has(actor.roleName)) {
+    throw forbidden('Only the Higher Authority can decide exceptions.')
+  }
+  if (input.action === 'reject' && !input.remark?.trim()) {
+    throw badRequest('A remark is required when rejecting.')
+  }
+
+  const [exc] = await tx
+    .select()
+    .from(schema.exceptions)
+    .where(eq(schema.exceptions.id, exceptionId))
+    .for('update')
+    .limit(1)
+  if (!exc) throw notFound('Exception not found')
+  if (exc.status !== 'pending') throw conflict(`This exception was already ${exc.status}.`)
+
+  const newStatus =
+    input.action === 'approve' ? 'approved' : input.action === 'approve_modified' ? 'approved_modified' : 'rejected'
+  const payload = exc.payload as Record<string, unknown>
+  let applied = opts.alreadyApplied ? 'applied by the Authority’s own edit' : 'none'
+
+  if (!opts.alreadyApplied) {
+    if (input.action !== 'reject') {
+      applied = await applyDeferred(tx, exc.kind, payload, input.modified)
+    } else if (exc.kind === 'menu_increase') {
+      // Menu increases are NOT deferred any more — the picks were applied when the
+      // manager chose them, days before this decision (21 Jul 2026). A rejection therefore
+      // has something real to undo: it is "approve zero", rolling every requested pick
+      // back to what was already sanctioned and dropping the dishes chosen above it.
+      applied = await applyDeferred(tx, exc.kind, payload, { extraPicks: 0 })
+    }
+    // Other kinds defer their change until approval, so a rejection has nothing to undo;
+    // the rejected status and remark surface to the requester.
+  }
+
+  await tx
+    .update(schema.exceptions)
+    .set({
+      status: newStatus as 'approved',
+      decidedBy: actor.id,
+      decidedAt: new Date().toISOString(),
+      remark: input.remark?.trim() || null,
+    })
+    .where(eq(schema.exceptions.id, exceptionId))
+
+  // FR-6.2: audited, and the audit row is the requester's notification for now.
+  await audit(tx, actor, {
+    entity: 'exceptions',
+    entityId: exceptionId,
+    eventId: exc.eventId,
+    action: 'approval',
+    field: exc.kind,
+    oldValue: 'pending',
+    newValue: `${newStatus}${input.remark?.trim() ? ` — ${input.remark.trim()}` : ''}`,
+  })
+
+  return { id: exceptionId, status: newStatus, applied }
 }
 
 /**
@@ -279,7 +306,7 @@ export async function raiseCounterChange(
       throw conflict('This approval has not been decided yet — decide it rather than countering it.')
     }
 
-    const originalSummary = summarize(orig.kind, orig.payload as Record<string, unknown>)
+    const originalSummary = summarizeException(orig.kind, orig.payload as Record<string, unknown>)
     const [created] = await tx
       .insert(schema.exceptions)
       .values({

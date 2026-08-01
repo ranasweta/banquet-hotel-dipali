@@ -41,6 +41,12 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 export type ChangePayload = { eventDate?: string; startTime?: string; endTime?: string; venueId?: string; bundleId?: string }
 
+/** A fully-resolved, validated schedule — what `applyMove` books. */
+export type ResolvedSchedule = {
+  eventDate: string; startTime: string; endTime: string
+  venueId: string | null; bundleId: string | null
+}
+
 type SubEventRow = { id: string; eventId: string; eventDate: string; startTime: string; endTime: string; venueId: string | null; bundleId: string | null; name: string }
 
 async function loadSub(exec: Tx | typeof db, subEventId: string): Promise<SubEventRow & { status: string }> {
@@ -115,25 +121,8 @@ export type DecideChangeInput = { action: 'approve' | 'reject'; remark?: string 
 
 /** The Higher Authority decides a change request; approval re-books the venue slot. */
 export async function decideChange(actor: Actor, crId: string, input: DecideChangeInput): Promise<{ status: string }> {
-  if (!DECIDER_ROLES.has(actor.roleName)) throw forbidden('Only the Higher Authority can decide venue/timing changes.')
-  if (input.action === 'reject' && !input.remark?.trim()) throw badRequest('A remark is required when rejecting.')
-
   try {
-    return await db.transaction(async (tx) => {
-      const [cr] = await tx.select().from(schema.changeRequests).where(eq(schema.changeRequests.id, crId)).for('update').limit(1)
-      if (!cr) throw notFound('Change request not found')
-      if (cr.status !== 'pending') throw conflict(`This change request was already ${cr.status}.`)
-
-      if (input.action === 'approve') {
-        await applyMove(tx, actor, cr.subEventId, cr.eventId, cr.payload as ReturnType<typeof resolveNext>)
-      }
-      await tx
-        .update(schema.changeRequests)
-        .set({ status: input.action === 'approve' ? 'approved' : 'rejected', decidedBy: actor.id, decidedAt: new Date().toISOString(), remark: input.remark?.trim() || null })
-        .where(eq(schema.changeRequests.id, crId))
-      await audit(tx, actor, { entity: 'change_requests', entityId: crId, eventId: cr.eventId, action: 'approval', field: 'status', oldValue: 'pending', newValue: input.action === 'approve' ? 'approved' : `rejected — ${input.remark?.trim() ?? ''}` })
-      return { status: input.action === 'approve' ? 'approved' : 'rejected' }
-    })
+    return await db.transaction(async (tx) => settleChangeRequest(tx, actor, crId, input))
   } catch (err) {
     if (err instanceof ApiError) throw err
     if (pgCode(err) === EXCLUSION_VIOLATION) {
@@ -143,8 +132,50 @@ export async function decideChange(actor: Actor, crId: string, input: DecideChan
   }
 }
 
-/** Re-books the venue slot for a moved sub-event (delete old bookings, update, re-insert). */
-async function applyMove(tx: Tx, actor: Actor, subEventId: string, eventId: string, next: ReturnType<typeof resolveNext>): Promise<void> {
+/**
+ * Settles ONE change request inside a caller-supplied transaction — the composable half of
+ * `decideChange`, so the bundle screen can settle a venue move alongside every other ask on
+ * the same proposal in one commit (lib/approval-bundles.ts).
+ *
+ * `alreadyApplied` covers the case where the Authority answered the request by editing the
+ * function's schedule himself rather than pressing Approve; moving it again to the payload's
+ * dates would undo his own edit.
+ */
+export async function settleChangeRequest(
+  tx: Tx,
+  actor: Actor,
+  crId: string,
+  input: DecideChangeInput,
+  opts: { alreadyApplied?: boolean } = {},
+): Promise<{ status: string }> {
+  if (!DECIDER_ROLES.has(actor.roleName)) throw forbidden('Only the Higher Authority can decide venue/timing changes.')
+  if (input.action === 'reject' && !input.remark?.trim()) throw badRequest('A remark is required when rejecting.')
+
+  const [cr] = await tx.select().from(schema.changeRequests).where(eq(schema.changeRequests.id, crId)).for('update').limit(1)
+  if (!cr) throw notFound('Change request not found')
+  if (cr.status !== 'pending') throw conflict(`This change request was already ${cr.status}.`)
+
+  if (input.action === 'approve' && !opts.alreadyApplied) {
+    await applyMove(tx, actor, cr.subEventId, cr.eventId, cr.payload as ResolvedSchedule)
+  }
+  const status = input.action === 'approve' ? 'approved' : 'rejected'
+  await tx
+    .update(schema.changeRequests)
+    .set({ status, decidedBy: actor.id, decidedAt: new Date().toISOString(), remark: input.remark?.trim() || null })
+    .where(eq(schema.changeRequests.id, crId))
+  await audit(tx, actor, { entity: 'change_requests', entityId: crId, eventId: cr.eventId, action: 'approval', field: 'status', oldValue: 'pending', newValue: status === 'approved' ? 'approved' : `rejected — ${input.remark?.trim() ?? ''}` })
+  return { status }
+}
+
+/**
+ * Re-books the venue slot for a moved sub-event (delete old bookings, update, re-insert).
+ *
+ * Exported so the Higher Authority's proposal editor (lib/gm-authority.ts) moves a function
+ * through this exact path. A second copy of the venue-hold logic is the surest way to end up
+ * with a calendar that disagrees with the bookings — and the GiST exclusion still decides
+ * every clash, override or no override.
+ */
+export async function applyMove(tx: Tx, actor: Actor, subEventId: string, eventId: string, next: ResolvedSchedule): Promise<void> {
   const before = await loadSub(tx, subEventId)
   await tx.delete(schema.venueBookings).where(eq(schema.venueBookings.subEventId, subEventId))
   await tx

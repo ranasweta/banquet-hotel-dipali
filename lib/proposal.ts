@@ -2,7 +2,7 @@ import 'server-only'
 import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { notFound } from '@/lib/api'
-import { effectiveDiscountPaise } from '@/lib/discounts'
+import { effectiveDiscountPaise, listDiscounts, type DiscountRow } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
 
 /**
@@ -44,6 +44,8 @@ export type ProposalSegment = {
 }
 
 export type ProposalMenu = {
+  /** Addresses the tier when the document is edited rather than printed (approval bundles). */
+  tierId: string
   tierName: string
   baseRatePaise: number
   surchargePaise: number
@@ -53,6 +55,15 @@ export type ProposalMenu = {
 }
 
 export type ProposalFunction = {
+  /**
+   * Row identity. The printed template never uses these, but the Higher Authority's approval
+   * screen edits this very document (lib/approval-bundles.ts) and has to say WHICH function,
+   * venue or menu it is changing. Carried here rather than assembled by a near-duplicate
+   * query, so the figures the GM edits are the figures the guest was shown.
+   */
+  id: string
+  venueId: string | null
+  bundleId: string | null
   name: string
   date: string
   startTime: string
@@ -72,6 +83,8 @@ export type ProposalFunction = {
 }
 
 export type ProposalRoomLine = {
+  id: string
+  unitId: string | null
   roomType: string
   count: number
   checkIn: string
@@ -114,6 +127,12 @@ export type ProposalDocument = {
   contacts: ProposalContact[]
   functions: ProposalFunction[]
   lodges: ProposalLodge[]
+  /**
+   * The discount ledger behind `totals.discountPaise`. The printed template shows only the
+   * single netted figure; the approval screen has to show the GM each row he can revise or
+   * remove, including one still pending his own decision.
+   */
+  discounts: DiscountRow[]
   /** Maintenance entries and Auditor adjustments. Empty until they exist in the app. */
   extras: ProposalAddon[]
   payments: ProposalPayment[]
@@ -184,7 +203,8 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
            (SELECT array_agg(mv.name ORDER BY mv.name)
               FROM venue_bundle_members bm JOIN venues mv ON mv.id = bm.venue_id
              WHERE bm.bundle_id = se.bundle_id) AS "bundleMembers",
-           m.id AS "menuId", m.tier_name AS "tierName",
+           se.venue_id AS "venueId", se.bundle_id AS "bundleId",
+           m.id AS "menuId", m.tier_id AS "tierId", m.tier_name AS "tierName",
            m.base_rate_paise AS "baseRatePaise", m.surcharge_paise AS "surchargePaise",
            COALESCE((SELECT sum(c.charge_paise) FROM chef_requests c
                       WHERE c.sub_event_id = se.id AND c.status = 'priced'), 0)::bigint AS "chefPaise"
@@ -246,6 +266,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
 
     const menu: ProposalMenu | null = menuId
       ? {
+          tierId: s.tierId as string,
           tierName: s.tierName as string,
           baseRatePaise: num(s.baseRatePaise),
           surchargePaise: num(s.surchargePaise),
@@ -273,6 +294,9 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       (venueRatePaise ?? 0) + foodAmountPaise + addons.reduce((n, a) => n + a.amountPaise, 0)
 
     return {
+      id: s.id as string,
+      venueId: (s.venueId as string) ?? null,
+      bundleId: (s.bundleId as string) ?? null,
       name: s.name as string,
       date: s.date as string,
       startTime: s.startTime as string,
@@ -292,7 +316,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
 
   // ── Rooms, grouped by lodge ──────────────────────────────────────────────────
   const roomRows = (await db.execute(sql`
-    SELECT COALESCE(u.name, 'Lodging') AS lodge, rr.room_type AS "roomType",
+    SELECT rr.id, rr.unit_id AS "unitId", COALESCE(u.name, 'Lodging') AS lodge, rr.room_type AS "roomType",
            rr.count::int AS count, rr.check_in::text AS "checkIn", rr.check_out::text AS "checkOut",
            (rr.check_out - rr.check_in)::int AS nights,
            COALESCE((SELECT min(r.rack_rate_paise) FROM rooms r
@@ -323,6 +347,8 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       lodges.push(lodge)
     }
     lodge.lines.push({
+      id: r.id as string,
+      unitId: (r.unitId as string) ?? null,
       roomType: r.roomType as string,
       count,
       checkIn: r.checkIn as string,
@@ -346,7 +372,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   const adjust = (await db.execute(sql`
     SELECT l.description, l.qty, l.rate_paise AS "ratePaise", l.amount_paise AS "amountPaise"
     FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
-    WHERE i.event_id = ${eventId} AND l.section = 'adjustment'
+    WHERE i.event_id = ${eventId} AND i.superseded_at IS NULL AND l.section = 'adjustment'
     ORDER BY l.description
   `)) as unknown as Row[]
   const extras: ProposalAddon[] = [...maint, ...adjust].map((m) => ({
@@ -369,11 +395,12 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
 
   const [inv] = (await db.execute(sql`
     SELECT invoice_no AS "documentNo", (finalised_at IS NOT NULL) AS finalised
-    FROM invoices WHERE event_id = ${eventId}
+    FROM invoices WHERE event_id = ${eventId} AND superseded_at IS NULL
   `)) as unknown as Row[]
 
   const proposalPaise = functions.reduce((n, f) => n + f.subtotalPaise, 0)
   const extrasPaise = extras.reduce((n, e) => n + e.amountPaise, 0)
+  const discounts = await listDiscounts(eventId)
   const discountPaise = await effectiveDiscountPaise(eventId)
   const subtotalPaise = proposalPaise + roomsPaise + extrasPaise - discountPaise
   const totalPaise = subtotalPaise + roomsTaxPaise
@@ -400,6 +427,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     contacts,
     functions,
     lodges,
+    discounts,
     extras,
     payments,
     totals: {
