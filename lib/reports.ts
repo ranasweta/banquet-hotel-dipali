@@ -36,19 +36,19 @@ export async function revenueReport() {
     SELECT e.event_type AS "eventType", count(*)::int AS events,
            COALESCE(sum(i.net_paise), 0)::bigint AS "netPaise"
     FROM events e JOIN invoices i ON i.event_id = e.id
-    WHERE i.finalised_at IS NOT NULL
+    WHERE i.finalised_at IS NOT NULL AND i.superseded_at IS NULL
     GROUP BY e.event_type ORDER BY "netPaise" DESC
   `)) as unknown as { eventType: string; events: number; netPaise: number }[]
   const byProperty = (await db.execute(sql`
     SELECT p.name AS "propertyName", COALESCE(sum(se.venue_rate_paise), 0)::bigint AS "venueRevenuePaise"
     FROM sub_events se JOIN venues v ON v.id = se.venue_id JOIN properties p ON p.id = v.property_id
-    WHERE se.event_id IN (SELECT event_id FROM invoices WHERE finalised_at IS NOT NULL)
+    WHERE se.event_id IN (SELECT event_id FROM invoices WHERE finalised_at IS NOT NULL AND superseded_at IS NULL)
     GROUP BY p.name ORDER BY "venueRevenuePaise" DESC
   `)) as unknown as { propertyName: string; venueRevenuePaise: number }[]
   const [tax] = (await db.execute(sql`
     SELECT COALESCE(sum(gross_paise),0)::bigint AS "grossPaise", COALESCE(sum(discount_paise),0)::bigint AS "discountPaise",
            COALESCE(sum(tax_paise),0)::bigint AS "taxPaise", COALESCE(sum(net_paise),0)::bigint AS "netPaise"
-    FROM invoices WHERE finalised_at IS NOT NULL
+    FROM invoices WHERE finalised_at IS NOT NULL AND superseded_at IS NULL
   `)) as unknown as { grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number }[]
   return { byEventType, byProperty, taxSummary: tax }
 }
@@ -94,7 +94,7 @@ export async function outstandingReport() {
            i.invoice_no AS "invoiceNo",
            GREATEST(0, (CURRENT_DATE - i.finalised_at::date))::int AS "ageDays"
     FROM invoices i JOIN events e ON e.id = i.event_id
-    WHERE i.finalised_at IS NOT NULL AND i.balance_paise > 0
+    WHERE i.finalised_at IS NOT NULL AND i.superseded_at IS NULL AND i.balance_paise > 0
     ORDER BY "ageDays" DESC, "balancePaise" DESC
   `)) as unknown as { eventId: string; code: string; guestName: string; netPaise: number; paidPaise: number; balancePaise: number; invoiceNo: string; ageDays: number }[]
   const totalOutstanding = rows.reduce((s, r) => s + Number(r.balancePaise), 0)

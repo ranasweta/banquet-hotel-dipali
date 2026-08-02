@@ -4,6 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { notFound, ok, route } from '@/lib/api'
 import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal, roomEstimatePaise } from '@/lib/pricing'
+import { effectiveDiscountPaise } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
 
 /**
@@ -32,14 +33,15 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
     ratePaise: pricing.rates.get(s.id) ?? null,
   }))
 
+  const grossBase = pricing.totalPaise + extras.foodPaise + extras.addonPaise + roomEst.roomsPaise + roomEst.roomsTaxPaise
+  const discountPaise = await effectiveDiscountPaise(id)
+
   return ok({
     totalPaise: pricing.totalPaise,
-    // The 25% is measured on everything the guest will pay, rooms included
-    // (client, 20 Jul 2026) — see SEED_ASSUMPTIONS §F10.
-    advanceRequiredPaise: percentOfPaise(
-      pricing.totalPaise + extras.foodPaise + extras.addonPaise + roomEst.roomsPaise + roomEst.roomsTaxPaise,
-      25,
-    ),
+    discountPaise,
+    // The 25% is measured on everything the guest will pay, rooms included, LESS any effective
+    // discount (client, 25 Jul 2026) — see SEED_ASSUMPTIONS §F10.
+    advanceRequiredPaise: percentOfPaise(Math.max(0, grossBase - discountPaise), 25),
     lines,
     missing: pricing.missing,
   })

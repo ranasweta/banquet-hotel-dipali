@@ -82,14 +82,28 @@ clarifying questions arriving before implementation rather than after mistakes.
      **percentage of a head** (menu / venue / room / overall) recomputed live from
      the current bill; over the cap → Higher Authority approval. Per-room caps
      (BR-D1) are retired now that rooms are booked in bulk.
+     **The cap does not bind the Authority himself** (amended 1 Aug 2026): a discount he
+     enters from the approvals screen is written with no `exception_id` — which is what
+     `effectiveDiscountPaise` reads as in force — and may be a flat rupee amount. The cap's
+     job is to route a big discount *to* him; it has nothing to do when he is the one giving
+     it. The remark is still mandatory.
    Each runs in ONE db transaction; rely on the PK/exclusion constraints to
    win races, and translate constraint violations into friendly errors.
 4. **Snapshots, not references**: menus copy tier name, price, surcharge, and
    items onto the sub-event at save (BR-M1/M5). Bills read snapshots only.
 5. **Every write is audited**: wrap mutations in a helper that appends to
    `audit_log` (entity, field, old, new, user, role). No exceptions.
-6. **Locked means locked**: rely on the `forbid_locked_event_write` trigger,
-   but also block in the service layer for a clean 409 message.
+6. **Locked means locked — except for the Higher Authority** (client's lead, 1 Aug 2026).
+   Rely on the `forbid_locked_event_write` trigger, and also block in the service layer for a
+   clean 409 message. The single exception is `lib/gm-authority.ts`: the Authority (and Auditor)
+   may edit a booking in ANY status. A trigger cannot see the actor, so that module announces
+   itself with a transaction-local GUC — `set_config('app.gm_override', 'on', true)`, migration
+   0025 — which both lock guards check. Nothing else sets it; `SET LOCAL` dies with the
+   transaction, so it can never leak onto a pooled connection. A reason is mandatory and is
+   audited, and editing a **billed** booking supersedes its document and issues a new numbered
+   version rather than mutating the one the guest holds (`reissueInvoice`).
+   The override covers the *workflow*, never the building: the venue GiST exclusion, the lodge
+   inventory cap and the append-only `audit_log` still bind the Authority like everyone else.
 7. **Aadhaar images** go to object storage (or `storage/` locally in dev),
    encrypted at rest, referenced by `guest_documents.file_key`. Never log
    Aadhaar data; never return file bytes without a permission check.
@@ -136,6 +150,10 @@ clarifying questions arriving before implementation rather than after mistakes.
   carryover + in-progress states — locked-in deals only, no enquiries, per amended
   FR-2.5), 5-step booking wizard, tier dish picker with per-category any-N counters
   (all-included categories render read-only), approvals queue, lock checklist.
+- The approvals queue is **one row per proposal** (1 Aug 2026), opening onto that booking's
+  asks grouped by section and, below them, the whole proposal as an editable form. Requested
+  items are marked in **violet** — always with the word "Requested" beside them, never colour
+  alone, since a decision hangs on seeing them.
 - Inline availability feedback on every sub-event form the moment
   date + venue + time are set.
 

@@ -2,6 +2,7 @@ import 'server-only'
 import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { listExceptions, DECIDER_ROLES as EXCEPTION_DECIDERS } from '@/lib/approvals'
+import { listBundles } from '@/lib/approval-bundles'
 import { listChangeRequests, DECIDER_ROLES as CHANGE_DECIDERS } from '@/lib/change-requests'
 import { PRICER_ROLES as DELICACY_PRICERS } from '@/lib/chef'
 import { pendingReminders, listStaleEnquiries } from '@/lib/reminders'
@@ -35,8 +36,19 @@ export async function notificationsFor(
   const items: Notification[] = []
 
   if (EXCEPTION_DECIDERS.has(user.roleName)) {
-    for (const x of await listExceptions({ status: 'pending' })) {
-      items.push({ id: `exc:${x.id}`, kind: 'approval', message: `Approval — ${x.eventCode}: ${x.summary}`, href: '/approvals', at: x.raisedAt })
+    // ONE notice per proposal, not per request (client's lead, 1 Aug 2026). A wedding raising a
+    // menu increase, a 35+ room ask and an over-cap discount is one thing for the GM to sit
+    // down with, and telling him about it three times is the drip-feed he objected to. Change
+    // requests are inside the bundle now, so they are deliberately not listed separately below.
+    for (const b of await listBundles()) {
+      const sections = b.bySection.map((s) => `${s.n} ${s.section}`).join(', ')
+      items.push({
+        id: `bundle:${b.eventId}:${b.pendingCount}`,
+        kind: 'approval',
+        message: `Approval — ${b.eventCode} ${b.guestName}: ${b.pendingCount} item(s) awaiting you (${sections})`,
+        href: `/approvals/${b.eventId}`,
+        at: b.oldestRaisedAt,
+      })
     }
   } else {
     // The raiser hears back about their own request, and about nothing else.
@@ -52,11 +64,37 @@ export async function notificationsFor(
     }
   }
 
-  if (CHANGE_DECIDERS.has(user.roleName)) {
-    for (const c of await listChangeRequests({ status: 'pending' })) {
-      items.push({ id: `cr:${c.id}`, kind: 'change_request', message: `Change request — ${c.eventCode}: ${c.summary}`, href: '/change-requests', at: c.requestedAt })
-    }
-  } else {
+  // The Authority has revised a booking this user owns (client's lead, 1 Aug 2026). He edits
+  // proposals directly from the approvals screen rather than sending instructions back, so the
+  // only way the Booking Manager learns his guest's menu changed is this notice. Derived from
+  // the ONE summary row each save writes (lib/gm-authority.ts) — the field-level rows beside it
+  // would turn a single save into six notifications.
+  const revisions = (await db.execute(sql`
+    SELECT a.seq, a.new_value AS "summary", a.field, a.at, a.event_id AS "eventId",
+           e.code AS "eventCode", u.full_name AS "byName"
+      FROM audit_log a
+      JOIN events e ON e.id = a.event_id
+      JOIN users u ON u.id = a.user_id
+     WHERE a.field IN ('authority_edit', 'authority_override')
+       AND e.created_by = ${user.id}
+       AND a.user_id <> ${user.id}
+     ORDER BY a.at DESC
+     LIMIT 50
+  `)) as unknown as { seq: string; summary: string | null; field: string; at: string; eventId: string; eventCode: string; byName: string }[]
+  for (const r of revisions) {
+    items.push({
+      id: `gm-edit:${r.seq}`,
+      kind: 'revision',
+      message:
+        `${r.byName} revised ${r.eventCode}` +
+        (r.field === 'authority_override' ? ' (locked booking)' : '') +
+        (r.summary ? `: ${r.summary}` : ''),
+      href: `/bookings/${r.eventId}`,
+      at: r.at,
+    })
+  }
+
+  if (!CHANGE_DECIDERS.has(user.roleName)) {
     // The raiser hears the outcome, the same way they do for an exception or a delicacy.
     // Without this branch a Booking Manager whose venue move was refused was never told.
     for (const c of await listChangeRequests({ mineId: user.id })) {

@@ -1,5 +1,5 @@
 import 'server-only'
-import { asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
@@ -34,6 +34,15 @@ const GST_BP: Record<string, number> = { venue: 0, food: 0, rooms: 500, maintena
 const INVOICE_PREFIX = 'D2-2026-'
 
 const taxOf = (amountPaise: number, bp: number) => Math.round((amountPaise * bp) / 10000)
+
+/**
+ * The event's LIVE invoice — the one version not yet superseded (migration 0025). Every read
+ * goes through this: an event can now hold a chain of versions, and a query that matches on
+ * event_id alone would pick an arbitrary one and, in the revenue reports, count the same
+ * booking twice. A unique partial index guarantees there is at most one.
+ */
+const liveInvoice = (eventId: string) =>
+  and(eq(schema.invoices.eventId, eventId), isNull(schema.invoices.supersededAt))!
 
 export type LineSpec = {
   section: string; description: string; sacHsn?: string | null; qty: number
@@ -201,6 +210,12 @@ export async function draftInvoice(tx: Tx, actor: Actor, eventId: string): Promi
 
 export type InvoiceView = {
   id: string; invoiceNo: string | null; finalised: boolean
+  /**
+   * Revision chain (migration 0025). `version` is 1 for every document not re-issued;
+   * `supersedesNo` names the one this replaced, so staff looking at two numbers against one
+   * booking can see which is live and what it grew out of.
+   */
+  version: number; supersedesNo: string | null
   grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number; advancesPaise: number; balancePaise: number
   payments: PaymentTrailRow[]
   tncSnapshot: string
@@ -208,11 +223,15 @@ export type InvoiceView = {
 }
 
 export async function getInvoice(eventId: string): Promise<InvoiceView | null> {
-  const [inv] = await db.select().from(schema.invoices).where(eq(schema.invoices.eventId, eventId)).limit(1)
+  const [inv] = await db.select().from(schema.invoices).where(liveInvoice(eventId)).limit(1)
   if (!inv) return null
   const lines = await db.select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, inv.id)).orderBy(asc(schema.invoiceLines.section), asc(schema.invoiceLines.description))
+  const [prior] = inv.supersedesId
+    ? await db.select({ invoiceNo: schema.invoices.invoiceNo }).from(schema.invoices).where(eq(schema.invoices.id, inv.supersedesId)).limit(1)
+    : []
   return {
     id: inv.id, invoiceNo: inv.invoiceNo, finalised: Boolean(inv.finalisedAt),
+    version: inv.version, supersedesNo: prior?.invoiceNo ?? null,
     grossPaise: inv.grossPaise, discountPaise: inv.discountPaise, taxPaise: inv.taxPaise, netPaise: inv.netPaise, advancesPaise: inv.advancesPaise, balancePaise: inv.balancePaise,
     payments: await paymentTrail(db, eventId),
     tncSnapshot: inv.tncSnapshot,
@@ -226,7 +245,7 @@ export type AdjustmentInput = { description: string; amountPaise: number; gstRat
 export async function setAdjustments(actor: Actor, eventId: string, adjustments: AdjustmentInput[]): Promise<void> {
   if (actor.roleName !== 'auditor') throw forbidden('Only the Auditor may adjust the invoice.')
   await db.transaction(async (tx) => {
-    const [inv] = await tx.select().from(schema.invoices).where(eq(schema.invoices.eventId, eventId)).for('update').limit(1)
+    const [inv] = await tx.select().from(schema.invoices).where(liveInvoice(eventId)).for('update').limit(1)
     if (!inv) throw notFound('No invoice drafted yet — lock the event first.')
     if (inv.finalisedAt) throw conflict('This invoice is finalised and can no longer be adjusted.')
     for (const a of adjustments) if (!a.remark.trim()) throw badRequest('Every adjustment needs a remark (FR-7.4).')
@@ -243,22 +262,122 @@ export async function setAdjustments(actor: Actor, eventId: string, adjustments:
   })
 }
 
+/**
+ * The next document number. An atomic gapless-per-commit counter in `settings`, created on
+ * first use; the caller's row lock on the invoice serialises concurrent finalisations.
+ */
+async function nextInvoiceNo(tx: Tx): Promise<string> {
+  const [{ value }] = (await tx.execute(sql`
+    INSERT INTO settings (key, value) VALUES ('invoice_next_no', '1')
+    ON CONFLICT (key) DO UPDATE SET value = (settings.value::int + 1)::text, updated_at = now()
+    RETURNING value
+  `)) as unknown as { value: string }[]
+  return `${INVOICE_PREFIX}${String(Number(value)).padStart(4, '0')}`
+}
+
+/**
+ * Brings the invoice back into line after the Higher Authority has edited a locked or billed
+ * booking (migration 0025). Called from inside the GM's own transaction, so the bill can never
+ * disagree with the booking it bills — the edit and the re-issue commit together or not at all.
+ *
+ * Which of the two things it does depends on whether a number has left the building:
+ *
+ *   locked, not finalised   the draft is recomputed IN PLACE. Nobody has been shown a figure,
+ *                           so there is nothing to supersede and no number to burn.
+ *   finalised (billed)      the guest holds a document quoting a total that is now wrong.
+ *                           That version is stamped superseded and a NEW version is issued with
+ *                           its own number, finalised on the spot. The old row stays exactly as
+ *                           it was — a superseded document is history, not a mistake to erase.
+ *
+ * Returns the new number when one was issued, so the caller can put it in front of the GM.
+ */
+export async function reissueInvoice(
+  tx: Tx,
+  actor: Actor,
+  eventId: string,
+  reason: string,
+): Promise<{ reissued: boolean; invoiceNo: string | null }> {
+  const [inv] = await tx.select().from(schema.invoices).where(liveInvoice(eventId)).for('update').limit(1)
+  // No invoice at all — the event was never locked, so its numbers are still provisional.
+  if (!inv) return { reissued: false, invoiceNo: null }
+
+  const specs = await computeBillLines(tx, eventId)
+
+  if (!inv.finalisedAt) {
+    await tx.delete(schema.invoiceLines).where(sql`invoice_id = ${inv.id} AND section <> 'adjustment'`)
+    if (specs.length > 0) {
+      await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null })))
+    }
+    await recomputeTotals(tx, inv.id, eventId)
+    await audit(tx, actor, { entity: 'invoices', entityId: inv.id, eventId, action: 'update', field: 'redraft', newValue: reason })
+    return { reissued: false, invoiceNo: inv.invoiceNo }
+  }
+
+  // The Auditor's adjustment lines are their own judgement, not derived from the booking, so
+  // they carry forward onto the new version rather than being silently dropped by the recompute.
+  const adjustments = await tx
+    .select()
+    .from(schema.invoiceLines)
+    .where(sql`invoice_id = ${inv.id} AND section = 'adjustment'`)
+
+  const gross = specs.reduce((s, l) => s + l.amountPaise, 0) + adjustments.reduce((s, l) => s + l.amountPaise, 0)
+  const tax = specs.reduce((s, l) => s + l.taxPaise, 0) + adjustments.reduce((s, l) => s + l.taxPaise, 0)
+  const discount = await effectiveDiscountPaise(eventId, tx)
+  const advances = await advancesPaise(tx, eventId)
+  const net = gross - discount + tax
+  const now = new Date().toISOString()
+
+  await tx.update(schema.invoices).set({ supersededAt: now }).where(eq(schema.invoices.id, inv.id))
+
+  const invoiceNo = await nextInvoiceNo(tx)
+  const [next] = await tx
+    .insert(schema.invoices)
+    .values({
+      eventId,
+      invoiceNo,
+      version: inv.version + 1,
+      supersedesId: inv.id,
+      reissueReason: reason,
+      grossPaise: gross,
+      discountPaise: discount,
+      taxPaise: tax,
+      netPaise: net,
+      advancesPaise: advances,
+      balancePaise: net - advances,
+      // The terms the guest agreed to travel with the booking, not with the revision.
+      tncSnapshot: inv.tncSnapshot,
+      finalisedAt: now,
+      finalisedBy: actor.id,
+    })
+    .returning({ id: schema.invoices.id })
+
+  const carried = adjustments.map((a) => ({ invoiceId: next!.id, section: a.section, description: a.description, sacHsn: a.sacHsn, qty: a.qty, ratePaise: a.ratePaise, gstRateBp: a.gstRateBp, amountPaise: a.amountPaise, taxPaise: a.taxPaise, functionLabel: a.functionLabel }))
+  const fresh = specs.map((l) => ({ invoiceId: next!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null }))
+  if (fresh.length + carried.length > 0) {
+    await tx.insert(schema.invoiceLines).values([...fresh, ...carried])
+  }
+
+  await audit(tx, actor, {
+    entity: 'invoices',
+    entityId: next!.id,
+    eventId,
+    action: 'update',
+    field: 'reissued',
+    oldValue: `${inv.invoiceNo} (v${inv.version}, net ${inv.netPaise})`,
+    newValue: `${invoiceNo} (v${inv.version + 1}, net ${net}) — ${reason}`,
+  })
+  return { reissued: true, invoiceNo }
+}
+
 /** Finalises: assigns the next invoice number and moves the event to Billed (FR-7.4). */
 export async function finaliseInvoice(actor: Actor, eventId: string): Promise<{ invoiceNo: string }> {
   if (actor.roleName !== 'auditor') throw forbidden('Only the Auditor may finalise the invoice.')
   return db.transaction(async (tx) => {
-    const [inv] = await tx.select().from(schema.invoices).where(eq(schema.invoices.eventId, eventId)).for('update').limit(1)
+    const [inv] = await tx.select().from(schema.invoices).where(liveInvoice(eventId)).for('update').limit(1)
     if (!inv) throw notFound('No invoice drafted yet.')
     if (inv.finalisedAt) throw conflict(`This invoice is already finalised (${inv.invoiceNo}).`)
 
-    // Atomic gapless-per-commit counter in settings (created on first use); the row lock
-    // serialises concurrent finalisations.
-    const [{ value }] = (await tx.execute(sql`
-      INSERT INTO settings (key, value) VALUES ('invoice_next_no', '1')
-      ON CONFLICT (key) DO UPDATE SET value = (settings.value::int + 1)::text, updated_at = now()
-      RETURNING value
-    `)) as unknown as { value: string }[]
-    const invoiceNo = `${INVOICE_PREFIX}${String(Number(value)).padStart(4, '0')}`
+    const invoiceNo = await nextInvoiceNo(tx)
 
     await tx.update(schema.invoices).set({ invoiceNo, finalisedAt: new Date().toISOString(), finalisedBy: actor.id }).where(eq(schema.invoices.id, inv.id))
     await transitionEvent(tx, eventId, 'billed', actor)
@@ -298,6 +417,9 @@ export async function proformaData(eventId: string) {
     id: '',
     invoiceNo: null,
     finalised: false,
+    // A proforma is not a document that has been issued, so it can never be a revision of one.
+    version: 1,
+    supersedesNo: null,
     grossPaise: gross,
     discountPaise: discount,
     taxPaise: tax,

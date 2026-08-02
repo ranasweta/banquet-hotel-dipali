@@ -640,6 +640,12 @@ export const invoices = pgTable("invoices", {
 	draftedAt: timestamp("drafted_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	finalisedAt: timestamp("finalised_at", { withTimezone: true, mode: 'string' }),
 	finalisedBy: uuid("finalised_by"),
+	// Re-issue chain (migration 0025). An event holds one LIVE invoice — superseded_at IS NULL
+	// — plus every version it has superseded. Only the Authority's post-billing edit adds one.
+	version: integer().default(1).notNull(),
+	supersededAt: timestamp("superseded_at", { withTimezone: true, mode: 'string' }),
+	supersedesId: uuid("supersedes_id"),
+	reissueReason: text("reissue_reason"),
 }, (table) => [
 	foreignKey({
 			columns: [table.eventId],
@@ -651,7 +657,7 @@ export const invoices = pgTable("invoices", {
 			foreignColumns: [users.id],
 			name: "invoices_finalised_by_fkey"
 		}),
-	unique("invoices_event_id_key").on(table.eventId),
+	unique("invoices_event_version_key").on(table.eventId, table.version),
 	unique("invoices_invoice_no_key").on(table.invoiceNo),
 ]);
 

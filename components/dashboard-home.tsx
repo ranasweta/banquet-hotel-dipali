@@ -116,9 +116,12 @@ export function DashboardHome({
               <EmptyState text="Nothing waiting on a decision." />
             ) : (
               <ul className="space-y-2 text-sm">
+                {/* Both kinds land on the booking's approval bundle, where they are actually
+                    decided now (1 Aug 2026). A role that cannot decide is bounced to the
+                    queue by the page guard, which is the same place the old links went. */}
                 {approvals.exceptions.map((x) => (
                   <li key={x.id}>
-                    <Link href="/approvals" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
+                    <Link href={`/approvals/${x.eventId}`} className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="line-clamp-1 font-medium">{x.summary}</span>
                       <span className="text-xs text-muted-foreground">{x.eventCode} · {titleCase(x.guestName)} · {x.raisedByName}</span>
                     </Link>
@@ -126,7 +129,7 @@ export function DashboardHome({
                 ))}
                 {approvals.changeRequests.map((cr) => (
                   <li key={cr.id}>
-                    <Link href="/change-requests" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
+                    <Link href={`/approvals/${cr.eventId}`} className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
                       <span className="line-clamp-1 font-medium">Change: {cr.summary}</span>
                       <span className="text-xs text-muted-foreground">{cr.eventCode} · {titleCase(cr.guestName)} · {cr.requestedByName}</span>
                     </Link>

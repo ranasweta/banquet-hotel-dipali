@@ -38,8 +38,11 @@ export function canAuthorityEditConfirmed(status: string, actor: Actor): boolean
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
-/** Recompute proposal_total_paise + first/last dates from the event's current sub-events. */
-async function recomputeProposal(tx: Tx, eventId: string, eventType: string): Promise<void> {
+/**
+ * Recompute proposal_total_paise + first/last dates from the event's current sub-events.
+ * Exported for lib/gm-authority.ts, whose edits move exactly the same figures.
+ */
+export async function recomputeProposal(tx: Tx, eventId: string, eventType: string): Promise<void> {
   const subs = await loadSubEventsForPricing(eventId, tx)
   const pricing = await priceProposal(eventType, subs, tx)
   const extras = await foodAndAddonTotal(eventId, tx)

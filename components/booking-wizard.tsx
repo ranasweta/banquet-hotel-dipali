@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/select'
 import { AadhaarCapture } from '@/components/aadhaar-capture'
 import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-picker'
+import { EventDiscounts } from '@/components/event-discounts'
 import { cn } from '@/lib/utils'
 
 type EventType = { code: string; displayName: string; contactNumbers: number; isWedding: boolean }
@@ -49,6 +50,7 @@ type SubEvent = {
 type RoomReq = { unit_id: string; room_type: string; count: number; check_in: string; check_out: string }
 type Quote = {
   totalPaise: number
+  discountPaise: number
   advanceRequiredPaise: number
   lines: { subEventId: string; name: string; ratePaise: number | null }[]
   missing: { subEventId: string; name: string }[]
@@ -502,7 +504,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
           <RoomEditor
             rooms={rooms}
             setRooms={setRooms}
-            roomTypes={options.roomTypes}
+            roomRates={options.roomRates ?? []}
             units={options.lodgingUnits ?? []}
             eventId={eventId}
             fromDate={fromDate}
@@ -568,6 +570,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
             toast.success('Changes saved')
             router.push(`/bookings/${eventId}`)
           }}
+          onDiscountChanged={() => loadQuote(eventId)}
         />
       )}
     </div>
@@ -948,7 +951,7 @@ function FunctionsEditor({
 function RoomEditor({
   rooms,
   setRooms,
-  roomTypes,
+  roomRates,
   units,
   eventId,
   fromDate,
@@ -956,7 +959,8 @@ function RoomEditor({
 }: {
   rooms: RoomReq[]
   setRooms: (r: RoomReq[]) => void
-  roomTypes: string[]
+  /** Per-lodge inventory: which categories each lodge actually holds (and at what rate). */
+  roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
   units: { id: string; name: string }[]
   eventId: string | null
   fromDate: string
@@ -1012,13 +1016,32 @@ function RoomEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature, eventId])
 
-  const add = () =>
+  /**
+   * The categories a given lodge actually holds. Residency has deluxe and suite and no
+   * dormitory; Regency has semi-deluxe where Palace does not. Offering one flat list let a
+   * manager book "Residency dormitory", which does not exist — the save then failed on the
+   * inventory cap with a message about rooms being unavailable, when the truth is there is
+   * no such room to be unavailable.
+   */
+  const typesFor = (unitId: string) =>
+    [...new Set(roomRates.filter((r) => r.unitId === unitId).map((r) => r.roomType))].sort()
+
+  const add = () => {
+    const unitId = units[0]?.id ?? ''
     setRooms([
       ...rooms,
       // Pre-filled with the event's own dates: rooms almost always run the length of the
       // booking, and it is one fewer thing to get wrong.
-      { unit_id: units[0]?.id ?? '', room_type: roomTypes[0] ?? 'deluxe', count: 1, check_in: fromDate, check_out: latestCheckOut },
+      { unit_id: unitId, room_type: typesFor(unitId)[0] ?? '', count: 1, check_in: fromDate, check_out: latestCheckOut },
     ])
+  }
+
+  /** Changing lodge re-points the category, since the old one may not exist at the new lodge. */
+  const changeUnit = (i: number, unitId: string) => {
+    const types = typesFor(unitId)
+    const cur = rooms[i]!.room_type
+    update(i, { unit_id: unitId, room_type: types.includes(cur) ? cur : (types[0] ?? '') })
+  }
   const update = (i: number, patch: Partial<RoomReq>) => setRooms(rooms.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const remove = (i: number) => setRooms(rooms.filter((_, j) => j !== i))
 
@@ -1031,13 +1054,14 @@ function RoomEditor({
         return (
           <div key={i} className="space-y-1">
             <div className="grid gap-2 sm:grid-cols-6">
-              <Select items={units.map((u) => ({ value: u.id, label: u.name }))} value={r.unit_id} onValueChange={(v) => update(i, { unit_id: v ?? '' })}>
+              <Select items={units.map((u) => ({ value: u.id, label: u.name }))} value={r.unit_id} onValueChange={(v) => changeUnit(i, v ?? '')}>
                 <SelectTrigger><SelectValue placeholder="Lodge" /></SelectTrigger>
                 <SelectContent>{units.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
               </Select>
-              <Select items={roomTypes.map((t) => ({ value: t, label: t }))} value={r.room_type} onValueChange={(v) => update(i, { room_type: v ?? '' })}>
+              {/* Only this lodge's categories — see typesFor. */}
+              <Select items={typesFor(r.unit_id).map((t) => ({ value: t, label: t }))} value={r.room_type} onValueChange={(v) => update(i, { room_type: v ?? '' })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{roomTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                <SelectContent>{typesFor(r.unit_id).map((t) => <SelectItem key={t} value={t}>{t.replace(/_/g, ' ')}</SelectItem>)}</SelectContent>
               </Select>
               <Input
                 type="number"
@@ -1112,6 +1136,7 @@ function ReviewStep({
   onBack,
   onConfirmed,
   onDone,
+  onDiscountChanged,
 }: {
   eventId: string
   quote: Quote | null
@@ -1128,6 +1153,7 @@ function ReviewStep({
   onBack: () => void
   onConfirmed: (code: string) => void
   onDone: () => void
+  onDiscountChanged: () => void
 }) {
   const [amount, setAmount] = useState('')
   const [mode, setMode] = useState('upi')
@@ -1179,6 +1205,8 @@ function ReviewStep({
       lines: byUnit[unitId],
     }))
   })()
+
+  const grossPaise = quote ? quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise : 0
 
   return (
     <StepCard title="Review & confirm">
@@ -1284,10 +1312,22 @@ function ReviewStep({
                 )}
                 <tr className="font-medium">
                   <td className="px-3 py-2">Estimated total</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(grossPaise)}</td>
                 </tr>
+                {quote.discountPaise > 0 && (
+                  <>
+                    <tr className="text-emerald-700 dark:text-emerald-400">
+                      <td className="px-3 py-2">Less discounts</td>
+                      <td className="px-3 py-2 text-right tabular-nums">− {formatPaise(quote.discountPaise)}</td>
+                    </tr>
+                    <tr className="font-medium">
+                      <td className="px-3 py-2">Net total</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatPaise(grossPaise - quote.discountPaise)}</td>
+                    </tr>
+                  </>
+                )}
                 <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">Advance required (25% of the total, rooms included)</td>
+                  <td className="px-3 py-2">Advance required (25% of the {quote.discountPaise > 0 ? 'discounted ' : ''}total, rooms included)</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.advanceRequiredPaise)}</td>
                 </tr>
               </tbody>
@@ -1297,6 +1337,12 @@ function ReviewStep({
             Rooms are a rack-rate estimate until the Lodge Manager allocates them; maintenance is
             added to the payment review once logged.
           </p>
+
+          {/* Per-head percentage discounts — applied here so the total and the 25% advance
+              reflect them before you confirm (client, 25 Jul 2026). */}
+          <div className="rounded-lg border p-3">
+            <EventDiscounts eventId={eventId} editable onChanged={onDiscountChanged} />
+          </div>
 
           {alreadyConfirmed ? (
             <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
