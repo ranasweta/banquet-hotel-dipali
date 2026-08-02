@@ -75,7 +75,9 @@ type Detail = {
 type Options = {
   venues: { id: string; name: string; propertyName: string; priceable: boolean }[]
   bundles: { id: string; name: string; members: string }[]
-  roomTypes: string[]
+  /** Per-lodge inventory. `roomTypes` is a flat list across all lodges and must NOT drive the
+   *  category picker — Residency has no dormitory, Palace no semi-deluxe. */
+  roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
   lodgingUnits: { id: string; name: string }[]
 }
 type Catalog = { pools: { categoryName: string; items: string[] }[] }
@@ -99,6 +101,14 @@ function requestedDishes(asks: Ask[]): Map<string, Set<string>> {
 }
 
 const PURPLE_ROW = 'border-l-2 border-violet-500 bg-violet-50 dark:bg-violet-950/40'
+
+/** ISO date + n days, without pulling in a date library for one sum. */
+function addDays(iso: string, n: number): string {
+  if (!iso) return ''
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
 
 export function ApprovalBundle({ eventId }: { eventId: string }) {
   const router = useRouter()
@@ -158,6 +168,27 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
   }
 
   const rooms = roomDraft ?? detail?.proposal.lodges.flatMap((l) => l.lines) ?? []
+
+  /**
+   * The categories a lodge actually holds. Offering every category at every lodge let the GM
+   * approve "Residency dormitory", which does not exist anywhere in the building — the save
+   * then failed on the inventory cap, reporting no rooms free for a room type the lodge has
+   * never had. The picker now cannot express the impossible booking in the first place.
+   */
+  const typesFor = useCallback(
+    (unitId: string | null) =>
+      [...new Set((options?.roomRates ?? []).filter((r) => r.unitId === unitId).map((r) => r.roomType))].sort(),
+    [options],
+  )
+
+  /** Changing lodge re-points the category, since the old one may not exist at the new lodge. */
+  function changeRoomUnit(i: number, unitId: string) {
+    const types = typesFor(unitId)
+    const cur = rooms[i]!
+    const next = [...rooms]
+    next[i] = { ...cur, unitId, roomType: types.includes(cur.roomType) ? cur.roomType : (types[0] ?? '') }
+    setRoomDraft(next)
+  }
 
   const dirty =
     Object.keys(fnEdits).length > 0 ||
@@ -542,22 +573,21 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                         id={`unit-${i}`}
                         className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
                         value={r.unitId ?? ''}
-                        onChange={(e) => {
-                          const next = [...rooms]; next[i] = { ...r, unitId: e.target.value }; setRoomDraft(next)
-                        }}
+                        onChange={(e) => changeRoomUnit(i, e.target.value)}
                       >
                         {options.lodgingUnits.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                       </select>
                     </div>
                     <div>
                       <Label className="text-xs" htmlFor={`type-${i}`}>Category</Label>
+                      {/* Only this lodge's categories — see typesFor. */}
                       <select
                         id={`type-${i}`}
                         className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
                         value={r.roomType}
                         onChange={(e) => { const next = [...rooms]; next[i] = { ...r, roomType: e.target.value }; setRoomDraft(next) }}
                       >
-                        {options.roomTypes.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+                        {typesFor(r.unitId).map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
                       </select>
                     </div>
                     <div>
@@ -576,8 +606,11 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                     </div>
                     <div>
                       <Label className="text-xs" htmlFor={`out-${i}`}>Check-out</Label>
+                      {/* At least one night. Equal dates is a stay of zero nights, which the
+                          server refuses — better to make it unpickable than to explain it. */}
                       <Input
                         id={`out-${i}`} type="date" className="mt-1 h-8" value={r.checkOut}
+                        min={r.checkIn ? addDays(r.checkIn, 1) : undefined}
                         onChange={(e) => { const next = [...rooms]; next[i] = { ...r, checkOut: e.target.value }; setRoomDraft(next) }}
                       />
                     </div>
@@ -594,16 +627,20 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
             )}
             <Button
               variant="outline" size="sm"
-              onClick={() =>
+              onClick={() => {
+                const unitId = options.lodgingUnits[0]?.id ?? null
+                // Check-out defaults a day past check-in: a stay of zero nights is not a stay,
+                // and the server rejects it.
+                const checkIn = p.event.plannedFrom ?? p.functions[0]?.date ?? ''
+                const checkOut = p.event.plannedTo && p.event.plannedTo > checkIn ? p.event.plannedTo : addDays(checkIn, 1)
                 setRoomDraft([
                   ...rooms,
                   {
-                    id: '', unitId: options.lodgingUnits[0]?.id ?? null, roomType: options.roomTypes[0] ?? 'deluxe',
-                    count: 1, checkIn: p.event.plannedFrom ?? p.functions[0]?.date ?? '',
-                    checkOut: p.event.plannedTo ?? p.functions[0]?.date ?? '', nights: 1, ratePaise: 0, amountPaise: 0,
+                    id: '', unitId, roomType: typesFor(unitId)[0] ?? '',
+                    count: 1, checkIn, checkOut, nights: 1, ratePaise: 0, amountPaise: 0,
                   },
                 ])
-              }
+              }}
             >
               <Plus className="size-3.5" aria-hidden /> Add a room line
             </Button>

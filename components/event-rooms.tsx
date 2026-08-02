@@ -58,7 +58,8 @@ function nights(checkIn: string, checkOut: string): number {
 export function EventRooms({ eventId, editable }: { eventId: string; editable: boolean }) {
   const [rows, setRows] = useState<Requirement[] | null>(null)
   const [units, setUnits] = useState<Unit[]>([])
-  const [roomTypes, setRoomTypes] = useState<string[]>([])
+  // Only `roomRates` is kept: it carries which categories each lodge actually holds, and the
+  // flat `roomTypes` list it replaces let a manager book a category the lodge has never had.
   const [rates, setRates] = useState<RoomRate[]>([])
   const [busy, setBusy] = useState(false)
   // The span rooms may be held for, and what each lodge has free over the chosen nights.
@@ -74,12 +75,11 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
   const load = useCallback(async () => {
     const [reqs, opts] = await Promise.all([
       api<{ requirements: Requirement[]; window: typeof win }>(`/events/${eventId}/room-requirements`),
-      api<{ lodgingUnits?: Unit[]; roomTypes: string[]; roomRates: RoomRate[] }>('/booking-options'),
+      api<{ lodgingUnits?: Unit[]; roomRates: RoomRate[] }>('/booking-options'),
     ])
     setRows(reqs.requirements)
     setWin(reqs.window)
     setUnits(opts.lodgingUnits ?? [])
-    setRoomTypes(opts.roomTypes)
     setRates(opts.roomRates ?? [])
   }, [eventId])
 
@@ -142,11 +142,25 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
 
   const update = (i: number, patch: Partial<Requirement>) =>
     setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
-  const add = () =>
+
+  /** The categories this lodge actually holds — Residency has no dormitory, Palace no semi-deluxe. */
+  const typesFor = (unitId: string) =>
+    [...new Set(rates.filter((x) => x.unitId === unitId).map((x) => x.roomType))].sort()
+
+  /** Changing lodge re-points the category, since the old one may not exist at the new lodge. */
+  const changeUnit = (i: number, unitId: string) => {
+    const types = typesFor(unitId)
+    const cur = rows[i]!.room_type
+    update(i, { unit_id: unitId, room_type: types.includes(cur) ? cur : (types[0] ?? '') })
+  }
+
+  const add = () => {
+    const unitId = units[0]?.id ?? ''
     setRows([
       ...rows,
-      { unit_id: units[0]?.id ?? '', room_type: roomTypes[0] ?? 'deluxe', count: 1, check_in: '', check_out: '' },
+      { unit_id: unitId, room_type: typesFor(unitId)[0] ?? '', count: 1, check_in: '', check_out: '' },
     ])
+  }
   const remove = (i: number) => setRows(rows.filter((_, j) => j !== i))
 
   async function save() {
@@ -202,7 +216,7 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
                     <Select
                       items={units.map((u) => ({ value: u.id, label: u.name }))}
                       value={r.unit_id}
-                      onValueChange={(v) => update(i, { unit_id: v ?? '' })}
+                      onValueChange={(v) => changeUnit(i, v ?? '')}
                       disabled={!editable}
                     >
                       <SelectTrigger className="min-w-32"><SelectValue placeholder="Lodge" /></SelectTrigger>
@@ -212,15 +226,16 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
                     </Select>
                   </td>
                   <td className="px-3 py-2">
+                    {/* Only this lodge's categories — see typesFor. */}
                     <Select
-                      items={roomTypes.map((t) => ({ value: t, label: label(t) }))}
+                      items={typesFor(r.unit_id).map((t) => ({ value: t, label: label(t) }))}
                       value={r.room_type}
                       onValueChange={(v) => update(i, { room_type: v ?? '' })}
                       disabled={!editable}
                     >
                       <SelectTrigger className="min-w-36 capitalize"><SelectValue /></SelectTrigger>
                       <SelectContent>
-                        {roomTypes.map((t) => (
+                        {typesFor(r.unit_id).map((t) => (
                           <SelectItem key={t} value={t} className="capitalize">{label(t)}</SelectItem>
                         ))}
                       </SelectContent>
