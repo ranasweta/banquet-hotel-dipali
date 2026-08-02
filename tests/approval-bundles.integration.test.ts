@@ -239,6 +239,101 @@ d('deciding by editing', () => {
   })
 })
 
+d('older menu requests still in live data', () => {
+  /**
+   * Production holds `menu_increase` rows written by an earlier version, shaped
+   * `{items:[{menuId, categoryName, currentPick, requestedPick, reason}]}` — menuId inside the
+   * item, the increment as a before/after pair, and no dish names. `applyDeferred` read only
+   * the current shape and threw "This request carries no increments to apply", which failed the
+   * GM's ENTIRE save: the rooms and discount decisions beside it were rolled back too.
+   */
+  async function legacyIncrease(eventId: string, subId: string): Promise<string> {
+    // One dish on a base pick of one — the request is precisely what would allow a second.
+    await menus.saveSubEventMenu(bm, subId, {
+      tierId: await tierId('Silver'),
+      selections: { 'Paneer Main Course': ['Kadai Paneer'] },
+    })
+    const [m] = (await db.execute(sql`
+      SELECT id FROM sub_event_menus WHERE sub_event_id = ${subId}
+    `)) as unknown as { id: string }[]
+    const [exc] = await db
+      .insert(schema.exceptions)
+      .values({
+        eventId, kind: 'menu_increase', status: 'pending',
+        payload: {
+          items: [{
+            menuId: m!.id, subEventId: subId, subEventName: 'Reception',
+            categoryName: 'Paneer Main Course', currentPick: 1, requestedPick: 2,
+            reason: 'category_not_free_eligible',
+          }],
+        },
+        raisedBy: bm.id,
+      })
+      .returning({ id: schema.exceptions.id })
+    return exc!.id
+  }
+
+  it('approves one, applying the increment it states', async () => {
+    const { eventId, subId } = await makeBooking()
+    const excId = await legacyIncrease(eventId, subId)
+
+    const res = await bundles.decideBundle(ha, eventId, {
+      decisions: [{ id: excId, source: 'exception', action: 'approve' }],
+    })
+    expect(res.settled[0]!.status).toBe('approved')
+
+    // requestedPick 2 − currentPick 1 = one extra pick, now sanctioned.
+    const [cat] = (await db.execute(sql`
+      SELECT approved_extra_picks AS "approved" FROM sub_event_menu_categories c
+        JOIN sub_event_menus m ON m.id = c.menu_id
+       WHERE m.sub_event_id = ${subId} AND c.category_name = 'Paneer Main Course'
+    `)) as unknown as { approved: number }[]
+    expect(cat!.approved).toBe(1)
+  }, SLOW)
+
+  it('reads as a sentence, not "+undefined"', async () => {
+    const { eventId, subId } = await makeBooking()
+    await legacyIncrease(eventId, subId)
+    const detail = await bundles.bundleDetail(eventId)
+    const ask = detail.asks.find((a) => a.kind === 'menu_increase')!
+    expect(ask.summary).toContain('Paneer Main Course +1')
+    expect(ask.summary).not.toContain('undefined')
+  }, SLOW)
+
+  it('does not sink the rest of the bundle', async () => {
+    // The regression that matters: one request the system cannot act on must not stop the GM
+    // deciding the ones it can.
+    const { eventId, subId } = await makeBooking()
+    const excId = await legacyIncrease(eventId, subId)
+    await raiseRoomRequest(eventId)
+    const roomAsk = (await bundles.bundleDetail(eventId)).asks.find((a) => a.kind === 'room_allocation_35plus')!
+
+    const res = await bundles.decideBundle(ha, eventId, {
+      decisions: [
+        { id: excId, source: 'exception', action: 'approve' },
+        { id: roomAsk.id, source: 'exception', action: 'approve' },
+      ],
+    })
+    expect(res.settled).toHaveLength(2)
+    expect(res.remaining).toBe(0)
+  }, SLOW)
+
+  it('records a request that names no increments at all, rather than failing', async () => {
+    const { eventId } = await makeBooking()
+    const [exc] = await db
+      .insert(schema.exceptions)
+      .values({ eventId, kind: 'menu_increase', status: 'pending', payload: { items: [] }, raisedBy: bm.id })
+      .returning({ id: schema.exceptions.id })
+
+    const res = await bundles.decideBundle(ha, eventId, {
+      decisions: [{ id: exc!.id, source: 'exception', action: 'approve' }],
+    })
+    expect(res.settled[0]!.status).toBe('approved')
+    expect(res.settled[0]!.applied).toMatch(/no increments/)
+    expect(res.remaining).toBe(0)
+  }, SLOW)
+})
+
 d('the lock override', () => {
   it('lets the Authority edit a LOCKED booking, and nobody else', async () => {
     const { eventId, subId } = await makeBooking('locked')

@@ -128,6 +128,8 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
   const [removedDiscounts, setRemovedDiscounts] = useState<string[]>([])
   const [newDiscount, setNewDiscount] = useState({ head: 'overall', rupees: '', remark: '' })
   const [reason, setReason] = useState('')
+  /** Keyed by ROW INDEX: two lines can share a shape yet each takes real rooms. */
+  const [free, setFree] = useState<Record<number, { available: number; total: number }>>({})
 
   const load = useCallback(async () => {
     const [d, o, c] = await Promise.all([
@@ -180,6 +182,55 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
       [...new Set((options?.roomRates ?? []).filter((r) => r.unitId === unitId).map((r) => r.roomType))].sort(),
     [options],
   )
+
+  /**
+   * What each room line can actually have, live from the lodging inventory.
+   *
+   * The save already refuses an over-booking — `getRoomAvailability` inside the same
+   * transaction, reading the very rows the lodging calendar draws — but refusing at Save is a
+   * poor way to tell a GM that Regency holds 27 deluxe. This mirrors the booking wizard so he
+   * sees the ceiling while he types. It is feedback, never the control: the server still decides.
+   */
+  const completeRooms = rooms
+    .map((r, i) => ({ r, i }))
+    .filter(({ r }) => r.unitId && r.roomType && r.checkIn && r.checkOut && r.checkOut > r.checkIn)
+  const roomSignature = completeRooms
+    .map(({ r }) => `${r.unitId}|${r.roomType}|${r.checkIn}|${r.checkOut}|${r.count}`)
+    .join(',')
+
+  useEffect(() => {
+    // Everything, including the reset, happens in the debounce callback: a setState in the
+    // effect body itself cascades a render on every keystroke.
+    const t = setTimeout(() => {
+      if (!roomSignature) {
+        setFree({})
+        return
+      }
+      api<{ lines: { available: number; total: number }[] }>('/rooms/availability', {
+        method: 'POST',
+        body: JSON.stringify({
+          event_id: eventId,
+          lines: completeRooms.map(({ r }) => ({
+            unit_id: r.unitId, room_type: r.roomType,
+            count: Number.isInteger(r.count) && r.count > 0 ? r.count : 0,
+            check_in: r.checkIn, check_out: r.checkOut,
+          })),
+        }),
+      })
+        .then((res) => {
+          const next: Record<number, { available: number; total: number }> = {}
+          completeRooms.forEach(({ i }, k) => {
+            const l = res.lines[k]
+            if (l) next[i] = { available: l.available, total: l.total }
+          })
+          setFree(next)
+        })
+        // A failed lookup must never block the decision — the save still enforces the cap.
+        .catch(() => setFree({}))
+    }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomSignature, eventId])
 
   /** Changing lodge re-points the category, since the old one may not exist at the new lodge. */
   function changeRoomUnit(i: number, unitId: string) {
@@ -565,8 +616,12 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
               <p className="text-sm text-muted-foreground">No rooms on this booking.</p>
             ) : (
               <div className="space-y-2">
-                {rooms.map((r, i) => (
-                  <div key={r.id || i} className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_5rem_1fr_1fr_auto]">
+                {rooms.map((r, i) => {
+                  const avail = free[i]
+                  const over = avail != null && r.count > avail.available
+                  return (
+                  <div key={r.id || i} className="space-y-1">
+                  <div className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_5rem_1fr_1fr_auto]">
                     <div>
                       <Label className="text-xs" htmlFor={`unit-${i}`}>Lodge</Label>
                       <select
@@ -593,7 +648,10 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                     <div>
                       <Label className="text-xs" htmlFor={`count-${i}`}>Rooms</Label>
                       <Input
-                        id={`count-${i}`} type="number" min={1} className="mt-1 h-8 tabular-nums" value={r.count}
+                        id={`count-${i}`} type="number" min={1} max={avail?.available || undefined}
+                        className={cn('mt-1 h-8 tabular-nums', over && 'border-destructive')}
+                        aria-invalid={over || undefined}
+                        value={r.count}
                         onChange={(e) => { const next = [...rooms]; next[i] = { ...r, count: Number(e.target.value) }; setRoomDraft(next) }}
                       />
                     </div>
@@ -622,7 +680,17 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                       <Trash2 className="size-3.5" aria-hidden />
                     </Button>
                   </div>
-                ))}
+                  {/* Live from the lodging inventory — the same rows the lodging calendar draws. */}
+                  {avail && (
+                    <p className={cn('text-xs', over ? 'text-destructive' : 'text-muted-foreground')}>
+                      {over
+                        ? `Only ${avail.available} of ${avail.total} free over these nights — this line asks for ${r.count}.`
+                        : `${avail.available} of ${avail.total} free over these nights.`}
+                    </p>
+                  )}
+                  </div>
+                  )
+                })}
               </div>
             )}
             <Button

@@ -339,11 +339,20 @@ async function applyMenuEdit(tx: Tx, actor: Actor, eventId: string, m: MenuEdit)
       )}
     `)
   }
+  // All three counters move together, and they must: the table checks
+  // `submitted_extra_picks >= approved_extra_picks AND submitted_extra_picks <= extra_picks`
+  // (migration 0013). Carrying the old, lower `submitted` forward while raising `approved`
+  // broke the first half and the whole save failed on a constraint.
+  //
+  // Setting all three to the surviving count is also what the act MEANS. The three counters
+  // exist to track a request travelling from the manager to the Authority — taken, sent,
+  // granted. When the Authority himself decides by ticking, that journey happens in one
+  // moment: nothing he leaves ticked is still awaiting his own decision.
   await tx.execute(sql`
     UPDATE sub_event_menu_categories
        SET extra_picks = ${extras},
            approved_extra_picks = ${extras},
-           submitted_extra_picks = LEAST(submitted_extra_picks, ${extras})
+           submitted_extra_picks = ${extras}
      WHERE menu_id = ${menu.menuId} AND category_name = ${m.categoryName}
   `)
   // Recomputed, never forced: dropping an extra leaves the base picks intact, so the menu is

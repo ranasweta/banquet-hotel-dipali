@@ -40,6 +40,60 @@ function pgCode(err: unknown): string | undefined {
 }
 
 /**
+ * One shape for a menu increase, whichever version of the app wrote it.
+ *
+ * Two payloads exist in live data and they disagree about almost everything:
+ *
+ *   current (21 Jul 2026)  { menuId, subEventName, items: [{ categoryName, requesting, dishes }] }
+ *   earlier               { items: [{ menuId, subEventName, categoryName, currentPick,
+ *                                     requestedPick, reason }] }
+ *
+ * The earlier one puts `menuId` inside each item, states the increment as a before/after pair
+ * rather than a delta, and — the part that matters — names no DISHES. Naming the dishes is
+ * exactly why the shape changed: without them a partial approval has to guess which picks to
+ * withdraw, and it used to drop whichever sorted last, deleting a guest's actual choice at
+ * random.
+ *
+ * So both are normalised here rather than at each use. `dishes: []` on an older row is
+ * truthful — that request genuinely does not know which dishes it is about — and every caller
+ * treats an empty list as "adjust the count, touch no selections".
+ */
+type NormalizedIncrease = {
+  subEventName: string | null
+  items: { menuId: string; categoryName: string; requesting: number; dishes: string[] }[]
+}
+
+export function normalizeIncrease(payload: Record<string, unknown>): NormalizedIncrease {
+  const topMenuId = payload.menuId as string | undefined
+  const raw = (payload.items ?? []) as Record<string, unknown>[]
+  const items = raw
+    .map((i) => {
+      const menuId = (i.menuId as string | undefined) ?? topMenuId
+      const categoryName = i.categoryName as string | undefined
+      if (!menuId || !categoryName) return null
+      // Current shape states the delta; the earlier one states before → after.
+      const requesting =
+        i.requesting != null
+          ? Number(i.requesting)
+          : Number(i.requestedPick ?? 0) - Number(i.currentPick ?? 0)
+      if (!Number.isFinite(requesting) || requesting <= 0) return null
+      return {
+        menuId,
+        categoryName,
+        requesting,
+        dishes: Array.isArray(i.dishes) ? (i.dishes as string[]) : [],
+      }
+    })
+    .filter((i): i is NonNullable<typeof i> => i !== null)
+
+  const subEventName =
+    (payload.subEventName as string | undefined) ??
+    (raw.find((i) => i.subEventName)?.subEventName as string | undefined) ??
+    null
+  return { subEventName, items }
+}
+
+/**
  * A one-line, human summary of what an exception is asking for. Exported because the bundle
  * screen (lib/approval-bundles.ts) prints the same sentence beside the proposal — two
  * phrasings of one request is how a GM ends up deciding something other than what was asked.
@@ -50,16 +104,13 @@ export function summarizeException(kind: string, payload: Record<string, unknown
       // One request per FUNCTION, sent when its submit button is pressed (21 Jul 2026).
       // Name the segment and the dishes, because that is what is actually being decided —
       // "two more starters: paneer tikka, galouti" beats "+2 on segment 3".
-      const fn = (payload.subEventName as string | undefined) ?? 'Function'
-      const items = (payload.items ?? []) as {
-        categoryName: string; requesting: number; dishes: string[]
-      }[]
+      const { subEventName, items } = normalizeIncrease(payload)
       if (items.length === 0) return 'menu increase'
       const lines = items.map((i) => {
-        const dishes = i.dishes?.length ? ` — ${i.dishes.join(', ')}` : ''
+        const dishes = i.dishes.length ? ` — ${i.dishes.join(', ')}` : ''
         return `${i.categoryName} +${i.requesting}${dishes}`
       })
-      return `${fn} · ${lines.join('; ')}`
+      return `${subEventName ?? 'Function'} · ${lines.join('; ')}`
     }
     case 'room_allocation_35plus': {
       // The bulk shape carries `lines`, not the room-by-room `allocations` the old
@@ -356,13 +407,15 @@ async function applyDeferred(
       //                      other will roll out")
       //
       // A rejection is handled by the caller, which reverses the batch wholesale.
-      const menuId = payload.menuId as string | undefined
-      const items = (payload.items ?? []) as {
-        categoryName: string; requesting: number; dishes: string[]
-      }[]
-      if (!menuId || items.length === 0) {
-        throw badRequest('This request carries no increments to apply.')
-      }
+      //
+      // Both payload shapes are accepted (see normalizeIncrease). A request that names no
+      // increments at all is RECORDED rather than refused: these are real rows sitting in
+      // live data, and throwing here failed the GM's entire save — including the room and
+      // discount decisions beside it, which had nothing to do with the menu. A request the
+      // system cannot act on must not be able to stop him deciding the ones it can.
+      const { subEventName, items } = normalizeIncrease(payload)
+      const name = subEventName ?? 'function'
+      if (items.length === 0) return 'nothing to apply — this request names no increments'
 
       const cap = modified?.extraPicks != null ? Number(modified.extraPicks) : null
       if (cap != null && (!Number.isInteger(cap) || cap < 0)) {
@@ -370,26 +423,48 @@ async function applyDeferred(
       }
 
       let rolledBack = 0
+      let blindReductions = 0
+      const menuIds = new Set<string>()
       for (const i of items) {
+        menuIds.add(i.menuId)
         const asked = i.requesting
         const granted = cap == null ? asked : Math.min(asked, cap)
         if (granted < asked) rolledBack += asked - granted
 
+        // Raise the ceiling with the approval, not just the consent.
+        //
+        // The two request styles mean different things. The current one RATIFIES picks the
+        // guest has already taken — `extra_picks` was raised when they were chosen — so only
+        // `approved` needs to move. The older one asks PERMISSION to take more, and is raised
+        // before anything is picked, so `extra_picks` is still 0 and bumping `approved` alone
+        // breaks `approved_extra_picks <= extra_picks` (migration 0012) and fails the save.
+        //
+        // GREATEST covers both without branching: where the picks already exist it changes
+        // nothing, and where they do not it grants the capacity being asked for. Every SET
+        // expression reads the row's OLD values, so the three stay mutually consistent —
+        // submitted >= approved and submitted <= extra_picks both still hold (migration 0013).
         await tx.execute(sql`
           UPDATE sub_event_menu_categories
-             SET approved_extra_picks = approved_extra_picks + ${granted}
-           WHERE menu_id = ${menuId} AND category_name = ${i.categoryName}
+             SET extra_picks = GREATEST(extra_picks, approved_extra_picks + ${granted}),
+                 approved_extra_picks = approved_extra_picks + ${granted},
+                 submitted_extra_picks = GREATEST(submitted_extra_picks, approved_extra_picks + ${granted})
+           WHERE menu_id = ${i.menuId} AND category_name = ${i.categoryName}
         `)
 
         // Drop the dishes this decision refused. The request carries the dish names it is
         // about, so a partial approval removes the last ones asked for rather than the
         // alphabetically-last ones — which used to delete a guest's choice at random
         // because the snapshot could not say which picks were the additions.
+        //
+        // An older request names no dishes, so there is nothing safe to remove: the count is
+        // lowered and the selections are left exactly as the guest chose them. Guessing here
+        // is the very bug the newer shape was introduced to end.
         const refused = i.dishes.slice(granted)
+        if (granted < asked && i.dishes.length === 0) blindReductions += asked - granted
         if (refused.length) {
           await tx.execute(sql`
             DELETE FROM sub_event_menu_selections
-             WHERE menu_id = ${menuId}
+             WHERE menu_id = ${i.menuId}
                AND category_name = ${i.categoryName}
                AND item_name IN (${sql.join(refused.map((d) => sql`${d}`), sql`, `)})
           `)
@@ -399,7 +474,7 @@ async function applyDeferred(
             UPDATE sub_event_menu_categories
                SET extra_picks = GREATEST(extra_picks - ${refused.length}, approved_extra_picks),
                    submitted_extra_picks = LEAST(submitted_extra_picks, GREATEST(extra_picks - ${refused.length}, approved_extra_picks))
-             WHERE menu_id = ${menuId} AND category_name = ${i.categoryName}
+             WHERE menu_id = ${i.menuId} AND category_name = ${i.categoryName}
           `)
         }
       }
@@ -407,23 +482,25 @@ async function applyDeferred(
       // leaves the base picks untouched, so the menu is usually still complete — and
       // blanking the flag left it blocking the lock checklist until somebody re-saved every
       // menu by hand, with nothing on screen to say why.
-      await tx.execute(sql`
-        UPDATE sub_event_menus m
-           SET is_complete = NOT EXISTS (
-             SELECT 1
-               FROM sub_event_menu_categories c
-              WHERE c.menu_id = m.id
-                AND c.base_pick IS NOT NULL
-                AND (SELECT count(*) FROM sub_event_menu_selections s
-                      WHERE s.menu_id = c.menu_id AND s.category_name = c.category_name) < c.base_pick
-           )
-         WHERE m.id = ${menuId}
-      `)
+      for (const menuId of menuIds) {
+        await tx.execute(sql`
+          UPDATE sub_event_menus m
+             SET is_complete = NOT EXISTS (
+               SELECT 1
+                 FROM sub_event_menu_categories c
+                WHERE c.menu_id = m.id
+                  AND c.base_pick IS NOT NULL
+                  AND (SELECT count(*) FROM sub_event_menu_selections s
+                        WHERE s.menu_id = c.menu_id AND s.category_name = c.category_name) < c.base_pick
+             )
+           WHERE m.id = ${menuId}
+        `)
+      }
 
-      const name = (payload.subEventName as string | undefined) ?? 'function'
-      return rolledBack === 0
-        ? `${items.length} segment(s) in ${name}`
-        : `${items.length} segment(s) in ${name}; ${rolledBack} dish(es) rolled out`
+      const parts = [`${items.length} segment(s) in ${name}`]
+      if (rolledBack > 0) parts.push(`${rolledBack} pick(s) rolled out`)
+      if (blindReductions > 0) parts.push(`${blindReductions} on an older request that names no dishes — the counts were lowered, the guest's choices left alone`)
+      return parts.join('; ')
     }
     case 'room_allocation_35plus': {
       // There is nothing to insert. Rooms are booked in bulk on the proposal (migration
