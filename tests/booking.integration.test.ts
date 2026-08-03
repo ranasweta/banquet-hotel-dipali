@@ -45,12 +45,31 @@ type EnquiryOpts = {
   docs?: boolean
 }
 
+/** `date` shifted by whole days, staying in YYYY-MM-DD. UTC so a timezone cannot shift it. */
+function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
 async function makeEnquiry(opts: EnquiryOpts = {}): Promise<string> {
   const { eventType = 'wedding', contacts = 3, venueName = 'Crystal', date = '2026-09-01', start = '11:00', end = '15:00', docs = true } = opts
   const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
   const [event] = await db
     .insert(schema.events)
-    .values({ code, guestName: `${venueName} Party`, eventType, createdBy: actor.id })
+    .values({
+      code,
+      guestName: `${venueName} Party`,
+      eventType,
+      createdBy: actor.id,
+      // The declared run (planned_from/to, 22 Jul 2026). This fixture predates it and relied on
+      // the fallback — the functions' own span — which made the run a single day and capped
+      // check-out at the next morning, so the two-night room line below could never be saved.
+      // A run of two days with one function on the first is exactly what the rule allows: a
+      // guest may stay the length of the event even where nothing is scheduled every day.
+      plannedFrom: date,
+      plannedTo: addDays(date, 1),
+    })
     .returning({ id: schema.events.id })
   const eventId = event!.id
 
@@ -158,9 +177,17 @@ d('confirm gates', () => {
     const [unit] = (await db.execute(
       sql`SELECT id FROM lodging_units WHERE name = 'Palace'`,
     )) as unknown as { id: string }[]
+    const [regency] = (await db.execute(
+      sql`SELECT id FROM lodging_units WHERE name = 'Regency'`,
+    )) as unknown as { id: string }[]
 
+    // 35 rooms across two lodges, because no single category has 35 of anything: Palace holds
+    // 33 deluxe (migration 0010 replaced the round numbers this fixture was written against
+    // with the real inventory). Asking one lodge for 35 trips the hard inventory cap, which is
+    // a different rule and would let this pass for the wrong reason.
     await rooms.saveRoomRequirements(actor, id, [
-      { unitId: unit!.id, roomType: 'deluxe', count: 35, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: unit!.id, roomType: 'deluxe', count: 33, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: regency!.id, roomType: 'presidential_suite', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
     ])
     await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/35 or more rooms/)
 
