@@ -262,7 +262,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
 
   // ---- Step 3: add / remove a function, with its menu tier ----
   async function addFunction(spec: {
-    name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; note: string; tierId: string
+    name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; tierId: string
   }) {
     if (!eventId) return
     const [kind, vid] = spec.target.split(':')
@@ -275,7 +275,6 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
         end_time: spec.endTime,
         [kind === 'bundle' ? 'bundle_id' : 'venue_id']: vid,
         pax: spec.pax,
-        pax_override_note: spec.note || undefined,
       }),
     })
     // Tier now, dishes later: saving with no selections keeps the menu incomplete (FR-3.2).
@@ -475,7 +474,6 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
       {step === 2 && eventId && (
         <StepCard title="Functions & menu">
           <FunctionsEditor
-            venues={options.venues}
             tiers={tiers}
             pools={pools}
             fromDate={fromDate}
@@ -708,7 +706,6 @@ type FunctionRow = {
 }
 
 function FunctionsEditor({
-  venues,
   tiers,
   pools,
   fromDate,
@@ -717,13 +714,12 @@ function FunctionsEditor({
   onAdd,
   onRemove,
 }: {
-  venues: Venue[]
   tiers: Tier[]
   pools: MenuPool[]
   fromDate: string
   toDate: string
   rows: FunctionRow[]
-  onAdd: (spec: { name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; note: string; tierId: string }) => Promise<void>
+  onAdd: (spec: { name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; tierId: string }) => Promise<void>
   onRemove: (id: string) => Promise<void>
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
@@ -733,7 +729,6 @@ function FunctionsEditor({
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [pax, setPax] = useState('')
-  const [note, setNote] = useState('')
   const [tierId, setTierId] = useState('')
   const [busy, setBusy] = useState(false)
   const [freeVenues, setFreeVenues] = useState<{ value: string; label: string }[] | null>(null)
@@ -773,21 +768,14 @@ function FunctionsEditor({
   async function add() {
     if (!name || !windowSet || !target || !pax) return toast.error('Set the date, time, a free venue, a name and pax')
     if (!tierId) return toast.error('Choose a menu for this function')
-    const [kind, id] = target.split(':')
-    if (kind === 'venue') {
-      const v = venues.find((x) => x.id === id)
-      if (v && (Number(pax) < v.capacityMin || Number(pax) > v.capacityMax) && !note.trim()) {
-        return toast.error(`Pax ${pax} is outside ${v.name}'s range (${v.capacityMin}–${v.capacityMax}). Add an override note to proceed.`)
-      }
-    }
     setBusy(true)
     try {
-      await onAdd({ name, eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), note, tierId })
+      await onAdd({ name, eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), tierId })
       // Carry the run of the event forward rather than blanking the form: the next function
       // usually follows straight on, on the same day, at the same head count and tier. Only
       // what genuinely differs each time is cleared. (Client: adding functions one by one
       // from scratch was tedious.)
-      setName(''); setTarget(''); setNote(''); setFreeVenues(null)
+      setName(''); setTarget(''); setFreeVenues(null)
       setStart(end); setEnd('')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not add function')
@@ -939,10 +927,7 @@ function FunctionsEditor({
           </p>
         )}
 
-        <div className="mt-3">
-          <Input placeholder="Pax override note (only if outside venue capacity)" value={note} onChange={(e) => setNote(e.target.value)} />
-        </div>
-        <Button className="mt-3" onClick={add} disabled={busy || !windowSet || !target || !tierId}>Add function</Button>
+        <Button className="mt-3 w-full sm:w-auto" onClick={add} disabled={busy || !windowSet || !target || !tierId}>Add function</Button>
       </div>
     </div>
   )
@@ -1053,14 +1038,20 @@ function RoomEditor({
         const over = avail != null && r.count > avail.available
         return (
           <div key={i} className="space-y-1">
-            <div className="grid gap-2 sm:grid-cols-6">
+            {/* Not six equal columns: that gave a one-digit count the same width as
+                "Presidential suite", which then had nowhere to go. Width follows what each
+                field actually holds. One column on a phone, where everything is full width. */}
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)_4.5rem_minmax(0,1fr)_minmax(0,1fr)_auto]">
               <Select items={units.map((u) => ({ value: u.id, label: u.name }))} value={r.unit_id} onValueChange={(v) => changeUnit(i, v ?? '')}>
                 <SelectTrigger><SelectValue placeholder="Lodge" /></SelectTrigger>
                 <SelectContent>{units.map((u) => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</SelectContent>
               </Select>
               {/* Only this lodge's categories — see typesFor. */}
-              <Select items={typesFor(r.unit_id).map((t) => ({ value: t, label: t }))} value={r.room_type} onValueChange={(v) => update(i, { room_type: v ?? '' })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              {/* The trigger reads from `items`, so the label is humanised there too — otherwise
+                  the closed select showed `presidential_suite` where the open list showed
+                  "presidential suite". */}
+              <Select items={typesFor(r.unit_id).map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))} value={r.room_type} onValueChange={(v) => update(i, { room_type: v ?? '' })}>
+                <SelectTrigger className="capitalize"><SelectValue /></SelectTrigger>
                 <SelectContent>{typesFor(r.unit_id).map((t) => <SelectItem key={t} value={t}>{t.replace(/_/g, ' ')}</SelectItem>)}</SelectContent>
               </Select>
               <Input
@@ -1156,18 +1147,28 @@ function ReviewStep({
   onDiscountChanged: () => void
 }) {
   const [amount, setAmount] = useState('')
+  // Whether the manager has typed their own figure. Until they do, the field follows the
+  // required advance.
+  //
+  // It used to prefill once (`!amount`) and then never move again, so adding rooms or a
+  // discount left the old number sitting there while the line above it said something else —
+  // 35 rooms took the requirement from ₹11.6L to ₹13L and the field still read ₹11.6L. Confirm
+  // refuses that with a 402, which is the system working, but the manager is looking at a
+  // plausible number with no clue why it was rejected. A figure they typed themselves is left
+  // alone: part-payments happen, and the quote moving is not a reason to overwrite what they
+  // actually collected.
+  const [amountEdited, setAmountEdited] = useState(false)
   const [mode, setMode] = useState('upi')
   const [receipt, setReceipt] = useState('')
   const [receivedOn, setReceivedOn] = useState('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (quote && !amount) {
+    if (quote && !amountEdited) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAmount(String(quote.advanceRequiredPaise / 100))
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quote])
+  }, [quote, amountEdited])
 
   async function confirm() {
     if (!receipt.trim() || !receivedOn) return toast.error('Enter the receipt number and date')
@@ -1353,7 +1354,11 @@ function ReviewStep({
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Advance received (₹)">
-                <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+                <Input
+                  type="number"
+                  value={amount}
+                  onChange={(e) => { setAmountEdited(true); setAmount(e.target.value) }}
+                />
               </Field>
               <Field label="Mode">
                 <Select items={[{ value: 'cash', label: 'Cash' }, { value: 'upi', label: 'UPI' }, { value: 'bank', label: 'Bank' }, { value: 'cheque', label: 'Cheque' }]} value={mode} onValueChange={(v) => setMode(v ?? 'upi')}>
