@@ -82,11 +82,14 @@ clarifying questions arriving before implementation rather than after mistakes.
      **percentage of a head** (menu / venue / room / overall) recomputed live from
      the current bill; over the cap → Higher Authority approval. Per-room caps
      (BR-D1) are retired now that rooms are booked in bulk.
-     **The cap does not bind the Authority himself** (amended 1 Aug 2026): a discount he
-     enters from the approvals screen is written with no `exception_id` — which is what
-     `effectiveDiscountPaise` reads as in force — and may be a flat rupee amount. The cap's
-     job is to route a big discount *to* him; it has nothing to do when he is the one giving
-     it. The remark is still mandatory.
+     Discounts are the **Booking Manager's** to give (he has `billing` edit) and the
+     **Authority's** — both, from the Payment review or the event's Billing panel.
+     **The cap does not bind the Authority himself** (amended 1 Aug 2026; widened 3 Aug 2026
+     from the approvals screen to *wherever he gives it*): his discount is written with no
+     `exception_id` — which is what `effectiveDiscountPaise` reads as in force — and may be a
+     flat rupee amount. The cap's job is to route a big discount *to* him; it has nothing to do
+     when he is the one giving it. `lib/discounts.ts` owns that test now, so every screen agrees.
+     The remark is still mandatory.
    Each runs in ONE db transaction; rely on the PK/exclusion constraints to
    win races, and translate constraint violations into friendly errors.
 4. **Snapshots, not references**: menus copy tier name, price, surcharge, and

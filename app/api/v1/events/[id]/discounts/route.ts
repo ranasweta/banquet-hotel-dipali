@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
 import { addDiscount, discountBases, listDiscounts } from '@/lib/discounts'
+import { AUTHORITY_ROLES } from '@/lib/post-confirm'
+import { getIntSettings } from '@/lib/settings'
 
 const bodySchema = z
   .object({
@@ -19,12 +21,26 @@ const bodySchema = z
 /**
  * GET /events/:id/discounts — every discount (tagged effective/pending/rejected, live rupee
  * value) plus the per-head subtotals so the UI can price a "30% on menu" before it is saved.
+ *
+ * `capPct` and `uncapped` are here so the screen can state the rule it is actually under: the
+ * cap is a setting, not the constant 10 the copy used to hardcode, and it does not bind the
+ * Higher Authority at all (FR-11.3a). Telling him his discount goes to the GM for approval,
+ * when he IS the GM and it takes effect at once, is the kind of small lie that costs a phone call.
  */
 export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
-  await requirePermission('billing', 'view')
+  const actor = await requirePermission('billing', 'view')
   const { id } = await ctx.params
-  const [discounts, bases] = await Promise.all([listDiscounts(id), discountBases(id)])
-  return ok({ discounts, bases })
+  const [discounts, bases, settings] = await Promise.all([
+    listDiscounts(id),
+    discountBases(id),
+    getIntSettings(['discount_cap_pct'] as const, { discount_cap_pct: 10 }),
+  ])
+  return ok({
+    discounts,
+    bases,
+    capPct: settings.discount_cap_pct,
+    uncapped: AUTHORITY_ROLES.has(actor.roleName),
+  })
 })
 
 /**

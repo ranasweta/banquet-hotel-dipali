@@ -25,6 +25,9 @@ if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping billing tes
 
 const actor = { id: '', roleName: 'auditor' }
 const ha = { id: '', roleName: 'higher_authority' }
+// The cap is a Booking Manager's rule. It has to be raised by someone it binds — `actor` is the
+// Auditor, who ranks with the Authority and is no longer capped (FR-11.3a, 3 Aug 2026).
+const bm = { id: '', roleName: 'booking_manager' }
 let rc = 0
 const receipt = () => `RCPT-${Date.now() % 1_000_000}-${++rc}`
 
@@ -54,6 +57,7 @@ beforeAll(async () => {
   }
   actor.id = await userId('auditor')
   ha.id = await userId('higher_authority')
+  bm.id = await userId('booking_manager')
 }, 90_000)
 
 async function cleanup() {
@@ -66,13 +70,13 @@ afterAll(async () => { if (hasDb) await cleanup() })
 d('discount cap (BR-D2)', () => {
   it('lets mixed discounts up to 9.9% through and escalates the one that crosses 10%', async () => {
     const e = await makeEvent({ proposalPaise: 10_000_000 }) // cap = 1,000,000 paise
-    const r1 = await discounts.addDiscount(actor, e, { head: 'venue', amountPaise: 500_000, remark: '5% venue' })
+    const r1 = await discounts.addDiscount(bm, e, { head: 'venue', amountPaise: 500_000, remark: '5% venue' })
     expect(r1.deferred).toBe(false)
-    const r2 = await discounts.addDiscount(actor, e, { head: 'menu', amountPaise: 490_000, remark: '4.9% menu' })
+    const r2 = await discounts.addDiscount(bm, e, { head: 'menu', amountPaise: 490_000, remark: '4.9% menu' })
     expect(r2.deferred).toBe(false) // combined 9.9% ≤ cap
     expect(await discounts.effectiveDiscountPaise(e)).toBe(990_000)
 
-    const r3 = await discounts.addDiscount(actor, e, { head: 'overall', amountPaise: 20_000, remark: 'push over' })
+    const r3 = await discounts.addDiscount(bm, e, { head: 'overall', amountPaise: 20_000, remark: 'push over' })
     expect(r3.deferred).toBe(true) // combined 10.1% > cap
     // The over-cap discount does NOT count until approved.
     expect(await discounts.effectiveDiscountPaise(e)).toBe(990_000)
@@ -83,7 +87,7 @@ d('discount cap (BR-D2)', () => {
 
   it('counts an over-cap discount once its exception is approved', async () => {
     const e = await makeEvent({ proposalPaise: 10_000_000 })
-    const over = await discounts.addDiscount(actor, e, { head: 'overall', amountPaise: 1_500_000, remark: '15%' })
+    const over = await discounts.addDiscount(bm, e, { head: 'overall', amountPaise: 1_500_000, remark: '15%' })
     expect(over.deferred).toBe(true)
     expect(await discounts.effectiveDiscountPaise(e)).toBe(0)
 
@@ -92,11 +96,27 @@ d('discount cap (BR-D2)', () => {
     expect(await discounts.effectiveDiscountPaise(e)).toBe(1_500_000)
   })
 
+  it('does not bind the Higher Authority, on any screen (FR-11.3a, 3 Aug 2026)', async () => {
+    // The cap's whole job is to route a large discount TO him. Raised by him it would queue for
+    // his own approval, so his row is written with no exception and counts at once — the same
+    // answer he gets from the approvals screen (lib/gm-authority.ts), which is the point.
+    const e = await makeEvent({ proposalPaise: 10_000_000 }) // cap = 1,000,000 paise
+    const big = await discounts.addDiscount(ha, e, { head: 'overall', amountPaise: 3_000_000, remark: 'Owner’s call — 30%' })
+    expect(big.deferred).toBe(false)
+    expect(await discounts.effectiveDiscountPaise(e)).toBe(3_000_000)
+    const excs = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, e))
+    expect(excs).toHaveLength(0) // nothing was sent to a queue only he can clear
+
+    // The same discount from a Booking Manager still escalates — the cap is not switched off.
+    const e2 = await makeEvent({ proposalPaise: 10_000_000 })
+    expect((await discounts.addDiscount(bm, e2, { head: 'overall', amountPaise: 3_000_000, remark: '30%' })).deferred).toBe(true)
+  })
+
   it('requires a remark; room is a valid head now (client, 25 Jul 2026)', async () => {
     const e = await makeEvent()
-    await expect(discounts.addDiscount(actor, e, { head: 'venue', amountPaise: 1000, remark: '' })).rejects.toThrow(/remark/)
+    await expect(discounts.addDiscount(bm, e, { head: 'venue', amountPaise: 1000, remark: '' })).rejects.toThrow(/remark/)
     // Rooms are bulk-booked now, so a room discount is a normal head (it used to be refused).
-    const r = await discounts.addDiscount(actor, e, { head: 'room', amountPaise: 1000, remark: 'room disc' })
+    const r = await discounts.addDiscount(bm, e, { head: 'room', amountPaise: 1000, remark: 'room disc' })
     expect(r.deferred).toBe(false)
   })
 
@@ -105,7 +125,7 @@ d('discount cap (BR-D2)', () => {
     const [venue] = await db.select({ id: schema.venues.id }).from(schema.venues).limit(1)
     await db.insert(schema.subEvents).values({ eventId: e, name: 'Fn', eventDate: '2026-09-01', startTime: '11:00', endTime: '15:00', venueId: venue!.id, pax: 100, venueRatePaise: 2_000_000 })
     // 20% of the ₹20,000 venue subtotal = ₹4,000.
-    const r = await discounts.addDiscount(actor, e, { head: 'venue', percentBp: 2000, remark: '20% venue' })
+    const r = await discounts.addDiscount(bm, e, { head: 'venue', percentBp: 2000, remark: '20% venue' })
     expect(r.deferred).toBe(false)
     expect(await discounts.effectiveDiscountPaise(e)).toBe(400_000)
     // Live: raise the venue rate and the same 20% now takes more (₹30,000 → ₹6,000).

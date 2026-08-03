@@ -4,6 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
+import { AUTHORITY_ROLES } from '@/lib/post-confirm'
 import { getIntSettings } from '@/lib/settings'
 
 /**
@@ -17,6 +18,12 @@ import { getIntSettings } from '@/lib/settings'
  * (venue + food + rooms, pre-tax — amends BR-D2, which used to measure venue+food only). A
  * discount that would cross the cap is recorded but held behind a `discount_over_cap` exception
  * until the Higher Authority approves it (FR-11.3).
+ *
+ * The cap binds the Booking Manager, who gives most discounts. It does not bind the Higher
+ * Authority (FR-11.3a), and as of 3 Aug 2026 that is true of every screen he can reach — not
+ * only the approvals queue, which is where `lib/gm-authority.ts` had it. Sending his own
+ * discount to a queue only he can clear is a round trip with no one at the other end, and it
+ * changed answer depending on which page he happened to be on.
  */
 
 const LOCKED_STATES = new Set(['locked', 'billed', 'closed'])
@@ -148,7 +155,11 @@ export async function addDiscount(
     const capBasePaise = ev.proposalTotalPaise > 0 ? ev.proposalTotalPaise + subs.room : subs.overall
     const capPaise = percentOfPaise(capBasePaise, discount_cap_pct)
     const combinedPaise = existing + thisAmount
-    const overCap = combinedPaise > capPaise
+    // The cap routes a large discount TO the Authority; it has nothing to do when he is the one
+    // giving it (FR-11.3a). His row carries no exception, which is what `effectiveDiscountPaise`
+    // reads as in force. The remark is still mandatory, and the audit row says who waived it.
+    const uncapped = AUTHORITY_ROLES.has(actor.roleName)
+    const overCap = !uncapped && combinedPaise > capPaise
 
     let exceptionId: string | null = null
     if (overCap) {
@@ -193,7 +204,9 @@ export async function addDiscount(
       eventId,
       action: 'insert',
       field: input.head,
-      newValue: `${hasPct ? `${input.percentBp! / 100}%` : `₹${thisAmount / 100}`}${overCap ? ' (over cap — pending)' : ''}`,
+      newValue: `${hasPct ? `${input.percentBp! / 100}%` : `₹${thisAmount / 100}`}${
+        overCap ? ' (over cap — pending)' : uncapped && combinedPaise > capPaise ? ' (Authority, uncapped)' : ''
+      }`,
     })
 
     if (overCap) {

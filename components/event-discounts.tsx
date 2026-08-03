@@ -55,6 +55,9 @@ const HEADS = [
 export function EventDiscounts({ eventId, editable, onChanged }: { eventId: string; editable: boolean; onChanged?: () => void | Promise<void> }) {
   const [discs, setDiscs] = useState<DiscountRow[]>([])
   const [bases, setBases] = useState<Bases | null>(null)
+  // The cap the server will actually apply, and whether it binds this user — read from the
+  // server rather than assumed, so the Authority is not told his own discount needs his approval.
+  const [cap, setCap] = useState<{ pct: number; uncapped: boolean }>({ pct: 10, uncapped: false })
   const [head, setHead] = useState('venue')
   const [percent, setPercent] = useState('')
   const [remark, setRemark] = useState('')
@@ -62,9 +65,10 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
 
   const load = useCallback(async () => {
     try {
-      const d = await api<{ discounts: DiscountRow[]; bases: Bases }>(`/events/${eventId}/discounts`)
+      const d = await api<{ discounts: DiscountRow[]; bases: Bases; capPct: number; uncapped: boolean }>(`/events/${eventId}/discounts`)
       setDiscs(d.discounts)
       setBases(d.bases)
+      setCap({ pct: d.capPct, uncapped: d.uncapped })
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load discounts')
     }
@@ -93,7 +97,7 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
         body: JSON.stringify({ head, percent_bp: Math.round(pct * 100), remark: remark.trim() }),
       })
       toast[res.deferred ? 'info' : 'success'](
-        res.deferred ? 'Over the 10% cap — sent to the GM for approval.' : 'Discount applied',
+        res.deferred ? `Over the ${cap.pct}% cap — sent to the GM for approval.` : 'Discount applied',
       )
       setPercent('')
       setRemark('')
@@ -121,7 +125,9 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
       <h3 className="mb-2 text-sm font-medium">Discounts</h3>
       {discs.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          None. The combined discount stays ≤ 10% of the total bill (over that needs GM approval).
+          {cap.uncapped
+            ? 'None. Your discounts take effect at once — the cap does not apply to you.'
+            : `None. The combined discount stays ≤ ${cap.pct}% of the total bill (over that needs GM approval).`}
         </p>
       ) : (
         <ul className="mb-2 space-y-1 text-sm">
@@ -165,7 +171,10 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
             <Label className="text-xs">Percent %</Label>
             <Input inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} placeholder="e.g. 20" />
           </div>
-          <div className="grow space-y-1">
+          {/* basis-48, not bare grow: on a phone the head and percent already eat the row, and a
+              growing-from-zero remark became a sliver a few characters wide. With a basis it
+              wraps onto its own full-width line instead. */}
+          <div className="grow basis-48 space-y-1">
             <Label className="text-xs">Remark (required)</Label>
             <Input value={remark} onChange={(e) => setRemark(e.target.value)} />
           </div>
