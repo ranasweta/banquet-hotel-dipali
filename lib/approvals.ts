@@ -116,7 +116,8 @@ export function summarizeException(kind: string, payload: Record<string, unknown
       // The bulk shape carries `lines`, not the room-by-room `allocations` the old
       // allocation path wrote; `existingCount` never existed on it and rendered as NaN.
       const lines = (payload.lines ?? []) as { roomType: string; count: number }[]
-      const detail = lines.map((l) => `${l.count} × ${l.roomType}`).join(', ')
+      // `presidential_suite` is a column value, not a phrase to show a manager.
+      const detail = lines.map((l) => `${l.count} × ${l.roomType.replace(/_/g, ' ')}`).join(', ')
       return `${payload.requestedCount} room(s) — over the ${payload.threshold} threshold${detail ? ` (${detail})` : ''}`
     }
     case 'discount_over_cap':
