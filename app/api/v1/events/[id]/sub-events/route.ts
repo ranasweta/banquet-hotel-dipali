@@ -4,12 +4,20 @@ import { z } from 'zod'
 import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
-import { badRequest, conflict, notFound, ok, route } from '@/lib/api'
+import { conflict, notFound, ok, route } from '@/lib/api'
 import { addConfirmedFunction, canAuthorityEditConfirmed } from '@/lib/post-confirm'
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
+/**
+ * Pax is whatever the Booking Manager says it is (client, 3 Aug 2026 — withdraws FR-2.6).
+ * The venue's `capacity_min`/`capacity_max` no longer gate the number and no override note is
+ * demanded: the hotel seats guests across a lawn and its adjoining hall in ways the stored
+ * range does not describe, and a manager taking a booking should not have to argue with a
+ * figure that was, for half the venues, invented in the first place (SEED_ASSUMPTIONS A3/A4).
+ * `max(100000)` stays as a typo guard — it is not a venue capacity.
+ */
 export const subEventSchema = z
   .object({
     name: z.string().trim().min(1).max(80),
@@ -27,39 +35,6 @@ export const subEventSchema = z
   .refine((s) => s.start_time !== s.end_time, { message: 'start and end time cannot be equal' })
 
 /**
- * Soft capacity check (FR-2.6): pax outside the venue's range is allowed only with an
- * explicit override note. For a bundle, the combined range is used.
- */
-export async function assertCapacity(input: z.infer<typeof subEventSchema>): Promise<void> {
-  let min = 0
-  let max = Number.MAX_SAFE_INTEGER
-  if (input.venue_id) {
-    const [v] = await db
-      .select({ min: schema.venues.capacityMin, max: schema.venues.capacityMax })
-      .from(schema.venues)
-      .where(eq(schema.venues.id, input.venue_id))
-      .limit(1)
-    if (!v) throw badRequest('Unknown venue')
-    min = v.min
-    max = v.max
-  } else if (input.bundle_id) {
-    const rows = await db
-      .select({ min: schema.venues.capacityMin, max: schema.venues.capacityMax })
-      .from(schema.venueBundleMembers)
-      .innerJoin(schema.venues, eq(schema.venues.id, schema.venueBundleMembers.venueId))
-      .where(eq(schema.venueBundleMembers.bundleId, input.bundle_id))
-    if (rows.length === 0) throw badRequest('Unknown bundle')
-    min = Math.min(...rows.map((r) => r.min))
-    max = rows.reduce((sum, r) => sum + r.max, 0)
-  }
-  if ((input.pax < min || input.pax > max) && !input.pax_override_note?.trim()) {
-    throw badRequest(
-      `Pax ${input.pax} is outside this venue's range (${min}–${max}). Add an override note to proceed.`,
-    )
-  }
-}
-
-/**
  * POST /events/:id/sub-events — add a function. Enquiries: anyone with bookings create_edit.
  * A confirmed booking: Higher Authority / Auditor only — they go through addConfirmedFunction,
  * which also blocks the venue window and recomputes totals (lib/post-confirm). Everyone else on
@@ -69,7 +44,6 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   const actor = await requirePermission('bookings', 'create_edit')
   const { id } = await ctx.params
   const input = subEventSchema.parse(await req.json())
-  await assertCapacity(input)
 
   const [event] = await db
     .select({ status: schema.events.status })

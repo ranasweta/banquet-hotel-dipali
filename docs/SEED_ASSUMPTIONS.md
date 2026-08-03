@@ -78,7 +78,10 @@ together or for each hall? (c) Can either hall be booked standalone, and at what
 
 ### A4. Saffron Hall & Lawn's capacity — `db/masters.ts`
 PRD §3.1 prints "—". Seeded 100-300, **invented outright**. `venues.capacity_min/max`
-are NOT NULL so some number had to go in. Affects FR-2.6 pax validation.
+are NOT NULL so some number had to go in. *Resolved 3 Aug 2026:* the client withdrew FR-2.6,
+so these invented numbers no longer gate anything — pax is whatever the Booking Manager enters.
+The columns remain descriptive only; the answer to A3/A4 is still worth having, but nothing is
+blocked while it is missing.
 
 ### A5. Gulmohar Lawn / Middle Lawn individual capacities — `db/masters.ts`
 PRD §3.2 gives only the **combined** 500-1,000. The two must exist as separate venues
