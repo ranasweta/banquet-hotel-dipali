@@ -2,6 +2,7 @@ import 'server-only'
 import { eq, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { crossesMidnight, nextDay, occupancyParts } from '@/lib/occupancy'
+import { advanceShortfallByEvent } from '@/lib/payment-schedule'
 
 /**
  * Venue availability under the time-overlap model (BR-C1, amended). A venue is free for a
@@ -142,12 +143,28 @@ export type CalendarBooking = {
   status: string
   starts: string // ISO 'YYYY-MM-DDTHH:MM'
   ends: string
+  /**
+   * Still owed on the 25% advance — 0 for a booking paid up. Above zero the board marks the
+   * date **Downpayment due**: the dates are genuinely held, but only partly paid for.
+   */
+  advanceShortfallPaise: number
+  /** The guest's primary number, carried ONLY for a short booking — see below. */
+  contactPhone: string | null
 }
 
 /**
  * Confirmed-and-beyond venue bookings overlapping [from, to] (FR-2.5: the board carries
  * locked-in deals only — enquiries never appear). Cross-midnight bookings surface on both
  * days they touch, letting the UI show a "carryover" tail on the following morning.
+ *
+ * A booking confirmed on a part payment holds its venue like any other (lib/confirm.ts) but
+ * carries a shortfall, and the board is where that has to show: when a second guest wants the
+ * same date, the Booking Manager sees the marker, and the guest's number is right there so the
+ * call to the GM can happen with the details in hand (client's lead, 4 Aug 2026).
+ *
+ * The number rides along only for bookings that are actually short. Everyone with
+ * `calendar: view` can open this board — the Banquet Manager among them — and there is no
+ * reason for a paid-up guest's phone number to travel to a screen that has no use for it.
  */
 export async function getCalendarBookings(from: string, to: string): Promise<CalendarBooking[]> {
   // `to` is inclusive of the whole day, so overlap against [from 00:00, to+1 00:00).
@@ -175,7 +192,30 @@ export async function getCalendarBookings(from: string, to: string): Promise<Cal
       AND vb.occupancy && tsrange(${from}::date::timestamp, ${toExclusive}::date::timestamp, '[)')
     ORDER BY p.name, v.name, lower(vb.occupancy)
   `)) as unknown as CalendarBooking[]
-  return rows
+
+  const short = await advanceShortfallByEvent([...new Set(rows.map((r) => r.eventId))])
+  const phones = await primaryContacts([...short.keys()])
+  return rows.map((r) => ({
+    ...r,
+    advanceShortfallPaise: short.get(r.eventId) ?? 0,
+    contactPhone: phones.get(r.eventId) ?? null,
+  }))
+}
+
+/** One number per event — the contact labelled primary where there is one. */
+async function primaryContacts(eventIds: string[]): Promise<Map<string, string>> {
+  if (eventIds.length === 0) return new Map()
+  const ids = sql.join(
+    eventIds.map((id) => sql`${id}::uuid`),
+    sql`, `,
+  )
+  const rows = (await db.execute(sql`
+    SELECT DISTINCT ON (c.event_id) c.event_id AS "eventId", c.phone
+    FROM event_contacts c
+    WHERE c.event_id IN (${ids})
+    ORDER BY c.event_id, (c.label = 'primary') DESC NULLS LAST, c.phone
+  `)) as unknown as { eventId: string; phone: string }[]
+  return new Map(rows.map((r) => [r.eventId, r.phone]))
 }
 
 export type VenueAvailability = {

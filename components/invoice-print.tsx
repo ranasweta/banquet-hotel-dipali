@@ -290,12 +290,17 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                       </div>
                     </div>
                     <div className="gt">
-                      <div className="gl2">Room tax @ 5%</div>
+                      <div className="gl2">GST 5% · rooms</div>
                       <div className="gv2">{formatPaise(totals.roomsTaxPaise)}</div>
-                      <div className="gs">Rooms are the only taxed head</div>
+                      <div className="gs">Included in the amount payable</div>
+                    </div>
+                    <div className="gt">
+                      <div className="gl2">GST 18%</div>
+                      <div className="gv2">{formatPaise(totals.shownGstPaise)}</div>
+                      <div className="gs">Shown, not collected</div>
                     </div>
                     <div className="gt hi">
-                      <div className="gl2">Estimated Total</div>
+                      <div className="gl2">Amount Payable</div>
                       <div className="gv2">{formatPaise(totals.totalPaise)}</div>
                       <div className="gs">Advance 25% · {formatPaise(totals.advancePaise)}</div>
                     </div>
@@ -457,17 +462,35 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         </div>
                         <div className="sline tax">
                           <div className="l">
-                            Tax — 5% on rooms <small>on {formatPaise(totals.roomsPaise)}</small>
+                            GST 5% — rooms <small>on {formatPaise(totals.roomsPaise)}</small>
                           </div>
                           <div className="v">+ {formatPaise(totals.roomsTaxPaise)}</div>
                         </div>
+                        <div className="sline tax">
+                          <div className="l">
+                            GST 18% <small>venue, food, add-ons &amp; extras</small>
+                          </div>
+                          <div className="v">+ {formatPaise(totals.shownGstPaise)}</div>
+                        </div>
                       </div>
                       <div className="trow">
-                        <div className="tl">Estimated Total</div>
+                        <div className="tl">Total</div>
+                        <div className="tv">{formatPaise(totals.displayTotalPaise)}</div>
+                      </div>
+                      {/* Two totals, and the smaller one is the one that is collected. The 18%
+                          is shown on this document and is not charged (client, 4 Aug 2026), so
+                          a single headline figure would have the guest — and our own counter —
+                          settling against a number nobody is asking for. */}
+                      <div className="trow pay">
+                        <div className="tl">Amount Payable</div>
                         <div className="tv">{formatPaise(totals.totalPaise)}</div>
                       </div>
                       <div className="words">
                         Rupees {words.rupees} and {words.paise} Paise Only.
+                        <span className="wnote">
+                          GST 18% is shown above for your records and is not collected. All
+                          instalments below are measured against the amount payable.
+                        </span>
                       </div>
                       <div className="adv">
                         <div className="adv-box hi">
@@ -475,8 +498,18 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                           <div className="av">{formatPaise(totals.advancePaise)}</div>
                         </div>
                         <div className="adv-box">
-                          <div className="al">Balance · 30 days before event</div>
-                          <div className="av">{formatPaise(totals.balancePaise)}</div>
+                          {/* Weddings top up to 50% at D-30 rather than clearing the whole
+                              balance (client, 4 Aug 2026); everything else settles at billing. */}
+                          <div className="al">
+                            {event.isWedding
+                              ? 'Cumulative 50% · 30 days before'
+                              : 'Balance · settled at billing'}
+                          </div>
+                          <div className="av">
+                            {formatPaise(
+                              event.isWedding ? totals.weddingMilestonePaise : totals.balancePaise,
+                            )}
+                          </div>
                         </div>
                         {totals.advancesReceivedPaise > 0 && (
                           <>
@@ -495,7 +528,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                   </div>
 
                   {/* ══════════ PAYMENT ══════════ */}
-                  <PillRow title="Payment" tag="Advance base includes rooms & room tax" />
+                  <PillRow title="Payment" tag="On the amount payable · rooms & 5% included" />
 
                   <div className="pay avoid">
                     <div className="pstep">
@@ -503,17 +536,36 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                       <div className="pb">
                         <div className="pct">25%</div>
                         <div className="pamt">{formatPaise(totals.advancePaise)}</div>
-                        <div className="pwhen">On receipt, venue windows are blocked and the booking moves to Confirmed.</div>
+                        <div className="pwhen">
+                          On receipt, venue windows are blocked and the booking moves to Confirmed.
+                          A part payment is accepted and holds the dates, with the remainder of the
+                          25% carried as due.
+                        </div>
                       </div>
                     </div>
-                    <div className="pstep">
-                      <div className="ph">Balance · 30 days before event</div>
-                      <div className="pb">
-                        <div className="pct">75%</div>
-                        <div className="pamt">{formatPaise(totals.balancePaise)}</div>
-                        <div className="pwhen">Payable in full at least 30 days before the event. Cheques subject to realisation.</div>
+                    {event.isWedding ? (
+                      <div className="pstep">
+                        <div className="ph">50% · 30 days before</div>
+                        <div className="pb">
+                          <div className="pct">50%</div>
+                          <div className="pamt">{formatPaise(totals.weddingMilestonePaise)}</div>
+                          <div className="pwhen">
+                            Total received to reach half the amount payable at least 30 days before
+                            the first function. More may be paid at any time. Cheques subject to
+                            realisation.
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="pstep">
+                        <div className="ph">Balance · settled at billing</div>
+                        <div className="pb">
+                          <div className="pct">75%</div>
+                          <div className="pamt">{formatPaise(totals.balancePaise)}</div>
+                          <div className="pwhen">Settled against Draft 2 after the event. Cheques subject to realisation.</div>
+                        </div>
+                      </div>
+                    )}
                     <div className="pstep">
                       <div className="ph">Extras · before checkout</div>
                       <div className="pb">
@@ -579,7 +631,9 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                           </li>
                         )}
                         <li>
-                          <b>Room tax</b> — 5%, on the accommodation head only.
+                          <b>GST</b> — 5% on accommodation, included in the amount payable. The
+                          18% shown against venue, food and add-ons is stated for your records
+                          and is not collected.
                         </li>
                         {functions.flatMap((f) => f.addons.filter((a) => a.ratePaise === 0)).length > 0 && (
                           <li>
@@ -1036,7 +1090,8 @@ const CSS = `
 .pd .kv dd{color:var(--ink-2); font-weight:500}
 
 /* ══════════ GLANCE ══════════ */
-.pd .glance{display:grid; grid-template-columns:repeat(4,1fr); gap:3.5mm}
+/* Five tiles since 4 Aug 2026: the two GSTs behave differently and cannot share one. */
+.pd .glance{display:grid; grid-template-columns:repeat(5,1fr); gap:3mm}
 .pd .gt{border:1px solid var(--rule-soft); border-radius:14px; padding:4mm 4.2mm;
   background:linear-gradient(180deg,#fff,var(--ivory))}
 .pd .gt .gl2{font-size:6pt; letter-spacing:.2em; text-transform:uppercase; color:var(--faint);
@@ -1144,8 +1199,15 @@ const CSS = `
 .pd .trow .tl{font-size:7.4pt; letter-spacing:.24em; text-transform:uppercase; font-weight:700;
   color:var(--gold-deep)}
 .pd .trow .tv{font-size:13.5pt; font-weight:700; color:var(--ink); white-space:nowrap}
+/* The collected figure sits under the printed Total and is the emphatic one — it is what the
+   guest actually settles, and the row above it includes tax nobody charges. */
+.pd .trow.pay{margin-top:0; border-top:none;
+  background:linear-gradient(100deg,var(--champagne),#FFFCF4); padding:2.2mm 3.4mm}
+.pd .trow.pay .tv{font-size:15pt; color:var(--gold-deep)}
 .pd .words{margin-top:2.2mm; font-family:var(--serif); font-size:8.8pt; font-style:italic;
   color:var(--soft); line-height:1.3}
+.pd .words .wnote{display:block; font-family:var(--sans); font-style:normal; font-size:7.2pt;
+  color:var(--faint); line-height:1.35; margin-top:1.2mm}
 .pd .adv{margin-top:2.6mm; display:grid; grid-template-columns:1fr 1fr; gap:3.5mm}
 .pd .adv-box{border:1px solid var(--rule-soft); border-radius:11px; padding:2.2mm 3.2mm; background:#fff}
 .pd .adv-box.hi{border-color:var(--gold-lite); background:linear-gradient(160deg,#FEFAF0,var(--champagne))}

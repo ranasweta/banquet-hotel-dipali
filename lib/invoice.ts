@@ -5,21 +5,27 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
 import { effectiveDiscountPaise } from '@/lib/discounts'
 import { transitionEvent } from '@/lib/events'
+import { GST_BP, isCollectedSection, taxOf } from '@/lib/tax'
 
 /**
  * Consolidated invoice (M9, FR-7.3/7.4). Drafted from LOCKED data — venue rate-card
  * snapshots, food (pax × snapshotted per-plate) + add-ons, room allocations (nights × rate),
  * closed maintenance lines — less effective discounts and advances. GST is computed per line.
  *
- * TAX: the client's instruction of 20 Jul 2026 is that **only rooms are taxed, at 5%**.
- * Venue, food and maintenance are zero-rated here — they previously carried placeholder
- * rates of 18%, 5% and 18% pending the hotel's tax consultant (PRD open question 5). This
- * is the hotel's own instruction and CLAUDE.md ranks that above the PRD, but zero GST on
- * banquet food and venue hire is unusual enough to be worth re-confirming before a real
- * guest pays against it — see docs/SEED_ASSUMPTIONS.md §F8.
+ * TAX comes in two kinds now (client's lead, 4 Aug 2026) and they do not behave alike:
+ *
+ *   rooms 5%      printed AND collected. It is inside `taxPaise`, inside `netPaise`, and so
+ *                 inside the balance the guest is chased for.
+ *   everything    printed and collected from nobody — "at the end we are just showing we are
+ *   else 18%      taking 18% gst but we wont be taking it". It lands in `shownTaxPaise`, which
+ *                 enters exactly one figure: `displayTotalPaise`, the "Total" on the document.
+ *
+ * Folding the 18% into `netPaise` would leave `balancePaise` permanently 18% short of zero and
+ * no booking could ever be settled. The split lives in lib/tax.ts so every screen agrees, and
+ * it is by SECTION — rooms collected, all else shown — not by rate.
  *
  * Tax is charged per line on the GROSS line amount and rounded per line, so the sum of the
- * line taxes is the authoritative figure (not 5% of the room subtotal, which can differ by
+ * line taxes is the authoritative figure (not a percentage of a subtotal, which can differ by
  * a paisa). Discounts are shown as a separate deduction, not pro-rated into each line's
  * taxable value — a documented simplification to revisit (D9).
  */
@@ -27,13 +33,20 @@ import { transitionEvent } from '@/lib/events'
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 type Exec = Tx | typeof db
 
-// Basis points. Only rooms are taxed (client, 20 Jul 2026) — see the note above.
-const GST_BP: Record<string, number> = { venue: 0, food: 0, rooms: 500, maintenance: 0, adjustment: 0 }
 // "INV" would put the banned word in front of the guest; the number belongs to the Draft 2
 // document, so it carries that name instead (client: never "invoice", never "final").
 const INVOICE_PREFIX = 'D2-2026-'
 
-const taxOf = (amountPaise: number, bp: number) => Math.round((amountPaise * bp) / 10000)
+/** Splits a set of lines into the tax that is owed and the tax that is merely printed. */
+function splitTax(lines: { section: string; taxPaise: number }[]): { collected: number; shown: number } {
+  let collected = 0
+  let shown = 0
+  for (const l of lines) {
+    if (isCollectedSection(l.section)) collected += l.taxPaise
+    else shown += l.taxPaise
+  }
+  return { collected, shown }
+}
 
 /**
  * The event's LIVE invoice — the one version not yet superseded (migration 0025). Every read
@@ -147,6 +160,15 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
 }
 
 /**
+ * The 18% an event would show if billed today, off the very lines the bill is built from — so
+ * the wizard's payment review, the Draft and the Draft 2 print one figure between them. It is
+ * display only: it enters no threshold and no balance (client's lead, 4 Aug 2026).
+ */
+export async function shownTaxPaise(eventId: string): Promise<number> {
+  return splitTax(await computeBillLines(db, eventId)).shown
+}
+
+/**
  * Every payment against the event, oldest first — the instalment trail. A wedding is
  * frequently settled in pieces over months, and "Received so far: one number" hides who
  * paid what and when. Refunds are included (negative), so the trail always reconciles to
@@ -176,15 +198,15 @@ async function advancesPaise(exec: Exec, eventId: string): Promise<number> {
 
 /** Recomputes and persists the invoice totals from its current lines + discounts + advances. */
 async function recomputeTotals(tx: Tx, invoiceId: string, eventId: string): Promise<void> {
-  const rows = await tx.select({ amountPaise: schema.invoiceLines.amountPaise, taxPaise: schema.invoiceLines.taxPaise }).from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, invoiceId))
+  const rows = await tx.select({ section: schema.invoiceLines.section, amountPaise: schema.invoiceLines.amountPaise, taxPaise: schema.invoiceLines.taxPaise }).from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, invoiceId))
   const gross = rows.reduce((s, r) => s + r.amountPaise, 0)
-  const tax = rows.reduce((s, r) => s + r.taxPaise, 0)
+  const { collected, shown } = splitTax(rows)
   const discount = await effectiveDiscountPaise(eventId, tx)
   const advances = await advancesPaise(tx, eventId)
-  const net = gross - discount + tax
+  const net = gross - discount + collected
   await tx
     .update(schema.invoices)
-    .set({ grossPaise: gross, discountPaise: discount, taxPaise: tax, netPaise: net, advancesPaise: advances, balancePaise: net - advances })
+    .set({ grossPaise: gross, discountPaise: discount, taxPaise: collected, shownTaxPaise: shown, netPaise: net, advancesPaise: advances, balancePaise: net - advances })
     .where(eq(schema.invoices.id, invoiceId))
 }
 
@@ -193,14 +215,14 @@ export async function draftInvoice(tx: Tx, actor: Actor, eventId: string): Promi
   const [tnc] = (await tx.execute(sql`SELECT value FROM settings WHERE key = 'terms_and_conditions'`)) as unknown as { value: string }[]
   const specs = await computeBillLines(tx, eventId)
   const gross = specs.reduce((s, l) => s + l.amountPaise, 0)
-  const tax = specs.reduce((s, l) => s + l.taxPaise, 0)
+  const { collected, shown } = splitTax(specs)
   const discount = await effectiveDiscountPaise(eventId, tx)
   const advances = await advancesPaise(tx, eventId)
-  const net = gross - discount + tax
+  const net = gross - discount + collected
 
   const [inv] = await tx
     .insert(schema.invoices)
-    .values({ eventId, grossPaise: gross, discountPaise: discount, taxPaise: tax, netPaise: net, advancesPaise: advances, balancePaise: net - advances, tncSnapshot: tnc?.value ?? '' })
+    .values({ eventId, grossPaise: gross, discountPaise: discount, taxPaise: collected, shownTaxPaise: shown, netPaise: net, advancesPaise: advances, balancePaise: net - advances, tncSnapshot: tnc?.value ?? '' })
     .returning({ id: schema.invoices.id })
   if (specs.length > 0) {
     await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null })))
@@ -216,7 +238,15 @@ export type InvoiceView = {
    * booking can see which is live and what it grew out of.
    */
   version: number; supersedesNo: string | null
-  grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number; advancesPaise: number; balancePaise: number
+  grossPaise: number; discountPaise: number
+  /** Tax that is COLLECTED — the 5% on rooms. Part of netPaise, and so of the balance. */
+  taxPaise: number
+  /** Tax that is SHOWN and never collected — the 18%. In displayTotalPaise and nothing else. */
+  shownTaxPaise: number
+  netPaise: number
+  /** What the document prints as "Total": the payable amount plus the 18% nobody pays. */
+  displayTotalPaise: number
+  advancesPaise: number; balancePaise: number
   payments: PaymentTrailRow[]
   tncSnapshot: string
   lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number; functionLabel: string | null }[]
@@ -232,7 +262,10 @@ export async function getInvoice(eventId: string): Promise<InvoiceView | null> {
   return {
     id: inv.id, invoiceNo: inv.invoiceNo, finalised: Boolean(inv.finalisedAt),
     version: inv.version, supersedesNo: prior?.invoiceNo ?? null,
-    grossPaise: inv.grossPaise, discountPaise: inv.discountPaise, taxPaise: inv.taxPaise, netPaise: inv.netPaise, advancesPaise: inv.advancesPaise, balancePaise: inv.balancePaise,
+    grossPaise: inv.grossPaise, discountPaise: inv.discountPaise,
+    taxPaise: inv.taxPaise, shownTaxPaise: inv.shownTaxPaise,
+    netPaise: inv.netPaise, displayTotalPaise: inv.netPaise + inv.shownTaxPaise,
+    advancesPaise: inv.advancesPaise, balancePaise: inv.balancePaise,
     payments: await paymentTrail(db, eventId),
     tncSnapshot: inv.tncSnapshot,
     lines: lines.map((l) => ({ id: l.id, section: l.section, description: l.description, functionLabel: l.functionLabel, qty: l.qty, ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
@@ -321,10 +354,10 @@ export async function reissueInvoice(
     .where(sql`invoice_id = ${inv.id} AND section = 'adjustment'`)
 
   const gross = specs.reduce((s, l) => s + l.amountPaise, 0) + adjustments.reduce((s, l) => s + l.amountPaise, 0)
-  const tax = specs.reduce((s, l) => s + l.taxPaise, 0) + adjustments.reduce((s, l) => s + l.taxPaise, 0)
+  const { collected, shown } = splitTax([...specs, ...adjustments])
   const discount = await effectiveDiscountPaise(eventId, tx)
   const advances = await advancesPaise(tx, eventId)
-  const net = gross - discount + tax
+  const net = gross - discount + collected
   const now = new Date().toISOString()
 
   await tx.update(schema.invoices).set({ supersededAt: now }).where(eq(schema.invoices.id, inv.id))
@@ -340,7 +373,8 @@ export async function reissueInvoice(
       reissueReason: reason,
       grossPaise: gross,
       discountPaise: discount,
-      taxPaise: tax,
+      taxPaise: collected,
+      shownTaxPaise: shown,
       netPaise: net,
       advancesPaise: advances,
       balancePaise: net - advances,
@@ -405,10 +439,10 @@ export async function proformaData(eventId: string) {
 
   const specs = await computeBillLines(db, eventId)
   const gross = specs.reduce((s, l) => s + l.amountPaise, 0)
-  const tax = specs.reduce((s, l) => s + l.taxPaise, 0)
+  const { collected, shown } = splitTax(specs)
   const discount = await effectiveDiscountPaise(eventId)
   const advances = await advancesPaise(db, eventId)
-  const net = gross - discount + tax
+  const net = gross - discount + collected
 
   const [tnc] = (await db.execute(sql`SELECT value FROM settings WHERE key = 'terms_and_conditions'`)) as unknown as { value: string }[]
   const contacts = (await db.execute(sql`SELECT phone, label FROM event_contacts WHERE event_id = ${eventId}`)) as unknown as { phone: string; label: string | null }[]
@@ -422,8 +456,10 @@ export async function proformaData(eventId: string) {
     supersedesNo: null,
     grossPaise: gross,
     discountPaise: discount,
-    taxPaise: tax,
+    taxPaise: collected,
+    shownTaxPaise: shown,
     netPaise: net,
+    displayTotalPaise: net + shown,
     advancesPaise: advances,
     payments: await paymentTrail(db, eventId),
     balancePaise: net - advances,

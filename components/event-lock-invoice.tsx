@@ -25,7 +25,12 @@ type Invoice = {
   id: string; invoiceNo: string | null; finalised: boolean
   /** >1 once the Higher Authority has changed a billed booking and it was re-issued. */
   version: number; supersedesNo: string | null
-  grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number; advancesPaise: number; balancePaise: number
+  grossPaise: number; discountPaise: number
+  /** Collected — the 5% on rooms. Inside netPaise. */
+  taxPaise: number
+  /** Shown and never collected — the 18%. Inside displayTotalPaise only. */
+  shownTaxPaise: number
+  netPaise: number; displayTotalPaise: number; advancesPaise: number; balancePaise: number
   lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number }[]
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string }[]
 }
@@ -138,8 +143,17 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
           <dl className="mt-3 ml-auto max-w-xs space-y-1 text-sm">
             <Row label="Sub-total" value={formatPaise(invoice.grossPaise)} />
             {invoice.discountPaise > 0 && <Row label="Less discounts" value={`− ${formatPaise(invoice.discountPaise)}`} />}
-            <Row label="Tax — 5% on rooms only" value={`+ ${formatPaise(invoice.taxPaise)}`} />
+            <Row label="GST 5% — rooms" value={`+ ${formatPaise(invoice.taxPaise)}`} />
+            <Row label="GST 18%" value={`+ ${formatPaise(invoice.shownTaxPaise)}`} />
+            <Row label="Total" value={formatPaise(invoice.displayTotalPaise)} bold />
+            {/* Two totals, deliberately. The 18% is printed and collected from nobody (client,
+                4 Aug 2026), so what the guest settles against is the smaller figure — and a
+                staff member reading one number would collect the wrong one. */}
             <Row label="Amount payable" value={formatPaise(invoice.netPaise)} bold />
+            <p className="pt-0.5 text-right text-[11px] leading-snug text-muted-foreground">
+              GST 18% is shown on the document and is not collected. The balance below is measured
+              against the amount payable.
+            </p>
             <Row label="Received so far" value={`− ${formatPaise(invoice.advancesPaise)}`} />
             {/* The instalments behind that figure. A wedding is often settled in pieces over
                 months, and one total hides who paid what and when (client, 21 Jul 2026). */}

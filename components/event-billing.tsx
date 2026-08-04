@@ -28,12 +28,27 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 
+type Milestone = {
+  key: string
+  label: string
+  percent: number
+  requiredPaise: number
+  paidPaise: number
+  shortfallPaise: number
+  dueOn: string | null
+  overdue: boolean
+}
 type Ledger = {
   proposalTotalPaise: number
+  roomsPaise: number
+  roomsTaxPaise: number
   discountPaise: number
-  netBillPaise: number
+  payablePaise: number
+  shownGstPaise: number
+  displayTotalPaise: number
   paidPaise: number
   balancePaise: number
+  milestones: Milestone[]
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string; note: string | null }[]
 }
 
@@ -55,9 +70,11 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
 
   return (
     <div className="space-y-6">
-      {/* Money summary */}
+      {/* Money summary. "Amount payable" rather than a single total, because the documents
+          carry an 18% GST that is printed and never collected (client's lead, 4 Aug 2026) —
+          the balance below is measured against the payable figure, not the printed one. */}
       <div className="grid gap-3 sm:grid-cols-4">
-        <Stat label="Proposal" value={formatPaise(ledger.proposalTotalPaise)} />
+        <Stat label="Amount payable" value={formatPaise(ledger.payablePaise)} />
         <Stat label="Discounts" value={ledger.discountPaise ? `− ${formatPaise(ledger.discountPaise)}` : '—'} />
         <Stat label="Paid" value={formatPaise(ledger.paidPaise)} />
         <Stat
@@ -66,12 +83,72 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
           accent={ledger.balancePaise > 0 ? 'text-amber-600' : 'text-emerald-600'}
         />
       </div>
+      <p className="-mt-3 text-xs text-muted-foreground">
+        Venue, food &amp; add-ons {formatPaise(ledger.proposalTotalPaise)}
+        {ledger.roomsPaise > 0 && <> · rooms {formatPaise(ledger.roomsPaise)} + 5% {formatPaise(ledger.roomsTaxPaise)}</>}
+        {' · '}GST 18% {formatPaise(ledger.shownGstPaise)} is shown on the proposal and not
+        collected, so the printed total reads {formatPaise(ledger.displayTotalPaise)}.
+      </p>
+
+      <MilestoneSection milestones={ledger.milestones} />
 
       {/* Per-head percentage discounts, where the bill total is read (client, 25 Jul 2026).
           Refreshes the money summary above on change so the balance tracks. */}
       <EventDiscounts eventId={eventId} editable={editable} onChanged={load} />
 
       <PaymentSection eventId={eventId} ledger={ledger} editable={editable} onChanged={load} />
+    </div>
+  )
+}
+
+/**
+ * What is due and when — "so that whenever they reopen the proposal they can get how much is
+ * due" (client's lead, 4 Aug 2026). Each milestone is a floor on the CUMULATIVE total received,
+ * not an instalment of its own, which is why every row shows the same paid figure: a guest who
+ * pays 60% up front has met the wedding's 50% and owes nothing at D-30.
+ *
+ * Nothing here escalates on a timer. A shortfall is chased by the calendar and a phone call to
+ * the GM, who is the one who can release the dates.
+ */
+function MilestoneSection({ milestones }: { milestones: Milestone[] }) {
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-medium">What is due</h3>
+      <div className="overflow-x-auto rounded-lg border">
+        <Table>
+          <TableHeader><TableRow>
+            <TableHead>Milestone</TableHead><TableHead>Due</TableHead>
+            <TableHead className="text-right">Required</TableHead>
+            <TableHead className="text-right">Received</TableHead>
+            <TableHead className="text-right">Short by</TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {milestones.map((m) => (
+              <TableRow key={m.key}>
+                <TableCell>
+                  {m.label} <span className="text-muted-foreground">· {m.percent}%</span>
+                </TableCell>
+                <TableCell className="tabular-nums text-muted-foreground">
+                  {m.dueOn ?? (m.key === 'advance' ? 'On confirming' : 'At billing')}
+                  {/* Overdue is stated in words as well as colour — this row is the one a
+                      manager acts on. */}
+                  {m.overdue && <span className="ml-1 font-medium text-rose-600 dark:text-rose-400">overdue</span>}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{formatPaise(m.requiredPaise)}</TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">{formatPaise(m.paidPaise)}</TableCell>
+                <TableCell
+                  className={cn(
+                    'text-right tabular-nums',
+                    m.shortfallPaise > 0 ? (m.overdue ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600') : 'text-emerald-600',
+                  )}
+                >
+                  {m.shortfallPaise > 0 ? formatPaise(m.shortfallPaise) : 'met'}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   )
 }

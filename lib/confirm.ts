@@ -5,9 +5,11 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
 import { occupancyParts } from '@/lib/occupancy'
-import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal, roomEstimatePaise } from '@/lib/pricing'
-import { effectiveDiscountPaise } from '@/lib/discounts'
+import { loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
+import { discountCap } from '@/lib/discounts'
 import { transitionEvent } from '@/lib/events'
+import { ADVANCE_PCT, payableBreakdown } from '@/lib/payment-schedule'
+import { AUTHORITY_ROLES } from '@/lib/post-confirm'
 
 export type AdvancePayment = {
   amountPaise: number
@@ -42,18 +44,36 @@ function pgCode(err: unknown): string | undefined {
  *   2. checks the guest name, the contact count for the event type (3 for weddings),
  *      and at least one sub-event (Aadhaar is optional now — added later from the booking page);
  *   3. prices the proposal from rate cards, refusing if any venue has no rate (BR-R1);
- *   4. records the advance (if supplied) and requires recorded advance ≥ 25%;
+ *   4. records the advance and requires SOME money against a receipt — see below;
  *   5. inserts one venue_bookings row per venue window — the GiST exclusion makes a slot
  *      clash impossible, so exactly one of two racing confirms wins and the other 409s;
  *   6. snapshots venue rates, sets the proposal total and dates, and moves the event to
  *      confirmed.
  * Any failure rolls the whole thing back — no partial confirmation.
+ *
+ * THE 25% IS A DEBT NOW, NOT A GATE (client's lead, 4 Aug 2026). A guest who brings ₹1 lakh
+ * against a ₹3 lakh advance used to be turned away with a 402 and the dates left open for
+ * anyone. The hotel's answer is to take the money and hold the dates: the booking confirms,
+ * blocks its venues like any other, and carries the shortfall as **Downpayment due** — on the
+ * calendar, on the booking, and in the audit trail. What is still refused is a hold for
+ * nothing: an advance of zero, or one with no receipt number, blocks no dates at all.
+ *
+ * The shortfall is deliberately given no timer. Chasing it is a phone call, not a cron: when a
+ * second guest wants the same venue, the Booking Manager sees the marker on the calendar and
+ * rings the GM, who has the authority to cancel (lib/events.ts, cancelEvent).
  */
 export async function confirmEvent(
   actor: Actor,
   eventId: string,
   advance?: AdvancePayment,
-): Promise<{ id: string; code: string; proposalTotalPaise: number }> {
+): Promise<{
+  id: string
+  code: string
+  proposalTotalPaise: number
+  /** Still owed on the 25%. Zero when the advance was paid in full; the caller says so. */
+  advanceShortfallPaise: number
+  advanceRequiredPaise: number
+}> {
   try {
     return await db.transaction(async (tx) => {
       // 1. Lock the event row so a double confirm serialises.
@@ -108,14 +128,22 @@ export async function confirmEvent(
           `No rate is defined for: ${names}. An Authority-approved manual rate is needed before confirming (BR-R1).`,
         )
       }
-      const extras = await foodAndAddonTotal(eventId, tx)
-      const proposalTotal = pricing.totalPaise + extras.foodPaise + extras.addonPaise
-      // Rooms count toward the advance (client, 20 Jul 2026) but stay OUT of
-      // proposal_total_paise. The 25% is on the DISCOUNTED total (client, 25 Jul 2026): a
-      // discount given at the Payment review lowers what a quarter comes to.
-      const roomEst = await roomEstimatePaise(eventId, tx)
-      const discount = await effectiveDiscountPaise(eventId, tx)
-      const advanceBase = Math.max(0, proposalTotal + roomEst.roomsPaise + roomEst.roomsTaxPaise - discount)
+
+      // 3a. A fixed-rupee discount cannot shrink with the bill the way a percentage did, so a
+      //     function removed after one was given can push the combined total over the cap with
+      //     nothing noticing. Confirm is the last gate before the money is committed, so the
+      //     test `addDiscount` applies at entry runs once more here — the same `discountCap`,
+      //     never a second opinion. It does not bind the Higher Authority, on this screen as
+      //     on every other (FR-11.3a).
+      if (!AUTHORITY_ROLES.has(actor.roleName)) {
+        const cap = await discountCap(eventId, tx)
+        if (cap.usedPaise > cap.capPaise) {
+          const rupees = (n: number) => `₹${(n / 100).toLocaleString('en-IN')}`
+          throw badRequest(
+            `The combined discount is now ${rupees(cap.usedPaise)}, over the ${cap.capPct}% cap of ${rupees(cap.capPaise)} — the bill has changed since it was given. Reduce it, or ask the Higher Authority (BR-D2).`,
+          )
+        }
+      }
 
       // 3b. BR-L2: 35+ rooms need the Authority first. Rooms are booked in bulk on the
       //     proposal now, so this is the gate that matters — confirm is the moment those
@@ -130,7 +158,7 @@ export async function confirmEvent(
         )
       }
 
-      // 4. Record the advance, then require recorded advance ≥ 25% of the proposal.
+      // 4. Record the advance, then require that SOME of it arrived.
       if (advance) {
         try {
           await tx.insert(schema.payments).values({
@@ -157,21 +185,43 @@ export async function confirmEvent(
         })
       }
 
-      const [{ paid }] = (await tx.execute(sql`
-        SELECT COALESCE(sum(amount_paise), 0)::bigint AS paid
-        FROM payments WHERE event_id = ${eventId} AND kind = 'advance_block'
-      `)) as unknown as { paid: number }[]
-      const required = percentOfPaise(advanceBase, 25)
-      if (paid < required) {
-        const rupees = (n: number) => `₹${(n / 100).toLocaleString('en-IN')}`
-        const roomsPart = advanceBase > proposalTotal
-          ? ` (venue, food and add-ons ${rupees(proposalTotal)} plus rooms ${rupees(roomEst.roomsPaise + roomEst.roomsTaxPaise)} including 5% tax)`
-          : ''
+      // The payable amount and everything received against it, from the one module that owns
+      // that arithmetic. The 18% GST is not in it: it is printed on the document and collected
+      // from nobody, so it can play no part in what a quarter comes to (client's lead, 4 Aug
+      // 2026). Rooms and their 5% ARE in it (client, 20 Jul 2026).
+      const bill = await payableBreakdown(eventId, tx)
+      const proposalTotal = bill.proposalPaise
+      const required = percentOfPaise(bill.payablePaise, ADVANCE_PCT)
+      const paid = bill.paidPaise
+      const rupees = (n: number) => `₹${(n / 100).toLocaleString('en-IN')}`
+
+      // Nothing at all still blocks nothing at all. A date is held against money, and the
+      // receipt number is how the hotel proves it arrived (BR-P1, FR-11.4).
+      if (paid <= 0) {
         throw new ApiError(
           402,
           'advance_required',
-          `A 25% advance is required to block the dates: ${rupees(required)} on a total of ${rupees(advanceBase)}${roomsPart}. Recorded so far: ${rupees(paid)}.`,
+          `An advance must be recorded to block the dates. The full ${ADVANCE_PCT}% comes to ${rupees(required)} on a payable total of ${rupees(bill.payablePaise)}${
+            bill.roomsPaise > 0
+              ? ` (venue, food and add-ons ${rupees(proposalTotal)} plus rooms ${rupees(bill.roomsPaise + bill.roomsTaxPaise)} including 5% GST)`
+              : ''
+          }; a part payment is accepted and the rest is carried as due.`,
         )
+      }
+
+      // Short is allowed and is not an error — but it is a fact worth being able to point at
+      // later, so it goes in the audit trail beside the payment that caused it.
+      const advanceShortfallPaise = Math.max(0, required - paid)
+      if (advanceShortfallPaise > 0) {
+        await audit(tx, actor, {
+          entity: 'events',
+          entityId: eventId,
+          eventId,
+          action: 'update',
+          field: 'advance_shortfall',
+          oldValue: rupees(required),
+          newValue: `${rupees(paid)} received — ${rupees(advanceShortfallPaise)} still due`,
+        })
       }
 
       // 5. Block every venue window atomically. The exclusion constraint decides races.
@@ -231,7 +281,13 @@ export async function confirmEvent(
 
       await transitionEvent(tx, eventId, 'confirmed', actor)
 
-      return { id: event.id, code: event.code, proposalTotalPaise: proposalTotal }
+      return {
+        id: event.id,
+        code: event.code,
+        proposalTotalPaise: proposalTotal,
+        advanceShortfallPaise,
+        advanceRequiredPaise: required,
+      }
     })
   } catch (err) {
     if (err instanceof ApiError) throw err

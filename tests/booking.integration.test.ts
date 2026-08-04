@@ -45,12 +45,31 @@ type EnquiryOpts = {
   docs?: boolean
 }
 
+/** `date` shifted by whole days, staying in YYYY-MM-DD. UTC so a timezone cannot shift it. */
+function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
 async function makeEnquiry(opts: EnquiryOpts = {}): Promise<string> {
   const { eventType = 'wedding', contacts = 3, venueName = 'Crystal', date = '2026-09-01', start = '11:00', end = '15:00', docs = true } = opts
   const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
   const [event] = await db
     .insert(schema.events)
-    .values({ code, guestName: `${venueName} Party`, eventType, createdBy: actor.id })
+    .values({
+      code,
+      guestName: `${venueName} Party`,
+      eventType,
+      createdBy: actor.id,
+      // The declared run (planned_from/to, 22 Jul 2026). This fixture predates it and relied on
+      // the fallback — the functions' own span — which made the run a single day and capped
+      // check-out at the next morning, so the two-night room line below could never be saved.
+      // A run of two days with one function on the first is exactly what the rule allows: a
+      // guest may stay the length of the event even where nothing is scheduled every day.
+      plannedFrom: date,
+      plannedTo: addDays(date, 1),
+    })
     .returning({ id: schema.events.id })
   const eventId = event!.id
 
@@ -145,9 +164,33 @@ d('confirm gates', () => {
     expect(ev!.status).toBe('confirmed')
   })
 
-  it('refuses confirm when the advance is below 25% (402)', async () => {
+  it('takes a part advance, holds the dates, and carries the rest as due (4 Aug 2026)', async () => {
+    // BR-P1 used to 402 here and leave the dates open to anyone. The hotel's answer: take the
+    // money, hold the venue, show the debt. "we cant let them go."
     const id = await makeEnquiry()
-    await expect(confirmEvent(actor, id, advance(1_000_000))).rejects.toMatchObject({ status: 402 })
+    const res = await confirmEvent(actor, id, advance(1_000_000))
+    expect(res.advanceRequiredPaise).toBe(3_775_000) // 25% of 1,51,00,000
+    expect(res.advanceShortfallPaise).toBe(2_775_000)
+
+    // The hold is real — the GiST exclusion protects this slot exactly as for a paid booking.
+    const bookings = await db.select({ id: schema.venueBookings.id }).from(schema.venueBookings).where(eq(schema.venueBookings.eventId, id))
+    expect(bookings).toHaveLength(1)
+
+    // And it is visible where a manager pricing a competing enquiry will be looking.
+    const { advanceShortfallByEvent } = await import('@/lib/payment-schedule')
+    expect((await advanceShortfallByEvent([id])).get(id)).toBe(2_775_000)
+
+    // Topping it up clears the marker; the milestone is a floor on the cumulative total.
+    const { recordPayment } = await import('@/lib/payments')
+    await recordPayment(actor, id, { kind: 'part_payment', amountPaise: 2_775_000, mode: 'cash', receiptNo: `TOP-${Date.now()}`, receivedOn: '2026-08-04' })
+    expect((await advanceShortfallByEvent([id])).has(id)).toBe(false)
+  })
+
+  it('still refuses a hold for nothing — no advance at all is a 402', async () => {
+    const id = await makeEnquiry()
+    await expect(confirmEvent(actor, id)).rejects.toMatchObject({ status: 402 })
+    const bookings = await db.select({ id: schema.venueBookings.id }).from(schema.venueBookings).where(eq(schema.venueBookings.eventId, id))
+    expect(bookings).toHaveLength(0)
   })
 
   it('refuses confirm while a 35+ room request is pending (BR-L2)', async () => {
@@ -158,9 +201,17 @@ d('confirm gates', () => {
     const [unit] = (await db.execute(
       sql`SELECT id FROM lodging_units WHERE name = 'Palace'`,
     )) as unknown as { id: string }[]
+    const [regency] = (await db.execute(
+      sql`SELECT id FROM lodging_units WHERE name = 'Regency'`,
+    )) as unknown as { id: string }[]
 
+    // 35 rooms across two lodges, because no single category has 35 of anything: Palace holds
+    // 33 deluxe (migration 0010 replaced the round numbers this fixture was written against
+    // with the real inventory). Asking one lodge for 35 trips the hard inventory cap, which is
+    // a different rule and would let this pass for the wrong reason.
     await rooms.saveRoomRequirements(actor, id, [
-      { unitId: unit!.id, roomType: 'deluxe', count: 35, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: unit!.id, roomType: 'deluxe', count: 33, checkIn: '2026-09-01', checkOut: '2026-09-03' },
+      { unitId: regency!.id, roomType: 'presidential_suite', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
     ])
     await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/35 or more rooms/)
 

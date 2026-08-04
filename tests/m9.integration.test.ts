@@ -130,22 +130,27 @@ d('invoice reconciliation (FR-7.3) — hand-computed to the paise', () => {
     const inv = (await invoice.getInvoice(eventId))!
 
     const bySection = (s: string) => inv.lines.filter((l) => l.section === s)
-    // Client, 20 Jul 2026: ONLY rooms are taxed, at 5%. Venue, food and maintenance are
-    // zero-rated — they previously carried placeholder rates of 18/5/18 (SEED_ASSUMPTIONS §F8).
+    // Client's lead, 4 Aug 2026: rooms 5%, everything else 18% — and only the rooms 5% is
+    // money. Each line carries its own rate honestly; the ROLL-UP is what splits (§F8).
     expect(bySection('venue')[0]!.amountPaise).toBe(1_500_000)
-    expect(bySection('venue')[0]!.taxPaise).toBe(0)
+    expect(bySection('venue')[0]!.taxPaise).toBe(270_000) // 18%
     expect(bySection('food')[0]!.amountPaise).toBe(6_500_000) // 100 × 65,000
-    expect(bySection('food')[0]!.taxPaise).toBe(0)
+    expect(bySection('food')[0]!.taxPaise).toBe(1_170_000) // 18%
     expect(bySection('rooms')[0]!.amountPaise).toBe(1_000_000) // 2 nights × 5,00,000
-    expect(bySection('rooms')[0]!.taxPaise).toBe(50_000) // 5% — the only taxed head
+    expect(bySection('rooms')[0]!.taxPaise).toBe(50_000) // 5% — the only tax collected
     expect(bySection('maintenance')[0]!.amountPaise).toBe(300_000)
-    expect(bySection('maintenance')[0]!.taxPaise).toBe(0)
+    expect(bySection('maintenance')[0]!.taxPaise).toBe(54_000) // 18%
 
-    // gross 93,00,000 · tax 50,000 · net 93,50,000 · advances 25,00,000 · balance 68,50,000
+    // gross 93,00,000 · collected tax 50,000 · payable 93,50,000 · advances 25,00,000 ·
+    // balance 68,50,000. The 18% (14,94,000) is printed and taken from nobody, so it moves
+    // the document's Total and nothing else — least of all the balance, which would never
+    // reach zero if it did.
     expect(inv.grossPaise).toBe(9_300_000)
     expect(inv.taxPaise).toBe(50_000)
+    expect(inv.shownTaxPaise).toBe(270_000 + 1_170_000 + 54_000)
     expect(inv.discountPaise).toBe(0)
     expect(inv.netPaise).toBe(9_350_000)
+    expect(inv.displayTotalPaise).toBe(9_350_000 + 1_494_000)
     expect(inv.advancesPaise).toBe(2_500_000)
     expect(inv.balancePaise).toBe(6_850_000)
   })

@@ -22,11 +22,13 @@ import { cn } from '@/lib/utils'
  * Discounts, shown on the Payment review at the end of the proposal — that is where the bill is
  * read, so it is where it is adjusted (client, 25 Jul 2026).
  *
- * A discount is a **percentage of a head** — Venue / Menu / Rooms, or Overall for the whole
- * bill. Its rupee value is live: it recomputes from the current subtotal, so a pax or room
- * change flows straight through. The COMBINED effective discount stays ≤ 10% of the total bill
- * (venue + food + rooms, pre-tax) and applies immediately; crossing the cap holds it behind one
- * `discount_over_cap` request until the Higher Authority approves it (BR-D2).
+ * A discount is **an amount of money** off a head — Venue / Menu / Rooms, or Overall for the
+ * whole bill (client's lead, 4 Aug 2026, replacing the percentage input). What is typed is what
+ * the guest gets; the percentage survives only as the cap's arithmetic, which is why the box
+ * below states the headroom in rupees rather than making anyone work it out. The COMBINED
+ * effective discount stays ≤ 10% of the total bill (venue + food + rooms, no tax of either
+ * kind) and applies immediately; crossing the cap holds it behind one `discount_over_cap`
+ * request until the Higher Authority approves it (BR-D2).
  */
 
 type DiscountRow = {
@@ -39,6 +41,13 @@ type DiscountRow = {
   givenAt: string
 }
 type Bases = { venue: number; menu: number; room: number; overall: number }
+type Cap = {
+  capPct: number
+  capBasePaise: number
+  capPaise: number
+  usedPaise: number
+  headroomPaise: number
+}
 
 const DISC_STATUS: Record<string, string> = {
   effective: 'text-emerald-600',
@@ -55,16 +64,22 @@ const HEADS = [
 export function EventDiscounts({ eventId, editable, onChanged }: { eventId: string; editable: boolean; onChanged?: () => void | Promise<void> }) {
   const [discs, setDiscs] = useState<DiscountRow[]>([])
   const [bases, setBases] = useState<Bases | null>(null)
+  const [cap, setCap] = useState<Cap | null>(null)
+  // Whether the cap binds this user — read from the server rather than assumed, so the
+  // Authority is not told his own discount needs his approval.
+  const [uncapped, setUncapped] = useState(false)
   const [head, setHead] = useState('venue')
-  const [percent, setPercent] = useState('')
+  const [rupees, setRupees] = useState('')
   const [remark, setRemark] = useState('')
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const d = await api<{ discounts: DiscountRow[]; bases: Bases }>(`/events/${eventId}/discounts`)
+      const d = await api<{ discounts: DiscountRow[]; bases: Bases; cap: Cap; uncapped: boolean }>(`/events/${eventId}/discounts`)
       setDiscs(d.discounts)
       setBases(d.bases)
+      setCap(d.cap)
+      setUncapped(d.uncapped)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load discounts')
     }
@@ -75,27 +90,31 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
     void load()
   }, [load])
 
-  const pct = Number(percent)
+  const amountPaise = Math.round(Number(rupees) * 100)
+  const valid = Number.isFinite(amountPaise) && amountPaise > 0
   const headBase = bases ? bases[head as keyof Bases] : 0
-  // Live preview of what this % works out to against the chosen head's current subtotal.
-  const previewPaise =
-    Number.isFinite(pct) && pct > 0 && pct <= 100 ? Math.round((headBase * pct) / 100) : null
+  // What this money comes to as a percentage — of the head it is taken off, and of the whole
+  // bill, which is the one the cap actually measures. Shown because the manager types rupees
+  // but is bound by a percentage, and nobody should have to reconcile the two in their head.
+  const headPct = valid && headBase > 0 ? (amountPaise / headBase) * 100 : null
+  const billPct = valid && cap && cap.capBasePaise > 0 ? (amountPaise / cap.capBasePaise) * 100 : null
+  const wouldExceed = Boolean(valid && cap && !uncapped && cap.usedPaise + amountPaise > cap.capPaise)
 
   async function add() {
-    if (!Number.isFinite(pct) || pct <= 0 || pct > 100 || !remark.trim()) {
-      toast.error('Enter a percentage (1–100) and a remark')
+    if (!valid || !remark.trim()) {
+      toast.error('Enter an amount in rupees and a remark')
       return
     }
     setBusy(true)
     try {
       const res = await api<{ deferred: boolean }>(`/events/${eventId}/discounts`, {
         method: 'POST',
-        body: JSON.stringify({ head, percent_bp: Math.round(pct * 100), remark: remark.trim() }),
+        body: JSON.stringify({ head, amount_paise: amountPaise, remark: remark.trim() }),
       })
       toast[res.deferred ? 'info' : 'success'](
-        res.deferred ? 'Over the 10% cap — sent to the GM for approval.' : 'Discount applied',
+        res.deferred ? `Over the ${cap?.capPct ?? 10}% cap — sent to the GM for approval.` : 'Discount applied',
       )
-      setPercent('')
+      setRupees('')
       setRemark('')
       await load()
       await onChanged?.()
@@ -119,9 +138,24 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
   return (
     <div>
       <h3 className="mb-2 text-sm font-medium">Discounts</h3>
+      {/* Headroom in rupees, because a discount is typed in rupees. "₹42,000 left" is a figure
+          you can act on; "10%" is one you have to work out against a bill you are still editing. */}
+      {cap && !uncapped && (
+        <p className="mb-2 text-xs text-muted-foreground">
+          Given so far <span className="tabular-nums text-foreground">{formatPaise(cap.usedPaise)}</span> of{' '}
+          <span className="tabular-nums text-foreground">{formatPaise(cap.capPaise)}</span> ({cap.capPct}% of{' '}
+          {formatPaise(cap.capBasePaise)}) —{' '}
+          <span className={cn('tabular-nums font-medium', cap.headroomPaise > 0 ? 'text-foreground' : 'text-amber-600')}>
+            {formatPaise(cap.headroomPaise)} left
+          </span>{' '}
+          before GM approval is needed.
+        </p>
+      )}
       {discs.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          None. The combined discount stays ≤ 10% of the total bill (over that needs GM approval).
+          {uncapped
+            ? 'None. Your discounts take effect at once — the cap does not apply to you.'
+            : `None. The combined discount stays ≤ ${cap?.capPct ?? 10}% of the total bill (over that needs GM approval).`}
         </p>
       ) : (
         <ul className="mb-2 space-y-1 text-sm">
@@ -161,20 +195,30 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
               </SelectContent>
             </Select>
           </div>
-          <div className="w-24 space-y-1">
-            <Label className="text-xs">Percent %</Label>
-            <Input inputMode="decimal" value={percent} onChange={(e) => setPercent(e.target.value)} placeholder="e.g. 20" />
+          <div className="w-28 space-y-1">
+            <Label className="text-xs">Amount ₹</Label>
+            <Input inputMode="decimal" value={rupees} onChange={(e) => setRupees(e.target.value)} placeholder="e.g. 50000" />
           </div>
-          <div className="grow space-y-1">
+          {/* basis-48, not bare grow: on a phone the head and percent already eat the row, and a
+              growing-from-zero remark became a sliver a few characters wide. With a basis it
+              wraps onto its own full-width line instead. */}
+          <div className="grow basis-48 space-y-1">
             <Label className="text-xs">Remark (required)</Label>
             <Input value={remark} onChange={(e) => setRemark(e.target.value)} />
           </div>
           <Button variant="outline" onClick={add} disabled={busy}>
             <Plus className="size-4" /> Add
           </Button>
-          {previewPaise != null && (
+          {valid && (
             <p className="w-full text-xs text-muted-foreground">
-              {pct}% of {head} ({formatPaise(headBase)}) = <span className="font-medium text-foreground">− {formatPaise(previewPaise)}</span>
+              <span className="font-medium text-foreground">− {formatPaise(amountPaise)}</span> off {head}
+              {headPct != null && ` — ${headPct.toFixed(1)}% of ${formatPaise(headBase)}`}
+              {billPct != null && `, ${billPct.toFixed(1)}% of the total bill`}
+              {wouldExceed && (
+                <span className="ml-1 font-medium text-amber-600">
+                  · over the {cap?.capPct ?? 10}% cap — this goes to the GM for approval.
+                </span>
+              )}
             </p>
           )}
         </div>

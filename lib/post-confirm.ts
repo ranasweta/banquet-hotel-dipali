@@ -62,7 +62,6 @@ export type ConfirmedFunctionInput = {
   venueId?: string
   bundleId?: string
   pax: number
-  paxOverrideNote?: string
 }
 
 /**
@@ -98,7 +97,6 @@ export async function addConfirmedFunction(
           venueId: input.venueId ?? null,
           bundleId: input.bundleId ?? null,
           pax: input.pax,
-          paxOverrideNote: input.paxOverrideNote ?? null,
         })
         .returning({ id: schema.subEvents.id })
 

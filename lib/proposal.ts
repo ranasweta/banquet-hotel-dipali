@@ -4,6 +4,8 @@ import { db } from '@/db/drizzle'
 import { notFound } from '@/lib/api'
 import { effectiveDiscountPaise, listDiscounts, type DiscountRow } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
+import { ADVANCE_PCT, WEDDING_MILESTONE_PCT } from '@/lib/payment-schedule'
+import { ROOM_GST_BP, STANDARD_GST_BP, taxOf } from '@/lib/tax'
 
 /**
  * The guest-facing proposal, shaped exactly like `Hotel-Dipali-Proposal-TEMPLATE_1.html`.
@@ -15,9 +17,14 @@ import { percentOfPaise } from '@/lib/money'
  * same snapshots and returns them assembled rather than flattened.
  *
  * Money follows the rules the rest of the system already enforces:
- *  • Rooms are the only taxed head, at 5%, rounded PER LINE then summed — the same order of
- *    operations as lib/pricing.ts and lib/invoice.ts, so this document and the Draft cannot
- *    differ by a rounding paisa.
+ *  • Two taxes, two behaviours (client's lead, 4 Aug 2026). Rooms carry 5% and it is real —
+ *    inside the payable amount, inside the advance base. Venue, food, add-ons and extras carry
+ *    18% which is printed and collected from nobody. Both are rounded PER LINE then summed, the
+ *    same order of operations as lib/invoice.ts, so this document and the Draft cannot differ
+ *    by a rounding paisa.
+ *  • Because the 18% is never taken, the document carries TWO totals: `displayTotalPaise`, the
+ *    "Total" with all tax on it, and `totalPaise`, the amount actually payable. Printing one
+ *    number would have staff collecting the wrong one.
  *  • The 25% advance base is (venue + food + add-ons) + rooms + room tax − discount, which is
  *    the formula `confirmEvent` actually enforces (lib/confirm.ts). Printing anything else
  *    would quote the guest a number the system then refuses to accept.
@@ -25,8 +32,6 @@ import { percentOfPaise } from '@/lib/money'
  *    null and the document prints "on approval" rather than inventing ₹0.00.
  */
 
-const ROOM_TAX_BP = 500
-const ADVANCE_PCT = 25
 
 export type ProposalContact = { phone: string; label: string | null }
 
@@ -145,8 +150,18 @@ export type ProposalDocument = {
     discountPaise: number
     /** proposal + rooms + extras − discount, before tax. */
     subtotalPaise: number
+    /**
+     * The AMOUNT PAYABLE — subtotal plus the 5% room tax. What the advance, the wedding
+     * milestone and the balance are all measured against.
+     */
     totalPaise: number
+    /** 18% on venue, food, add-ons and extras. Printed; never collected, never in a threshold. */
+    shownGstPaise: number
+    /** What the document prints as "Total": payable + the 18% nobody pays. */
+    displayTotalPaise: number
     advancePaise: number
+    /** The wedding's 50% top-up, due 30 days before the first function (BR-P2, amended). */
+    weddingMilestonePaise: number
     balancePaise: number
     advancesReceivedPaise: number
   }
@@ -338,7 +353,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     const amountPaise = count * nights * ratePaise
     roomsPaise += amountPaise
     // Per line, then summed — matches lib/pricing.ts and lib/invoice.ts exactly.
-    roomsTaxPaise += Math.round((amountPaise * ROOM_TAX_BP) / 10000)
+    roomsTaxPaise += Math.round((amountPaise * ROOM_GST_BP) / 10000)
 
     const name = r.lodge as string
     let lodge = lodges.find((l) => l.name === name)
@@ -365,17 +380,22 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   // ── Extras: closed maintenance + the Auditor's adjustments ───────────────────
   // The template has no row for either, so both stay blank until the app has them.
   const maint = (await db.execute(sql`
-    SELECT item AS description, qty, rate_paise AS "ratePaise", amount_paise AS "amountPaise"
+    SELECT item AS description, qty, rate_paise AS "ratePaise", amount_paise AS "amountPaise",
+           ${STANDARD_GST_BP}::int AS "gstRateBp"
     FROM maintenance_entries WHERE event_id = ${eventId} AND is_closed
     ORDER BY created_at
   `)) as unknown as Row[]
+  // The Auditor names the rate on their own lines (FR-7.4), so it is read rather than assumed —
+  // an adjustment against a room line is 5%, not the 18% maintenance carries.
   const adjust = (await db.execute(sql`
-    SELECT l.description, l.qty, l.rate_paise AS "ratePaise", l.amount_paise AS "amountPaise"
+    SELECT l.description, l.qty, l.rate_paise AS "ratePaise", l.amount_paise AS "amountPaise",
+           l.gst_rate_bp AS "gstRateBp"
     FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
     WHERE i.event_id = ${eventId} AND i.superseded_at IS NULL AND l.section = 'adjustment'
     ORDER BY l.description
   `)) as unknown as Row[]
-  const extras: ProposalAddon[] = [...maint, ...adjust].map((m) => ({
+  const extraRows = [...maint, ...adjust]
+  const extras: ProposalAddon[] = extraRows.map((m) => ({
     description: m.description as string,
     qty: num(m.qty),
     ratePaise: num(m.ratePaise),
@@ -404,12 +424,26 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   const discountPaise = await effectiveDiscountPaise(eventId)
   const subtotalPaise = proposalPaise + roomsPaise + extrasPaise - discountPaise
   const totalPaise = subtotalPaise + roomsTaxPaise
+
+  // The 18% shown on everything but rooms, rounded per line and summed — the same lines
+  // lib/invoice.ts pushes (one per venue, one per function's food, one per add-on, one per
+  // extra), so the Draft and the Draft 2 print the same figure to the paisa. It is added to
+  // the printed Total and to nothing else: nobody pays it (client's lead, 4 Aug 2026).
+  const shownGstPaise =
+    functions.reduce(
+      (n, f) =>
+        n +
+        taxOf(f.venueRatePaise ?? 0, STANDARD_GST_BP) +
+        taxOf(f.foodAmountPaise, STANDARD_GST_BP) +
+        f.addons.reduce((m, a) => m + taxOf(a.amountPaise, STANDARD_GST_BP), 0),
+      0,
+    ) + extraRows.reduce((n, e) => n + taxOf(num(e.amountPaise), num(e.gstRateBp)), 0)
+
   // The base confirmEvent enforces (lib/confirm.ts): venue+food+add-ons, rooms and room tax,
   // less the discount. Post-event extras are settled before checkout, not at the advance.
-  const advancePaise = percentOfPaise(
-    Math.max(0, proposalPaise + roomsPaise + roomsTaxPaise - discountPaise),
-    ADVANCE_PCT,
-  )
+  const thresholdBasePaise = Math.max(0, proposalPaise + roomsPaise + roomsTaxPaise - discountPaise)
+  const advancePaise = percentOfPaise(thresholdBasePaise, ADVANCE_PCT)
+  const weddingMilestonePaise = percentOfPaise(thresholdBasePaise, WEDDING_MILESTONE_PCT)
 
   return {
     event: {
@@ -438,7 +472,10 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       discountPaise,
       subtotalPaise,
       totalPaise,
+      shownGstPaise,
+      displayTotalPaise: totalPaise + shownGstPaise,
       advancePaise,
+      weddingMilestonePaise,
       balancePaise: totalPaise - advancePaise,
       advancesReceivedPaise,
     },

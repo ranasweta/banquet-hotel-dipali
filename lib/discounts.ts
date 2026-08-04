@@ -4,19 +4,37 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
+import { AUTHORITY_ROLES } from '@/lib/post-confirm'
 import { getIntSettings } from '@/lib/settings'
 
 /**
  * Discount service (M7, FR-11.x, BR-D2). Discounts are ledger rows at a head — menu / venue /
- * room / overall — and are given as a **percentage of that head's subtotal** (client, 25 Jul
- * 2026): "30% on menu, 20% on venue". The rupee value is never frozen; it recomputes live from
- * the current bill, so a pax or room change flows straight through. (A fixed-rupee amount is
- * still accepted for the odd manual case and for older rows.)
+ * room / overall.
+ *
+ * A discount is **an amount of money** (client's lead, 4 Aug 2026), reversing the 25 Jul rule
+ * that made it a live percentage of its head. ₹50,000 promised is ₹50,000 given, whatever the
+ * bill does afterwards — which is what a guest is told and what a guest expects. The percentage
+ * still exists, but only as arithmetic: it is what the 10% cap is tested in, never what the row
+ * is worth. Such a row stores `percent_bp = NULL`, which is what `discountAmountPaise` reads as
+ * "this figure is fixed"; percentage rows written before today keep recomputing live, so old
+ * bookings are undisturbed.
  *
  * The COMBINED effective discount across every head must stay ≤ 10% of the **total bill**
- * (venue + food + rooms, pre-tax — amends BR-D2, which used to measure venue+food only). A
- * discount that would cross the cap is recorded but held behind a `discount_over_cap` exception
- * until the Higher Authority approves it (FR-11.3).
+ * (venue + food + rooms, pre-tax — amends BR-D2, which used to measure venue+food only; GST
+ * never enters it, neither the 5% nor the 18%). A discount that would cross the cap is recorded
+ * but held behind a `discount_over_cap` exception until the Higher Authority approves it
+ * (FR-11.3).
+ *
+ * ONE CONSEQUENCE OF FREEZING THE RUPEES. A percentage shrank with the bill and so could never
+ * drift over the cap on its own; a fixed amount can, if a function is later removed. So the cap
+ * is tested a second time inside `confirmEvent` — the last gate before the money is committed —
+ * using this same `discountCap`, and never in two places with two answers.
+ *
+ * The cap binds the Booking Manager, who gives most discounts. It does not bind the Higher
+ * Authority (FR-11.3a), and as of 3 Aug 2026 that is true of every screen he can reach — not
+ * only the approvals queue, which is where `lib/gm-authority.ts` had it. Sending his own
+ * discount to a queue only he can clear is a round trip with no one at the other end, and it
+ * changed answer depending on which page he happened to be on.
  */
 
 const LOCKED_STATES = new Set(['locked', 'billed', 'closed'])
@@ -100,15 +118,59 @@ export async function effectiveDiscountPaise(eventId: string, exec: Pick<typeof 
   return total
 }
 
+export type DiscountCap = {
+  capPct: number
+  /** The undiscounted bill the cap is a percentage of: venue + food + rooms, no tax. */
+  capBasePaise: number
+  capPaise: number
+  /** Effective discounts already given — what is eaten out of the cap. */
+  usedPaise: number
+  /** capPaise − usedPaise, floored at zero: what a manager still has to give. */
+  headroomPaise: number
+}
+
+/**
+ * The 10% ceiling and how much of it is spent. One definition, read by the entry check, by
+ * confirm's re-test, and by the screen that shows a manager what is left — a discount is a
+ * rupee figure now, so headroom has to be a rupee figure too.
+ *
+ * A confirmed booking measures against its stored proposal total (venue+food) plus rooms; an
+ * enquiry has no stored total yet, so it measures the live overall. Tax is in neither.
+ */
+export async function discountCap(
+  eventId: string,
+  exec: Pick<typeof db, 'execute' | 'select'> = db,
+): Promise<DiscountCap> {
+  const { discount_cap_pct } = await getIntSettings(['discount_cap_pct'] as const, { discount_cap_pct: 10 })
+  const [ev] = await exec
+    .select({ proposalTotalPaise: schema.events.proposalTotalPaise })
+    .from(schema.events)
+    .where(eq(schema.events.id, eventId))
+    .limit(1)
+  if (!ev) throw notFound('Event not found')
+  const subs = await headSubtotals(eventId, exec)
+  const capBasePaise = ev.proposalTotalPaise > 0 ? ev.proposalTotalPaise + subs.room : subs.overall
+  const capPaise = percentOfPaise(capBasePaise, discount_cap_pct)
+  const usedPaise = await effectiveDiscountPaise(eventId, exec)
+  return {
+    capPct: discount_cap_pct,
+    capBasePaise,
+    capPaise,
+    usedPaise,
+    headroomPaise: Math.max(0, capPaise - usedPaise),
+  }
+}
+
 export type DiscountInput = { head: string; percentBp?: number; amountPaise?: number; remark: string; refId?: string }
 export type AddDiscountResult =
   | { deferred: false; discountId: string; combinedPaise: number; capPaise: number }
   | { deferred: true; discountId: string; exceptionId: string; combinedPaise: number; capPaise: number }
 
 /**
- * Records a discount as a percentage of a head (or a fixed amount). Within the 10% cap it takes
- * effect immediately; over the cap it is saved linked to a pending discount_over_cap exception
- * and takes effect only on approval.
+ * Records a discount against a head — a rupee amount, which is how every screen sends one since
+ * 4 Aug 2026, or a percentage for the approval-bundle path and older callers. Within the 10% cap
+ * it takes effect immediately; over the cap it is saved linked to a pending discount_over_cap
+ * exception and takes effect only on approval.
  */
 export async function addDiscount(
   actor: Actor,
@@ -125,11 +187,9 @@ export async function addDiscount(
   if (hasAmt && input.amountPaise! <= 0) throw badRequest('Discount amount must be positive')
   if (!input.remark.trim()) throw badRequest('A remark is required for every discount (FR-11.1)')
 
-  const { discount_cap_pct } = await getIntSettings(['discount_cap_pct'] as const, { discount_cap_pct: 10 })
-
   return db.transaction(async (tx) => {
     const [ev] = await tx
-      .select({ status: schema.events.status, proposalTotalPaise: schema.events.proposalTotalPaise })
+      .select({ status: schema.events.status })
       .from(schema.events)
       .where(eq(schema.events.id, eventId))
       .limit(1)
@@ -137,18 +197,20 @@ export async function addDiscount(
     if (LOCKED_STATES.has(ev.status)) throw conflict('This event is locked — discounts can no longer change.')
 
     const subs = await headSubtotals(eventId, tx)
-    // The row's rupee value now, for the cap check; a % row recomputes live thereafter.
+    // A rupee row is worth exactly what was typed. A legacy % row is priced here for the cap
+    // check and recomputes live thereafter.
     const thisAmount = hasPct ? Math.round((subs[input.head as keyof HeadSubtotals] * input.percentBp!) / MAX_BP) : input.amountPaise!
     if (thisAmount <= 0) throw badRequest('This head has no charge to discount yet — price the proposal first.')
 
-    const existing = await effectiveDiscountPaise(eventId, tx)
-    // 10% of the TOTAL BILL, pre-tax (client, 25 Jul 2026, amends BR-D2). A confirmed booking
-    // uses its stored proposal total (venue+food) plus rooms; an enquiry being confirmed has no
-    // stored total yet, so it uses the live overall (venue+food+rooms).
-    const capBasePaise = ev.proposalTotalPaise > 0 ? ev.proposalTotalPaise + subs.room : subs.overall
-    const capPaise = percentOfPaise(capBasePaise, discount_cap_pct)
-    const combinedPaise = existing + thisAmount
-    const overCap = combinedPaise > capPaise
+    // 10% of the TOTAL BILL, pre-tax (client, 25 Jul 2026, amends BR-D2) — one definition,
+    // shared with confirm's re-test and with the screen that shows the remaining headroom.
+    const { capBasePaise, capPaise, usedPaise } = await discountCap(eventId, tx)
+    const combinedPaise = usedPaise + thisAmount
+    // The cap routes a large discount TO the Authority; it has nothing to do when he is the one
+    // giving it (FR-11.3a). His row carries no exception, which is what `effectiveDiscountPaise`
+    // reads as in force. The remark is still mandatory, and the audit row says who waived it.
+    const uncapped = AUTHORITY_ROLES.has(actor.roleName)
+    const overCap = !uncapped && combinedPaise > capPaise
 
     let exceptionId: string | null = null
     if (overCap) {
@@ -193,7 +255,9 @@ export async function addDiscount(
       eventId,
       action: 'insert',
       field: input.head,
-      newValue: `${hasPct ? `${input.percentBp! / 100}%` : `₹${thisAmount / 100}`}${overCap ? ' (over cap — pending)' : ''}`,
+      newValue: `${hasPct ? `${input.percentBp! / 100}%` : `₹${thisAmount / 100}`}${
+        overCap ? ' (over cap — pending)' : uncapped && combinedPaise > capPaise ? ' (Authority, uncapped)' : ''
+      }`,
     })
 
     if (overCap) {

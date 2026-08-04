@@ -4,7 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
 import { conflict, notFound, ok, route } from '@/lib/api'
-import { assertCapacity, subEventSchema } from '@/app/api/v1/events/[id]/sub-events/route'
+import { subEventSchema } from '@/app/api/v1/events/[id]/sub-events/route'
 import { canAuthorityEditConfirmed, removeConfirmedFunction } from '@/lib/post-confirm'
 
 async function loadEditableSub(subId: string) {
@@ -27,7 +27,6 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
   const { id } = await ctx.params
   const sub = await loadEditableSub(id)
   const input = subEventSchema.parse(await req.json())
-  await assertCapacity(input)
 
   await db
     .update(schema.subEvents)
@@ -39,7 +38,6 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
       venueId: input.venue_id ?? null,
       bundleId: input.bundle_id ?? null,
       pax: input.pax,
-      paxOverrideNote: input.pax_override_note ?? null,
     })
     .where(eq(schema.subEvents.id, id))
   await audit(db, actor, { entity: 'sub_events', entityId: id, eventId: sub.eventId, action: 'update', field: 'name', newValue: input.name })

@@ -2,7 +2,7 @@ import 'server-only'
 import { eq, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
-import { conflict, notFound } from '@/lib/api'
+import { badRequest, conflict, notFound } from '@/lib/api'
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 export type EventStatus =
@@ -73,6 +73,59 @@ export async function transitionEvent(
     oldValue: from,
     newValue: to,
   })
+}
+
+/**
+ * Cancels a pre-lock event and releases what it was holding (FR-1.x, PRD §4.1).
+ *
+ * Two different mechanisms free the dates, because the two holds are enforced differently:
+ *
+ *   Venues are DELETED. `venue_bookings` is guarded by a GiST exclusion, a database rule that
+ *   cannot consult event status — so as long as the row exists the window stays blocked, and
+ *   the only way to release it is to remove it. The `sub_events` stay, so the record of what
+ *   was planned survives; only the hold goes.
+ *
+ *   Rooms are FILTERED. `room_requirements` rows are kept, and every availability and calendar
+ *   query joins `events.status IN (confirmed…closed)` — a list that excludes `cancelled` — so
+ *   the rooms stop counting the moment the status flips. Keeping the rows preserves what the
+ *   guest had asked for, and a cancelled booking still prints and audits correctly.
+ *
+ * Nothing else is cleared. Payments, discounts, menus and documents remain, deliberately: an
+ * advance may have been taken and may need refunding. Cancelling is not a way to erase a
+ * booking.
+ *
+ * Lived in the route handler until 2 Aug 2026, where nothing could call it — hence no test
+ * covered the venue release. It is a service like every other write in this codebase now.
+ */
+export async function cancelEvent(
+  actor: Actor,
+  eventId: string,
+  reason: string,
+): Promise<{ ok: true }> {
+  if (!reason.trim()) throw badRequest('A reason is required to cancel.')
+
+  await db.transaction(async (tx) => {
+    const [event] = await tx
+      .select({ status: schema.events.status })
+      .from(schema.events)
+      .where(eq(schema.events.id, eventId))
+      .for('update')
+      .limit(1)
+    if (!event) throw badRequest('Event not found')
+
+    // Order matters. transitionEvent enforces PRD §4.1 and refuses a locked booking with a
+    // clean 409 — but only if it runs FIRST. Deleting the venue holds ahead of it meant a
+    // locked event tripped the immutability trigger instead, and the manager saw a raw
+    // "record is immutable" from Postgres rather than "cannot move an event from locked to
+    // cancelled". Once the status is `cancelled` the lock guard no longer applies (it covers
+    // locked/billed/closed), so the delete below is free to run.
+    await transitionEvent(tx, eventId, 'cancelled', actor, { reason: reason.trim() })
+
+    // Free the calendar: a cancelled event holds no venue windows.
+    await tx.delete(schema.venueBookings).where(eq(schema.venueBookings.eventId, eventId))
+  })
+
+  return { ok: true }
 }
 
 // ── Date-driven advancement ──────────────────────────────────────────────────

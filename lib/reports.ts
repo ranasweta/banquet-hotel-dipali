@@ -47,9 +47,13 @@ export async function revenueReport() {
   `)) as unknown as { propertyName: string; venueRevenuePaise: number }[]
   const [tax] = (await db.execute(sql`
     SELECT COALESCE(sum(gross_paise),0)::bigint AS "grossPaise", COALESCE(sum(discount_paise),0)::bigint AS "discountPaise",
-           COALESCE(sum(tax_paise),0)::bigint AS "taxPaise", COALESCE(sum(net_paise),0)::bigint AS "netPaise"
+           COALESCE(sum(tax_paise),0)::bigint AS "taxPaise",
+           -- The 18% the documents print and nobody pays (migration 0026). Carried so this
+           -- report can be reconciled against a bill without the two seeming to disagree.
+           COALESCE(sum(shown_tax_paise),0)::bigint AS "shownTaxPaise",
+           COALESCE(sum(net_paise),0)::bigint AS "netPaise"
     FROM invoices WHERE finalised_at IS NOT NULL AND superseded_at IS NULL
-  `)) as unknown as { grossPaise: number; discountPaise: number; taxPaise: number; netPaise: number }[]
+  `)) as unknown as { grossPaise: number; discountPaise: number; taxPaise: number; shownTaxPaise: number; netPaise: number }[]
   return { byEventType, byProperty, taxSummary: tax }
 }
 

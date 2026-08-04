@@ -25,6 +25,9 @@ if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping billing tes
 
 const actor = { id: '', roleName: 'auditor' }
 const ha = { id: '', roleName: 'higher_authority' }
+// The cap is a Booking Manager's rule. It has to be raised by someone it binds — `actor` is the
+// Auditor, who ranks with the Authority and is no longer capped (FR-11.3a, 3 Aug 2026).
+const bm = { id: '', roleName: 'booking_manager' }
 let rc = 0
 const receipt = () => `RCPT-${Date.now() % 1_000_000}-${++rc}`
 
@@ -32,14 +35,37 @@ async function userId(role: string): Promise<string> {
   const [u] = await db.select({ id: schema.users.id }).from(schema.users).innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId)).where(eq(schema.roles.name, role)).limit(1)
   return u!.id
 }
-/** A confirmed event with a fixed proposal total, so the 10% cap math is exact. */
-async function makeEvent(opts: { eventType?: string; proposalPaise?: number; firstDate?: string } = {}): Promise<string> {
-  const { eventType = 'engagement', proposalPaise = 10_000_000, firstDate = null } = opts
+/**
+ * A confirmed event with a fixed proposal total, so the 10% cap math is exact.
+ *
+ * It carries one function priced at that total by default. What is payable is computed live
+ * from `sub_events` now (lib/payment-schedule.ts), not read off `proposal_total_paise`, so an
+ * event with no functions is worth nothing however that column reads — and the dates the
+ * wedding schedule hangs off come from `min(sub_events.event_date)` rather than the
+ * `first_date` cache. `withFunction: false` is for the one case that adds its own.
+ */
+async function makeEvent(
+  opts: { eventType?: string; proposalPaise?: number; firstDate?: string; withFunction?: boolean } = {},
+): Promise<string> {
+  const { eventType = 'engagement', proposalPaise = 10_000_000, firstDate = null, withFunction = true } = opts
   const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
   const [e] = await db
     .insert(schema.events)
     .values({ code, guestName: 'Billing Test', eventType, status: 'confirmed', proposalTotalPaise: proposalPaise, firstDate: firstDate as unknown as string, createdBy: actor.id })
     .returning({ id: schema.events.id })
+  if (withFunction) {
+    const [venue] = await db.select({ id: schema.venues.id }).from(schema.venues).limit(1)
+    await db.insert(schema.subEvents).values({
+      eventId: e!.id,
+      name: 'Function',
+      eventDate: firstDate ?? '2026-09-01',
+      startTime: '11:00',
+      endTime: '15:00',
+      venueId: venue!.id,
+      pax: 100,
+      venueRatePaise: proposalPaise,
+    })
+  }
   return e!.id
 }
 
@@ -54,6 +80,7 @@ beforeAll(async () => {
   }
   actor.id = await userId('auditor')
   ha.id = await userId('higher_authority')
+  bm.id = await userId('booking_manager')
 }, 90_000)
 
 async function cleanup() {
@@ -66,13 +93,13 @@ afterAll(async () => { if (hasDb) await cleanup() })
 d('discount cap (BR-D2)', () => {
   it('lets mixed discounts up to 9.9% through and escalates the one that crosses 10%', async () => {
     const e = await makeEvent({ proposalPaise: 10_000_000 }) // cap = 1,000,000 paise
-    const r1 = await discounts.addDiscount(actor, e, { head: 'venue', amountPaise: 500_000, remark: '5% venue' })
+    const r1 = await discounts.addDiscount(bm, e, { head: 'venue', amountPaise: 500_000, remark: '5% venue' })
     expect(r1.deferred).toBe(false)
-    const r2 = await discounts.addDiscount(actor, e, { head: 'menu', amountPaise: 490_000, remark: '4.9% menu' })
+    const r2 = await discounts.addDiscount(bm, e, { head: 'menu', amountPaise: 490_000, remark: '4.9% menu' })
     expect(r2.deferred).toBe(false) // combined 9.9% ≤ cap
     expect(await discounts.effectiveDiscountPaise(e)).toBe(990_000)
 
-    const r3 = await discounts.addDiscount(actor, e, { head: 'overall', amountPaise: 20_000, remark: 'push over' })
+    const r3 = await discounts.addDiscount(bm, e, { head: 'overall', amountPaise: 20_000, remark: 'push over' })
     expect(r3.deferred).toBe(true) // combined 10.1% > cap
     // The over-cap discount does NOT count until approved.
     expect(await discounts.effectiveDiscountPaise(e)).toBe(990_000)
@@ -83,7 +110,7 @@ d('discount cap (BR-D2)', () => {
 
   it('counts an over-cap discount once its exception is approved', async () => {
     const e = await makeEvent({ proposalPaise: 10_000_000 })
-    const over = await discounts.addDiscount(actor, e, { head: 'overall', amountPaise: 1_500_000, remark: '15%' })
+    const over = await discounts.addDiscount(bm, e, { head: 'overall', amountPaise: 1_500_000, remark: '15%' })
     expect(over.deferred).toBe(true)
     expect(await discounts.effectiveDiscountPaise(e)).toBe(0)
 
@@ -92,20 +119,38 @@ d('discount cap (BR-D2)', () => {
     expect(await discounts.effectiveDiscountPaise(e)).toBe(1_500_000)
   })
 
+  it('does not bind the Higher Authority, on any screen (FR-11.3a, 3 Aug 2026)', async () => {
+    // The cap's whole job is to route a large discount TO him. Raised by him it would queue for
+    // his own approval, so his row is written with no exception and counts at once — the same
+    // answer he gets from the approvals screen (lib/gm-authority.ts), which is the point.
+    const e = await makeEvent({ proposalPaise: 10_000_000 }) // cap = 1,000,000 paise
+    const big = await discounts.addDiscount(ha, e, { head: 'overall', amountPaise: 3_000_000, remark: 'Owner’s call — 30%' })
+    expect(big.deferred).toBe(false)
+    expect(await discounts.effectiveDiscountPaise(e)).toBe(3_000_000)
+    const excs = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, e))
+    expect(excs).toHaveLength(0) // nothing was sent to a queue only he can clear
+
+    // The same discount from a Booking Manager still escalates — the cap is not switched off.
+    const e2 = await makeEvent({ proposalPaise: 10_000_000 })
+    expect((await discounts.addDiscount(bm, e2, { head: 'overall', amountPaise: 3_000_000, remark: '30%' })).deferred).toBe(true)
+  })
+
   it('requires a remark; room is a valid head now (client, 25 Jul 2026)', async () => {
     const e = await makeEvent()
-    await expect(discounts.addDiscount(actor, e, { head: 'venue', amountPaise: 1000, remark: '' })).rejects.toThrow(/remark/)
+    await expect(discounts.addDiscount(bm, e, { head: 'venue', amountPaise: 1000, remark: '' })).rejects.toThrow(/remark/)
     // Rooms are bulk-booked now, so a room discount is a normal head (it used to be refused).
-    const r = await discounts.addDiscount(actor, e, { head: 'room', amountPaise: 1000, remark: 'room disc' })
+    const r = await discounts.addDiscount(bm, e, { head: 'room', amountPaise: 1000, remark: 'room disc' })
     expect(r.deferred).toBe(false)
   })
 
   it('takes a percentage of a head and recomputes live as the bill changes (client, 25 Jul 2026)', async () => {
-    const e = await makeEvent({ proposalPaise: 10_000_000 })
+    // Legacy rows only: a discount typed today is a rupee figure and stays put (4 Aug 2026).
+    // This one brings its own function, so the venue head is exactly what it sets.
+    const e = await makeEvent({ proposalPaise: 10_000_000, withFunction: false })
     const [venue] = await db.select({ id: schema.venues.id }).from(schema.venues).limit(1)
     await db.insert(schema.subEvents).values({ eventId: e, name: 'Fn', eventDate: '2026-09-01', startTime: '11:00', endTime: '15:00', venueId: venue!.id, pax: 100, venueRatePaise: 2_000_000 })
     // 20% of the ₹20,000 venue subtotal = ₹4,000.
-    const r = await discounts.addDiscount(actor, e, { head: 'venue', percentBp: 2000, remark: '20% venue' })
+    const r = await discounts.addDiscount(bm, e, { head: 'venue', percentBp: 2000, remark: '20% venue' })
     expect(r.deferred).toBe(false)
     expect(await discounts.effectiveDiscountPaise(e)).toBe(400_000)
     // Live: raise the venue rate and the same 20% now takes more (₹30,000 → ₹6,000).
@@ -120,7 +165,7 @@ d('payment ledger (FR-7.7)', () => {
     await discounts.addDiscount(actor, e, { head: 'venue', amountPaise: 1_000_000, remark: '10%' })
 
     let led = await payments.getLedger(e)
-    expect(led.netBillPaise).toBe(9_000_000) // proposal − 10% discount
+    expect(led.payablePaise).toBe(9_000_000) // proposal − 10% discount, no rooms on this one
     expect(led.balancePaise).toBe(9_000_000)
 
     const rno = receipt()
@@ -174,6 +219,25 @@ d('wedding reminders (BR-P2, time-travel)', () => {
     const gen = await reminders.generateWeddingReminders('2026-07-18')
     expect(gen.weddings).toBe(0)
     expect(gen.reminders).toBe(0)
+  })
+
+  it('chases only up to 50% of the payable amount (client, 4 Aug 2026)', async () => {
+    // Exactly half is the whole ask now. The remaining half settles at billing, so a wedding
+    // sitting on 50% is not chased at all — it used to be chased for the other 75%.
+    const half = await makeEvent({ eventType: 'wedding', proposalPaise: 10_000_000, firstDate: '2026-09-01' })
+    await payments.recordPayment(actor, half, { kind: 'part_payment', amountPaise: 5_000_000, mode: 'upi', receiptNo: receipt(), receivedOn: '2026-07-18' })
+    expect((await reminders.generateWeddingReminders('2026-07-18')).weddings).toBe(0)
+
+    // A paisa under, and it is. What is asked for is the gap to 50%, never the whole balance.
+    const short = await makeEvent({ eventType: 'wedding', proposalPaise: 10_000_000, firstDate: '2026-09-01' })
+    await payments.recordPayment(actor, short, { kind: 'part_payment', amountPaise: 4_000_000, mode: 'upi', receiptNo: receipt(), receivedOn: '2026-07-18' })
+    expect((await reminders.generateWeddingReminders('2026-07-18')).weddings).toBe(1)
+
+    const due = await reminders.pendingReminders('booking_manager', '2026-08-05')
+    const row = due.find((r) => r.eventId === short)
+    expect(row?.shortfallPaise).toBe(1_000_000) // 50% of 1cr is 50L; 40L is in
+    expect(row?.milestonePaise).toBe(5_000_000)
+    expect(due.some((r) => r.eventId === half)).toBe(false)
   })
 })
 

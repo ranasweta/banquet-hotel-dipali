@@ -31,7 +31,6 @@ export type OpsFunction = {
   startTime: string
   endTime: string
   pax: number
-  paxOverrideNote: string | null
   venueName: string | null
   tierName: string | null
   menuComplete: boolean
@@ -58,7 +57,7 @@ export async function getOperationsHorizon(
   const rows = (await db.execute(sql`
     SELECT se.id AS "subEventId", se.event_date::text AS date, se.name,
            se.start_time::text AS "startTime", se.end_time::text AS "endTime",
-           se.pax, se.pax_override_note AS "paxOverrideNote",
+           se.pax,
            e.code AS "eventCode", e.guest_name AS "guestName", e.event_type AS "eventType",
            COALESCE(v.name, b.name) AS "venueName",
            m.tier_name AS "tierName", COALESCE(m.is_complete, false) AS "menuComplete"
@@ -158,7 +157,6 @@ export type DaySheetFunction = {
   startTime: string
   endTime: string
   pax: number
-  paxOverrideNote: string | null
   venueName: string | null
   menu: { tierName: string; perPlatePaise: number; complete: boolean; categories: { name: string; items: string[] }[] } | null
   addons: { description: string; qty: number; ratePaise: number }[]
@@ -167,7 +165,7 @@ export type DaySheetFunction = {
 export async function getDaySheet(date: string): Promise<{ date: string; functions: DaySheetFunction[] }> {
   const subs = (await db.execute(sql`
     SELECT se.id, se.name, se.start_time::text AS "startTime", se.end_time::text AS "endTime",
-           se.pax, se.pax_override_note AS "paxOverrideNote",
+           se.pax,
            e.code AS "eventCode", e.guest_name AS "guestName", e.event_type AS "eventType",
            COALESCE(v.name, b.name) AS "venueName"
     FROM sub_events se
@@ -178,7 +176,7 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
       AND e.status IN ('confirmed','in_progress','completed','locked','billed','closed')
     ORDER BY se.start_time, "venueName"
   `)) as unknown as {
-    id: string; name: string; startTime: string; endTime: string; pax: number; paxOverrideNote: string | null
+    id: string; name: string; startTime: string; endTime: string; pax: number
     eventCode: string; guestName: string; eventType: string; venueName: string | null
   }[]
 
@@ -232,7 +230,6 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
       startTime: s.startTime,
       endTime: s.endTime,
       pax: s.pax,
-      paxOverrideNote: s.paxOverrideNote,
       venueName: s.venueName,
       menu: m
         ? {

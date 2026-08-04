@@ -186,7 +186,9 @@ export async function notificationsFor(
   }
 
   for (const r of await pendingReminders(user.roleName, today)) {
-    items.push({ id: `rem:${r.id}`, kind: 'payment', message: `Payment due — ${r.eventCode}: balance ${formatPaise(r.balancePaise)}`, href: `/bookings/${r.eventId}`, at: r.remindOn })
+    // What to collect to reach the milestone, not the whole outstanding balance — the wedding
+    // asks for 50% by D-30 and settles the rest at billing (client, 4 Aug 2026).
+    items.push({ id: `rem:${r.id}`, kind: 'payment', message: `Payment due — ${r.eventCode}: collect ${formatPaise(r.shortfallPaise)} to reach ${r.milestonePct}%`, href: `/bookings/${r.eventId}`, at: r.remindOn })
   }
   if (user.roleName === 'booking_manager' || user.roleName === 'auditor') {
     for (const s of await listStaleEnquiries(today)) {

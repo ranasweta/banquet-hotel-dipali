@@ -3,12 +3,14 @@ import { eq } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
-import { effectiveDiscountPaise } from '@/lib/discounts'
+import { shownTaxPaise } from '@/lib/invoice'
+import { paymentSchedule, type Milestone } from '@/lib/payment-schedule'
 
 /**
  * Payment ledger (M7, FR-7.7, FR-11.4). Part-payments of any amount are recorded as they
- * arrive with a unique internal receipt number; the event shows running paid-vs-balance.
- * Payments are exempt from the lock guard (settlement arrives after lock, per schema).
+ * arrive with a unique internal receipt number; the event shows running paid-vs-balance and
+ * the milestones behind it. Payments are exempt from the lock guard (settlement arrives after
+ * lock, per schema).
  */
 
 const UNIQUE_VIOLATION = '23505'
@@ -72,49 +74,65 @@ export async function recordPayment(actor: Actor, eventId: string, input: Paymen
 }
 
 export type Ledger = {
+  /** Venue + food + add-ons. */
   proposalTotalPaise: number
+  roomsPaise: number
+  roomsTaxPaise: number
   discountPaise: number
-  netBillPaise: number
+  /** Everything actually collectable: proposal + rooms + the 5%, less discounts. */
+  payablePaise: number
+  /** The 18% the documents print and nobody pays — shown so the two can be reconciled. */
+  shownGstPaise: number
+  displayTotalPaise: number
   paidPaise: number
   balancePaise: number
+  /** What is due, when, and what is short — the panel a reopened proposal is read from. */
+  milestones: Milestone[]
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string; note: string | null }[]
 }
 
 /**
- * The running ledger: proposal − effective discounts = net bill; payments net of refunds =
- * paid; balance = net bill − paid. (GST and line-level billing arrive with the invoice in M9.)
+ * The running ledger, and the instalments behind it (client's lead, 4 Aug 2026: "payment logs
+ * should be maintained so that whenever they reopen the proposal they can get how much is due").
+ *
+ * It used to measure `proposal_total_paise − discounts`, which is venue+food only — so every
+ * booking with lodging under-stated its balance by the entire room charge, and a guest could be
+ * told they were square while owing for thirty rooms. Both the balance and the milestones now
+ * come from `lib/payment-schedule.ts`, which is also what confirm and the reminders read.
  */
 export async function getLedger(eventId: string): Promise<Ledger> {
-  const [ev] = await db
-    .select({ proposalTotalPaise: schema.events.proposalTotalPaise })
-    .from(schema.events)
-    .where(eq(schema.events.id, eventId))
-    .limit(1)
+  const [ev] = await db.select({ id: schema.events.id }).from(schema.events).where(eq(schema.events.id, eventId)).limit(1)
   if (!ev) throw notFound('Event not found')
 
-  const discountPaise = await effectiveDiscountPaise(eventId)
-  const rows = await db
-    .select({
-      id: schema.payments.id,
-      kind: schema.payments.kind,
-      amountPaise: schema.payments.amountPaise,
-      mode: schema.payments.mode,
-      receiptNo: schema.payments.receiptNo,
-      receivedOn: schema.payments.receivedOn,
-      note: schema.payments.note,
-    })
-    .from(schema.payments)
-    .where(eq(schema.payments.eventId, eventId))
-    .orderBy(schema.payments.receivedOn)
+  const [schedule, shownGstPaise, rows] = await Promise.all([
+    paymentSchedule(eventId),
+    shownTaxPaise(eventId),
+    db
+      .select({
+        id: schema.payments.id,
+        kind: schema.payments.kind,
+        amountPaise: schema.payments.amountPaise,
+        mode: schema.payments.mode,
+        receiptNo: schema.payments.receiptNo,
+        receivedOn: schema.payments.receivedOn,
+        note: schema.payments.note,
+      })
+      .from(schema.payments)
+      .where(eq(schema.payments.eventId, eventId))
+      .orderBy(schema.payments.receivedOn),
+  ])
 
-  const paidPaise = rows.reduce((s, p) => s + (p.kind === 'refund' ? -p.amountPaise : p.amountPaise), 0)
-  const netBillPaise = ev.proposalTotalPaise - discountPaise
   return {
-    proposalTotalPaise: ev.proposalTotalPaise,
-    discountPaise,
-    netBillPaise,
-    paidPaise,
-    balancePaise: netBillPaise - paidPaise,
+    proposalTotalPaise: schedule.proposalPaise,
+    roomsPaise: schedule.roomsPaise,
+    roomsTaxPaise: schedule.roomsTaxPaise,
+    discountPaise: schedule.discountPaise,
+    payablePaise: schedule.payablePaise,
+    shownGstPaise,
+    displayTotalPaise: schedule.payablePaise + shownGstPaise,
+    paidPaise: schedule.paidPaise,
+    balancePaise: schedule.balancePaise,
+    milestones: schedule.milestones,
     payments: rows,
   }
 }

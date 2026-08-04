@@ -206,14 +206,18 @@ export async function applyMove(tx: Tx, actor: Actor, subEventId: string, eventI
   })
 }
 
-/** Directly changes pax on a confirmed sub-event (FR-1.9 — no approval needed), versioned. */
-export async function changePax(actor: Actor, subEventId: string, pax: number, overrideNote?: string): Promise<void> {
+/**
+ * Directly changes pax on a confirmed sub-event (FR-1.9 — no approval needed), versioned.
+ * No upper bound of any kind (client, 4 Aug 2026): a positive whole number is all that is
+ * asked, and there is no capacity left to override.
+ */
+export async function changePax(actor: Actor, subEventId: string, pax: number): Promise<void> {
   if (!Number.isInteger(pax) || pax <= 0) throw badRequest('Pax must be a positive whole number')
   await db.transaction(async (tx) => {
     const cur = await loadSub(tx, subEventId)
     if (!REQUESTABLE.has(cur.status)) throw badRequest('Edit an enquiry directly; pax changes here are for confirmed bookings.')
     const [old] = await tx.select({ pax: schema.subEvents.pax }).from(schema.subEvents).where(eq(schema.subEvents.id, subEventId)).limit(1)
-    await tx.update(schema.subEvents).set({ pax, paxOverrideNote: overrideNote ?? null }).where(eq(schema.subEvents.id, subEventId))
+    await tx.update(schema.subEvents).set({ pax }).where(eq(schema.subEvents.id, subEventId))
     await audit(tx, actor, { entity: 'sub_events', entityId: subEventId, eventId: cur.eventId, action: 'update', field: 'pax', oldValue: String(old!.pax), newValue: String(pax) })
   })
 }

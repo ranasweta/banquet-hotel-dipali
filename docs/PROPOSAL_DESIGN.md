@@ -90,8 +90,8 @@ The proposal is built in `/bookings/new` (create) or `/bookings/:id/edit` (resum
 
 **Step 2 — Functions & menu**
 - Add a function: name, date (inside the declared run), start/end time, **exactly one** of
-  venue or bundle, pax, optional pax-override note. Soft capacity check (FR-2.6): pax outside
-  the venue's range needs an override note.
+  venue or bundle, and pax. Pax is uncapped (FR-2.6 withdrawn, 3 Aug 2026): whatever the guest
+  says, no venue range to argue with and no override note to write.
 - Pick a menu **tier** per function now; dishes can be chosen later (FR-3.2 — an incomplete
   menu is allowed). The per-plate rate is read back from the server (the wedding surcharge is
   added server-side; the client never recomputes money).

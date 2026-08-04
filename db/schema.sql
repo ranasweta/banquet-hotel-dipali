@@ -500,7 +500,11 @@ CREATE TABLE invoices (
   invoice_no    text UNIQUE,                    -- assigned at finalisation only
   gross_paise   bigint NOT NULL,
   discount_paise bigint NOT NULL DEFAULT 0,
-  tax_paise     bigint NOT NULL DEFAULT 0,
+  tax_paise     bigint NOT NULL DEFAULT 0,       -- COLLECTED tax: the 5% on rooms. In net_paise.
+  -- SHOWN tax: the 18% on venue/food/maintenance (client, 4 Aug 2026; migration 0026). Printed
+  -- on the document and collected from nobody, so it enters no total but the printed "Total" —
+  -- folding it into net_paise would leave balance_paise permanently short of zero.
+  shown_tax_paise bigint NOT NULL DEFAULT 0,
   net_paise     bigint NOT NULL,
   advances_paise bigint NOT NULL DEFAULT 0,
   balance_paise bigint NOT NULL,
