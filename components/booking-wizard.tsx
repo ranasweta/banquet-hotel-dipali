@@ -51,7 +51,14 @@ type RoomReq = { unit_id: string; room_type: string; count: number; check_in: st
 type Quote = {
   totalPaise: number
   discountPaise: number
+  /** Venue + food + rooms + the 5% on rooms, less discounts — what is actually collected. */
+  payablePaise: number
+  /** The 18% printed on the guest's proposal and charged to nobody (client, 4 Aug 2026). */
+  shownGstPaise: number
+  /** payable + the 18% — the "Total" line the guest reads. */
+  displayTotalPaise: number
   advanceRequiredPaise: number
+  weddingMilestonePaise: number
   lines: { subEventId: string; name: string; ratePaise: number | null }[]
   missing: { subEventId: string; name: string }[]
 }
@@ -62,7 +69,11 @@ const STEPS = ['Date & event', 'KYC', 'Functions & menu', 'Rooms', 'Payment revi
 /** The usual run of functions, offered as one-tap names once the first one exists. */
 const SUGGESTED_FUNCTIONS = ['Mehndi', 'Haldi', 'Sangeet', 'Wedding', 'Reception', 'Tilak']
 
-/** Basis points. Rooms are the only taxed head (client, 20 Jul 2026); see lib/invoice.ts. */
+/**
+ * Basis points. Rooms carry 5% and it is the only GST the hotel actually collects — the 18%
+ * added on 4 Aug 2026 is printed on the guest's proposal and enters no threshold, so it plays
+ * no part in this step's live estimate. Mirrors ROOM_GST_BP in lib/tax.ts.
+ */
 const ROOM_TAX_BP = 500
 
 export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}) {
@@ -560,8 +571,14 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
           lodgingUnits={options.lodgingUnits ?? []}
           alreadyConfirmed={eventStatus !== 'enquiry'}
           onBack={() => setStep(3)}
-          onConfirmed={(code) => {
-            toast.success(`Confirmed — ${code}`)
+          onConfirmed={(code, shortfallPaise) => {
+            // A part payment confirms and holds the dates all the same; saying so here is the
+            // only moment the manager is guaranteed to be looking (client's lead, 4 Aug 2026).
+            if (shortfallPaise > 0) {
+              toast.warning(`Confirmed — ${code}. Dates held, ${formatPaise(shortfallPaise)} of the advance still due.`)
+            } else {
+              toast.success(`Confirmed — ${code}`)
+            }
             router.push('/calendar')
           }}
           onDone={() => {
@@ -1142,7 +1159,7 @@ function ReviewStep({
   // no advance to collect and nothing to re-confirm — the step just closes.
   alreadyConfirmed: boolean
   onBack: () => void
-  onConfirmed: (code: string) => void
+  onConfirmed: (code: string, shortfallPaise: number) => void
   onDone: () => void
   onDiscountChanged: () => void
 }) {
@@ -1174,13 +1191,13 @@ function ReviewStep({
     if (!receipt.trim() || !receivedOn) return toast.error('Enter the receipt number and date')
     setBusy(true)
     try {
-      const { event } = await api<{ event: { code: string } }>(`/events/${eventId}/confirm`, {
+      const { event } = await api<{ event: { code: string; advanceShortfallPaise: number } }>(`/events/${eventId}/confirm`, {
         method: 'POST',
         body: JSON.stringify({
           advance: { amount_paise: rupeesToPaise(Number(amount)), mode, receipt_no: receipt, received_on: receivedOn },
         }),
       })
-      onConfirmed(event.code)
+      onConfirmed(event.code, event.advanceShortfallPaise)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Confirmation failed')
     } finally {
@@ -1208,6 +1225,8 @@ function ReviewStep({
   })()
 
   const grossPaise = quote ? quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise : 0
+  // What is actually being collected right now, so the form can say how far short it falls.
+  const amountPaise = Number.isFinite(Number(amount)) ? Math.round(Number(amount) * 100) : 0
 
   return (
     <StepCard title="Review & confirm">
@@ -1311,24 +1330,34 @@ function ReviewStep({
                     </tr>
                   </>
                 )}
-                <tr className="font-medium">
+                <tr>
                   <td className="px-3 py-2">Estimated total</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatPaise(grossPaise)}</td>
                 </tr>
                 {quote.discountPaise > 0 && (
-                  <>
-                    <tr className="text-emerald-700 dark:text-emerald-400">
-                      <td className="px-3 py-2">Less discounts</td>
-                      <td className="px-3 py-2 text-right tabular-nums">− {formatPaise(quote.discountPaise)}</td>
-                    </tr>
-                    <tr className="font-medium">
-                      <td className="px-3 py-2">Net total</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{formatPaise(grossPaise - quote.discountPaise)}</td>
-                    </tr>
-                  </>
+                  <tr className="text-emerald-700 dark:text-emerald-400">
+                    <td className="px-3 py-2">Less discounts</td>
+                    <td className="px-3 py-2 text-right tabular-nums">− {formatPaise(quote.discountPaise)}</td>
+                  </tr>
                 )}
+                {/* The two totals, in the order they have to be read. The bold one is what we
+                    collect; the 18% below it is printed on the guest's proposal and charged to
+                    nobody (client, 4 Aug 2026). Showing only the bigger figure is how a
+                    counter ends up taking 18% too much. */}
+                <tr className="font-medium">
+                  <td className="px-3 py-2">Amount payable</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.payablePaise)}</td>
+                </tr>
                 <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">Advance required (25% of the {quote.discountPaise > 0 ? 'discounted ' : ''}total, rooms included)</td>
+                  <td className="px-3 py-2">GST 18% — shown on the proposal, not collected</td>
+                  <td className="px-3 py-2 text-right tabular-nums">+ {formatPaise(quote.shownGstPaise)}</td>
+                </tr>
+                <tr className="text-muted-foreground">
+                  <td className="px-3 py-2">Total printed on the proposal</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.displayTotalPaise)}</td>
+                </tr>
+                <tr className="text-muted-foreground">
+                  <td className="px-3 py-2">Advance required (25% of the amount payable)</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.advanceRequiredPaise)}</td>
                 </tr>
               </tbody>
@@ -1336,7 +1365,9 @@ function ReviewStep({
           </div>
           <p className="text-xs text-muted-foreground">
             Rooms are a rack-rate estimate until the Lodge Manager allocates them; maintenance is
-            added to the payment review once logged.
+            added to the payment review once logged. Every instalment — the advance, the wedding
+            50% and the settlement — is a percentage of the amount payable, never of the printed
+            total.
           </p>
 
           {/* Per-head percentage discounts — applied here so the total and the 25% advance
@@ -1374,6 +1405,17 @@ function ReviewStep({
               <Field label="Received on">
                 <Input type="date" max={todayISO()} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
               </Field>
+              {/* A guest who brings part of the advance is no longer turned away (client's lead,
+                  4 Aug 2026). Said here, at the field, because this is where a manager decides
+                  whether to argue with the guest or take what is on the table. */}
+              {quote && amountPaise > 0 && amountPaise < quote.advanceRequiredPaise && (
+                <p className="sm:col-span-2 lg:col-span-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                  This is {formatPaise(quote.advanceRequiredPaise - amountPaise)} short of the 25%
+                  ({formatPaise(quote.advanceRequiredPaise)}). The dates will still be held — the
+                  booking confirms and shows as <span className="font-medium">Downpayment due</span> on
+                  the calendar until the rest arrives.
+                </p>
+              )}
             </div>
           )}
         </>

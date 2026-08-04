@@ -28,15 +28,23 @@ races return 409 with a human-readable message.
 - `POST /events/:id/sub-events` | `PUT /sub-events/:id` | `DELETE /sub-events/:id`
 - `GET  /availability?venue_id=&date=&start=&end=` — time-overlap check (bundle-aware),
   returns { available, conflicts[], open_enquiries }
-- `POST /events/:id/confirm` — THE transaction: re-validates all windows, checks
-  advance ≥ 25%, inserts venue_bookings atomically → 409 on any race
+- `POST /events/:id/confirm` — THE transaction: re-validates all windows, requires SOME
+  recorded advance against a receipt, re-tests the 10% discount cap, inserts venue_bookings
+  atomically → 409 on any race; 402 `advance_required` only when nothing at all was recorded.
+  Returns `event.advanceShortfallPaise` / `advanceRequiredPaise` — a part payment confirms and
+  carries the rest as Downpayment due (BR-P1, amended 4 Aug 2026)
 - `POST /events/:id/cancel` { reason }
 - `GET  /events/:id/proforma` — a live proforma estimate (same bill math, nothing persisted)
   for a confirmed-but-unlocked event; gated on `bookings` view so the Booking Manager can quote
+- `GET  /events/:id/quote` — the priced proposal for the review step: per-function venue
+  charges, `payablePaise`, `shownGstPaise`, `displayTotalPaise`, `advanceRequiredPaise`,
+  `weddingMilestonePaise`, and `missing[]` for BR-R1 gaps
 
 ## Calendar (module: calendar)
 - `GET /calendar?from=&to=` — venues × dates board; banquet manager capped to
-  rolling 15 days server-side; states: confirmed | carryover | in_progress.
+  rolling 15 days server-side; states: confirmed | carryover | in_progress | downpayment due.
+  Each booking carries `advanceShortfallPaise` (0 when paid up) and, for short bookings only,
+  `contactPhone` — so the call to the GM can be made from the board (4 Aug 2026).
   Locked-in deals only — events at status confirmed or beyond. Enquiries are never
   returned (FR-2.5, amended 17 Jul 2026); slot contention surfaces via `/availability`,
   which still returns `open_enquiries`.
@@ -125,12 +133,20 @@ races return 409 with a human-readable message.
 
 ## Discounts & payments (module: billing — booking_manager has none; the advance is
 ## recorded on the bookings/confirm path instead)
-- `GET|POST /events/:id/discounts` — head menu/venue/overall (per-room discounts live on the
-  allocation, BR-D1); live 10% combined total; over cap → 202 { exception_id } (BR-D2)
+- `GET|POST /events/:id/discounts` — head menu/venue/room/overall. POST takes `amount_paise`
+  (a discount is money, 4 Aug 2026); `percent_bp` is still accepted for the approval-bundle path
+  and older callers. Over cap → 202 { exception_id } (BR-D2). GET adds `cap`
+  { capPct, capBasePaise, capPaise, usedPaise, headroomPaise } so a screen can state the
+  remaining headroom in rupees.
 - `DELETE /discounts/:id` — remove a discount (and its pending exception)
-- `GET  /events/:id/ledger` — proposal − effective discounts, payments trail, paid vs balance
+- `GET  /events/:id/ledger` — the payable amount (venue + food + rooms + 5% room GST, less
+  discounts), the 18% shown-not-collected GST beside it, payments trail, paid vs balance, and
+  `milestones[]` — 25% advance / wedding 50% at D-30 / 100% settlement, each with required,
+  paid, shortfall, dueOn and overdue (4 Aug 2026)
 - `POST /events/:id/payments` { kind, amount_paise, mode, receipt_no, received_on } — unique receipt
-- `GET  /reminders/pending?as_of=` — due payment reminders for the caller's role (any auth role)
+- `GET  /reminders/pending?as_of=` — due payment reminders for the caller's role (any auth
+  role). Each carries `shortfallPaise` — the gap to the wedding's 50% milestone, not the whole
+  outstanding balance (BR-P2, amended 4 Aug 2026)
 - `POST /cron/run` { as_of? } — daily job: generate wedding reminders + surface stale enquiries
   (CRON_SECRET header, or Auditor/Admin session)
 
@@ -173,7 +189,8 @@ single-request decision.
 - `POST /change-requests` { sub_event_id, payload{event_date/start_time/end_time/venue_id/bundle_id}, reason } (FR-1.9)
 - `POST /change-requests/:id/decide` { action: approve|reject, remark } — Higher Authority;
   approval re-books the venue slot (409 if taken meanwhile)
-- `POST /sub-events/:id/pax` { pax, override_note } — a post-confirm pax change applies directly
+- `POST /sub-events/:id/pax` { pax } — a post-confirm pax change applies directly. No upper
+  bound of any kind, and `override_note` is gone with the capacity it explained (4 Aug 2026)
 
 ## Lock & billing (module: billing — Auditor)
 - `GET  /events/:id/lock-checklist` — computed item states

@@ -38,7 +38,6 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
       venueId: input.venue_id ?? null,
       bundleId: input.bundle_id ?? null,
       pax: input.pax,
-      paxOverrideNote: input.pax_override_note ?? null,
     })
     .where(eq(schema.subEvents.id, id))
   await audit(db, actor, { entity: 'sub_events', entityId: id, eventId: sub.eventId, action: 'update', field: 'name', newValue: input.name })

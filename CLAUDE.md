@@ -17,16 +17,9 @@ truth for conventions; read the docs below before implementing any feature.
    through milestones sequentially; each ends with passing tests.
 
 ## How to work
-Behavioural guidelines (after Andrej Karpathy's notes on LLM coding pitfalls).
-These bias toward caution over speed; for trivial tasks, use judgement.
+These rules bias toward caution over speed; for trivial tasks, use judgement.
 
-**1. Think before coding.** Don't assume. Don't hide confusion. Surface tradeoffs.
-- State assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them — don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop, name what's confusing, and ask.
-
-**2. Simplicity first.** Minimum code that solves the problem. Nothing speculative.
+**1. Simplicity first.** Minimum code that solves the problem. Nothing speculative.
 - No features beyond what was asked; no abstractions for single-use code.
 - No "flexibility" or configurability that wasn't requested.
 - No error handling for impossible scenarios.
@@ -36,28 +29,19 @@ These bias toward caution over speed; for trivial tasks, use judgement.
   extras. Auditing a write, checking a permission, or snapshotting a menu is
   never scope creep — leaving it out is a bug.
 
-**3. Surgical changes.** Touch only what you must. Clean up only your own mess.
+**2. Surgical changes.** Touch only what you must. Clean up only your own mess.
 - Don't "improve" adjacent code, comments, or formatting.
 - Don't refactor what isn't broken. Match existing style even if you'd differ.
 - Notice unrelated dead code? Mention it — don't delete it.
 - Do remove imports/variables/functions that *your* change orphaned.
 - Test: every changed line should trace directly to the request.
 
-**4. Goal-driven execution.** Define success criteria, then loop until verified.
-- "Add validation" → "write tests for invalid inputs, then make them pass".
-- "Fix the bug" → "write a test that reproduces it, then make it pass".
-- "Refactor X" → "ensure tests pass before and after".
+**3. Goal-driven execution.** Define success criteria, then loop until verified.
 - For multi-step work, state a brief plan as `step → verify: check` lines.
-- Strong criteria let you work independently; "make it work" doesn't.
-
-Working if: fewer stray diffs, fewer rewrites from overcomplication, and
-clarifying questions arriving before implementation rather than after mistakes.
 
 ## Stack
-- Next.js 14+ (App Router) + TypeScript strict
 - PostgreSQL 16, Drizzle ORM (introspect from `db/schema.sql`, keep SQL as
   the source of truth — schema changes happen in SQL migrations first)
-- Tailwind + shadcn/ui
 - Auth: session-based (iron-session or NextAuth credentials), mobile + password
 - Zod validation on every API input
 
@@ -73,15 +57,24 @@ clarifying questions arriving before implementation rather than after mistakes.
      allowed. A window with end_time ≤ start_time runs past midnight into the next day.
      Rely on the `venue_bookings` GiST exclusion to win races; no fixed slots, no 11 AM
      rule. Booking a bundle inserts one `venue_bookings` row per member venue.
-   - Confirm requires recorded advance ≥ 25% BEFORE inserting `venue_bookings`
-     rows (BR-P1). The base is `proposal_total_paise` **plus the room estimate and
-     its tax** (client, 20 Jul 2026) — `proposal_total_paise` is the venue+food
-     total; rooms live outside that column and are added on for the advance base.
+   - Confirm requires **some** recorded advance BEFORE inserting `venue_bookings`
+     rows (BR-P1, amended 4 Aug 2026). The 25% is a debt now, not a gate: a guest who
+     brings part of it confirms all the same, holds the venues like any other booking,
+     and carries the rest as **Downpayment due** — on the calendar, on the booking, in
+     the audit trail. What is still refused is a hold for nothing (zero, or no receipt).
+     The shortfall has no timer and raises no exception: it is chased when a competing
+     enquiry appears, by the Booking Manager phoning the GM, who can cancel.
+     The base is the **payable amount** — `proposal_total_paise` + rooms + the 5% room
+     tax, less discounts. The 18% GST is not in it (see rule 10).
    - Combined discounts ≤ 10% of the **total bill** — `proposal_total_paise` + rooms,
-     pre-tax (BR-D2, amended 25 Jul 2026; was venue+food only). A discount is a
-     **percentage of a head** (menu / venue / room / overall) recomputed live from
-     the current bill; over the cap → Higher Authority approval. Per-room caps
-     (BR-D1) are retired now that rooms are booked in bulk.
+     pre-tax and free of GST of either kind (BR-D2, amended 25 Jul 2026; was venue+food
+     only). A discount is **an amount of money** off a head (menu / venue / room /
+     overall) — client's lead, 4 Aug 2026, replacing the live percentage. What is typed
+     is what the guest gets; the percentage survives only as the cap's arithmetic. Such
+     a row stores `percent_bp = NULL`; older percentage rows still recompute live.
+     Over the cap → Higher Authority approval. Per-room caps (BR-D1) are retired now
+     that rooms are booked in bulk. Because a frozen rupee figure cannot shrink with the
+     bill the way a percentage did, `confirmEvent` re-tests the same cap once more.
      Discounts are the **Booking Manager's** to give (he has `billing` edit) and the
      **Authority's** — both, from the Payment review or the event's Billing panel.
      **The cap does not bind the Authority himself** (amended 1 Aug 2026; widened 3 Aug 2026
@@ -145,6 +138,35 @@ clarifying questions arriving before implementation rather than after mistakes.
    and the Authority can be told which *dish* is in question. Two extras per
    FUNCTION are free (not per segment); the rest go to the GM when that
    function's submit button is pressed — not batched at the lock.
+11. **Two GSTs, and only one of them is money** (client's lead, 4 Aug 2026).
+   **Rooms 5%** — printed and collected. **Everything else 18%** (venue, food,
+   add-ons, maintenance) — printed and collected from nobody: "at the end we are
+   just showing we are taking 18% gst but we wont be taking it."
+   Every document therefore carries two totals and must show both: **Total**
+   (with all tax) and **Amount payable** (what is actually collected). Showing one
+   figure is how a counter takes 18% too much.
+   The 18% enters **no** threshold and **no** balance — not the 25% advance, not
+   the wedding 50%, not the discount cap, not `balance = payable − paid`. Folding
+   it into a balance would leave every booking 18% short of zero for ever and
+   nothing could be settled or closed. `invoices.tax_paise` stays the collected
+   tax; the 18% lives in `shown_tax_paise` (migration 0026) and feeds only the
+   printed total. `lib/tax.ts` owns the rates and the collected/shown split, by
+   section — rooms collected, all else shown — so every screen agrees.
+   **Flagged, not settled:** a GST line on a guest-facing document for tax that is
+   not charged is a question for the hotel's CA. Implemented as instructed and
+   recorded in `SEED_ASSUMPTIONS.md` §F8; it is a one-constant change.
+12. **The payable amount and the milestones live in `lib/payment-schedule.ts`**, and
+   nothing recomputes them locally. Payable = venue + food + add-ons + rooms + the 5%,
+   less discounts. Milestones are floors on the CUMULATIVE total received, never
+   instalments of their own: **25%** at confirm, **50%** thirty days before the first
+   function for weddings (BR-P2, amended 4 Aug 2026 — was the whole remaining 75%),
+   **100%** at billing. Over-payment is always accepted.
+   Dates come from `min(sub_events.event_date)`, never the `events.first_date` cache.
+13. **No pax limit anywhere** (client, 4 Aug 2026, completing the 3 Aug removal of the
+   venue-capacity cap). A positive whole number is a type check, not a limit — no
+   ceiling in Zod, no capacity gate, and `pax_override_note` is gone with the capacity
+   it explained. `venues.capacity_min/max` survive as descriptive seed data and gate
+   nothing.
 
 ## UI conventions
 - Use the ui-ux-pro-max skill for design decisions and the Magic MCP (`/ui`)
@@ -157,6 +179,12 @@ clarifying questions arriving before implementation rather than after mistakes.
   asks grouped by section and, below them, the whole proposal as an editable form. Requested
   items are marked in **violet** — always with the word "Requested" beside them, never colour
   alone, since a decision hangs on seeing them.
+- A booking short of its 25% shows **Downpayment due** on the calendar in rose, with the
+  words beside the colour, and the day panel carries the shortfall and the guest's number so
+  the call to the GM can be made from that screen (4 Aug 2026). The number rides along only
+  for short bookings — everyone with `calendar: view` can open that board.
+- Anywhere money is totalled for a human, **Total** and **Amount payable** appear together
+  (rule 11). Never one alone.
 - Inline availability feedback on every sub-event form the moment
   date + venue + time are set.
 
@@ -167,13 +195,8 @@ clarifying questions arriving before implementation rather than after mistakes.
 - Concurrency test: two parallel confirms on the same slot — exactly one wins.
 
 ## Seed data
-Seed script must load: 4 properties, all venues + 4 bundles with rate cards **per event
-type** (from the hotel's 2026 venue proposal, not PRD §3 — see below), menu
-tiers/categories/items from the two menu PDFs with pick-counts, wedding surcharge
-Rs. 50, lodging inventory (Palace 36 rooms + 2 dormitories, Regency 49 rooms in blocks
-A/B/C), event types (wedding = 3 contacts), modules list, roles with the default
-permission matrix (PRD §2.1), and users: 2 higher_authority, 3 lodge, 5 booking,
-3 banquet, 1 maintenance, **1 auditor/admin** (15 total).
+The full seed inventory (properties, venues, bundles, menus, lodging, roles, the 15
+users) lives in the `seed-data` skill — invoke it before writing or regenerating seed data.
 
 Sources rank: **the hotel's PDFs > docs/PRD.md > placeholders.** Where the PRD
 summarises the hotel's own price list it can be wrong, and in §3.1 it was. The spec

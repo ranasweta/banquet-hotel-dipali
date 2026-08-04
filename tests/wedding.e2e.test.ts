@@ -296,21 +296,29 @@ d('a whole wedding, start to finish', () => {
     const priced = await pricing.priceProposal('wedding', subs)
     expect(priced.missing).toHaveLength(0) // BR-R1: every venue is rated
 
-    // The same base the confirm gate uses: the proposal plus rooms and their tax
-    // (client, 20 Jul 2026 — see SEED_ASSUMPTIONS §F10).
+    // The same base the confirm gate uses: the proposal plus rooms and their 5% tax
+    // (client, 20 Jul 2026 — see SEED_ASSUMPTIONS §F10). The 18% added on 4 Aug 2026 is
+    // printed and collected from nobody, so it is deliberately absent from this figure.
+    const schedule = await import('@/lib/payment-schedule')
+    const bill = await schedule.payableBreakdown(eventId)
     const [extras, roomEst] = await Promise.all([
       pricing.foodAndAddonTotal(eventId),
       pricing.roomEstimatePaise(eventId),
     ])
     const base =
       priced.totalPaise + extras.foodPaise + extras.addonPaise + roomEst.roomsPaise + roomEst.roomsTaxPaise
+    // The shared module and the hand-rolled sum must be the same number, or the figure quoted
+    // on the wizard and the figure enforced at confirm could drift apart.
+    expect(bill.payablePaise).toBe(base)
+
     const advance = money.percentOfPaise(base, 25)
-    await confirmSvc.confirmEvent(bm, eventId, {
+    const res = await confirmSvc.confirmEvent(bm, eventId, {
       amountPaise: advance,
       mode: 'bank',
       receiptNo: `E2E-${Date.now()}`,
       receivedOn: '2027-01-05',
     })
+    expect(res.advanceShortfallPaise).toBe(0) // paid in full, so nothing carried
 
     expect(await statusOf()).toBe('confirmed')
     // BR-C1: one venue_bookings row per function, inserted only after the money landed.
@@ -421,17 +429,24 @@ d('a whole wedding, start to finish', () => {
     )
     expect(inv.lines.filter((l) => l.section === 'rooms').every((l) => l.functionLabel === null)).toBe(true)
 
-    // Only rooms are taxed (client, 20 Jul 2026).
-    for (const l of inv.lines) {
-      expect(l.gstRateBp).toBe(l.section === 'rooms' ? 500 : 0)
+    // Rooms 5%, everything else 18% (client's lead, 4 Aug 2026). The Auditor's own adjustment
+    // lines keep whatever rate they were given, so they are excluded from this rule.
+    for (const l of inv.lines.filter((x) => x.section !== 'adjustment')) {
+      expect(l.gstRateBp).toBe(l.section === 'rooms' ? 500 : 1800)
     }
 
-    // The totals are the lines, to the paise.
+    // The totals are the lines, to the paise — and the two taxes land in different places.
+    // Only the rooms 5% is collected, so only it reaches netPaise and therefore the balance;
+    // the 18% moves the printed Total alone. A booking could never be settled otherwise.
     const gross = inv.lines.reduce((n, l) => n + l.amountPaise, 0)
-    const tax = inv.lines.reduce((n, l) => n + l.taxPaise, 0)
+    const collected = inv.lines.filter((l) => l.section === 'rooms').reduce((n, l) => n + l.taxPaise, 0)
+    const shown = inv.lines.filter((l) => l.section !== 'rooms').reduce((n, l) => n + l.taxPaise, 0)
+    expect(shown).toBeGreaterThan(0) // the 18% is genuinely on the document
     expect(inv.grossPaise).toBe(gross)
-    expect(inv.taxPaise).toBe(tax)
-    expect(inv.netPaise).toBe(gross - inv.discountPaise + tax)
+    expect(inv.taxPaise).toBe(collected)
+    expect(inv.shownTaxPaise).toBe(shown)
+    expect(inv.netPaise).toBe(gross - inv.discountPaise + collected)
+    expect(inv.displayTotalPaise).toBe(inv.netPaise + shown)
     expect(inv.balancePaise).toBe(inv.netPaise - inv.advancesPaise)
     expect(inv.advancesPaise).toBeGreaterThan(0) // the advance from step 9
 

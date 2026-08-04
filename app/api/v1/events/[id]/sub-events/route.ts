@@ -26,8 +26,11 @@ export const subEventSchema = z
     end_time: z.string().regex(HHMM),
     venue_id: z.uuid().optional(),
     bundle_id: z.uuid().optional(),
-    pax: z.number().int().positive().max(100000),
-    pax_override_note: z.string().max(300).optional(),
+    // No ceiling on pax, anywhere (client, 4 Aug 2026). The venue-capacity cap went on 3 Aug
+    // and this arbitrary 1,00,000 followed it; a positive whole number is a type check, not a
+    // limit. `pax_override_note` went with them — it existed to explain exceeding a capacity
+    // there is no longer any of.
+    pax: z.number().int().positive(),
   })
   .refine((s) => Boolean(s.venue_id) !== Boolean(s.bundle_id), {
     message: 'provide exactly one of venue_id or bundle_id',
@@ -61,7 +64,6 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
       venueId: input.venue_id,
       bundleId: input.bundle_id,
       pax: input.pax,
-      paxOverrideNote: input.pax_override_note,
     })
     return ok({ subEvent: created }, 201)
   }
@@ -80,7 +82,6 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
       venueId: input.venue_id ?? null,
       bundleId: input.bundle_id ?? null,
       pax: input.pax,
-      paxOverrideNote: input.pax_override_note ?? null,
     })
     .returning({ id: schema.subEvents.id })
 

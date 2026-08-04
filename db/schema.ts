@@ -630,6 +630,9 @@ export const invoices = pgTable("invoices", {
 	discountPaise: bigint("discount_paise", { mode: "number" }).default(0).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	taxPaise: bigint("tax_paise", { mode: "number" }).default(0).notNull(),
+	// SHOWN tax — the 18% printed and never collected (migration 0026). In no total but the
+	// document's "Total"; never net_paise, never balance_paise, never a payment threshold.
+	shownTaxPaise: bigint("shown_tax_paise", { mode: "number" }).default(0).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	netPaise: bigint("net_paise", { mode: "number" }).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations

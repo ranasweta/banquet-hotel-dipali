@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Info } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
+import { formatPaise } from '@/lib/money'
 import { cn } from '@/lib/utils'
 import { formatTime } from '@/lib/time'
 import { titleCase } from '@/lib/text'
@@ -33,6 +34,10 @@ type Booking = {
   status: string
   starts: string // 'YYYY-MM-DDTHH:MM'
   ends: string
+  /** > 0 when the dates were held on a part payment — the board marks it Downpayment due. */
+  advanceShortfallPaise: number
+  /** Sent only for a short booking, so the call to the GM can be made from this screen. */
+  contactPhone: string | null
 }
 type CalendarResponse = {
   from: string
@@ -54,6 +59,14 @@ const STATUS_RULE: Record<string, string> = {
   closed: 'border-l-muted-foreground',
 }
 const CARRYOVER_RULE = 'border-l-amber-500'
+/**
+ * A booking whose 25% advance is not fully in. Its venues are genuinely held — this is not a
+ * provisional pencil-in — but it is only partly paid for, and that is exactly what someone
+ * pricing a competing enquiry needs to know (client's lead, 4 Aug 2026). Rose rather than
+ * amber, which already means carryover, and never colour alone: the chip also carries the
+ * words "Downpayment due".
+ */
+const SHORT_RULE = 'border-l-rose-500'
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -299,16 +312,22 @@ export function CalendarBoard() {
 
 function BookingChip({ chip, venue }: { chip: Chip; venue: string }) {
   const { booking, label, carryover } = chip
+  const short = booking.advanceShortfallPaise > 0
   return (
     <span
       className={cn(
         'truncate border-l-2 bg-muted/60 py-0.5 pl-1.5 text-[10px] leading-tight',
-        carryover ? CARRYOVER_RULE : (STATUS_RULE[booking.status] ?? STATUS_RULE.confirmed),
+        short ? SHORT_RULE : carryover ? CARRYOVER_RULE : (STATUS_RULE[booking.status] ?? STATUS_RULE.confirmed),
       )}
-      title={`${titleCase(booking.guestName)} — ${titleCase(booking.subEventName)} · ${venue} · ${label} (${booking.eventCode}, ${titleCase(booking.status)})`}
+      title={`${titleCase(booking.guestName)} — ${titleCase(booking.subEventName)} · ${venue} · ${label} (${booking.eventCode}, ${titleCase(booking.status)})${
+        short ? ` · Downpayment due ${formatPaise(booking.advanceShortfallPaise)}` : ''
+      }`}
     >
       <span className="font-medium uppercase">{titleCase(booking.guestName)}</span>
       {venue && <span className="text-muted-foreground"> · {venue}</span>}
+      {/* Never colour alone — a manager deciding whether to sell this date again has to be able
+          to read it, not infer it from a stripe. */}
+      {short && <span className="block font-medium text-rose-600 dark:text-rose-400">Downpayment due</span>}
     </span>
   )
 }
@@ -365,6 +384,26 @@ function DayPanel({
                   {venueName.get(c.booking.venueId)} · <span className="tabular-nums">{c.label}</span>
                   {c.carryover && ' · runs past midnight'}
                 </div>
+                {/* Everything the call needs, on the screen the question is asked from: how
+                    short the booking is, and who to ring about it. The GM is the one who can
+                    cancel it (client's lead, 4 Aug 2026). */}
+                {c.booking.advanceShortfallPaise > 0 && (
+                  <div className="mt-0.5 text-xs text-rose-600 dark:text-rose-400">
+                    Downpayment due{' '}
+                    <span className="font-medium tabular-nums">
+                      {formatPaise(c.booking.advanceShortfallPaise)}
+                    </span>
+                    {c.booking.contactPhone && (
+                      <>
+                        {' · '}
+                        <a href={`tel:${c.booking.contactPhone}`} className="tabular-nums hover:underline">
+                          {c.booking.contactPhone}
+                        </a>
+                      </>
+                    )}
+                    <span className="text-muted-foreground"> — dates held; the GM can release them</span>
+                  </div>
+                )}
               </div>
               <Link
                 href={`/bookings/${c.booking.eventId}`}
@@ -386,6 +425,7 @@ function Legend() {
     { label: 'In progress', className: 'bg-emerald-500' },
     { label: 'Locked', className: 'bg-primary' },
     { label: 'Carryover', className: 'bg-amber-500' },
+    { label: 'Downpayment due', className: 'bg-rose-500' },
   ]
   return (
     <div className="ml-auto flex flex-wrap items-center gap-4">

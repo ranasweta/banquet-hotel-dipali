@@ -28,8 +28,10 @@ states.
 ## M3 — Booking wizard (enquiry → confirm)
 5 steps per PRD 5.1: dates, event type (contact count rule), sub-events with
 inline availability, room requirements (Palace default for lawn weddings),
-review. Aadhaar upload. Confirm transaction: advance ≥ 25% check + atomic
-slot inserts; stale-enquiry flagging.
+review. Aadhaar upload. Confirm transaction: SOME advance against a receipt +
+atomic slot inserts; stale-enquiry flagging. (Amended 4 Aug 2026 — the 25% is a
+debt carried by the booking, not a gate on it: a part payment confirms and shows
+as Downpayment due until the rest arrives. BR-P1, FR-1.7a.)
 ✓ Accept: concurrency test — two parallel confirms, exactly one succeeds,
 loser gets 409 with friendly message; wedding without 3 contacts cannot confirm.
 
@@ -71,7 +73,9 @@ shows every sub-event of a date with menus.
 
 ## M9 — Lock, invoice, audit trail
 Lock checklist computation, sign-offs, lock transaction, invoice draft
-(venue + food pax×rate + rooms + maintenance − advances, per-line GST),
+(venue + food pax×rate + rooms + maintenance − advances, per-line GST — rooms 5%
+collected, 18% elsewhere shown and not collected, so the bill carries both a Total
+and an Amount payable; 4 Aug 2026),
 adjustments, finalise with invoice_no + T&C snapshot, print view with
 signature blocks; audit trail timeline UI with CSV export.
 ✓ Accept: lock refused while an exception is pending; post-lock edit attempts

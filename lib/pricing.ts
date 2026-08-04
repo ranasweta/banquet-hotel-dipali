@@ -1,6 +1,7 @@
 import 'server-only'
 import { and, desc, eq, lte, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
+import { ROOM_GST_BP } from '@/lib/tax'
 
 /** A db handle or a transaction handle — pricing reads must run inside the confirm tx. */
 type Exec = Pick<typeof db, 'select' | 'execute'>
@@ -119,9 +120,6 @@ export async function foodAndAddonTotal(
   return { foodPaise: food!.total, addonPaise: addon!.total }
 }
 
-/** Basis points. Rooms are the only taxed head (client, 20 Jul 2026); see lib/invoice.ts. */
-const ROOM_TAX_BP = 500
-
 /**
  * The promised-rooms estimate for an event: per `room_requirements` line,
  * count × nights × the cheapest active rack rate for that type, plus 5% tax.
@@ -160,7 +158,9 @@ export async function roomEstimatePaise(
   for (const r of rows) {
     const amount = Number(r.rate) * Math.max(0, r.count) * Math.max(0, r.nights)
     roomsPaise += amount
-    roomsTaxPaise += Math.round((amount * ROOM_TAX_BP) / 10000)
+    // 5%, and the only tax the hotel actually collects — the 18% added on 4 Aug 2026 is
+    // printed on the document and enters no threshold, so it is absent here by design.
+    roomsTaxPaise += Math.round((amount * ROOM_GST_BP) / 10000)
   }
   return { roomsPaise, roomsTaxPaise }
 }

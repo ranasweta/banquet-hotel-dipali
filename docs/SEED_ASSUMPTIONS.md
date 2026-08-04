@@ -438,18 +438,24 @@ Interpretations made while building the menu module, recorded so they can be cha
   head's current subtotal, so a pax/room change flows through. Rooms are a normal head now
   (bulk-booked); the old per-room allocation caps (BR-D1) are retired. The Booking Manager
   gains billing `edit` to apply them; over the 10% cap still routes to the Higher Authority.
+- **A discount is a rupee amount (4 Aug 2026), not a live percentage** — see §F21, including
+  the drift the change introduces and the second cap test at confirm that answers it.
 - **Over-cap discount apply/reject reuses the M6 decide path unchanged.** The discount row is
   written immediately with its `exception_id`; approval flips the exception to approved (the
   effective query then counts it — no M6 code needed), rejection leaves it uncounted. Deleting
   a discount also deletes its still-pending exception.
-- **Wedding reminder schedule (BR-P2, open question 1 default):** BM reminded daily D-30→D-21,
-  HA added D-20→D-1. Rows are pre-generated into `payment_reminders` (idempotent on the unique
-  key) for every upcoming confirmed wedding with an outstanding balance; a paid-off wedding
-  generates none. `/reminders/pending` surfaces rows whose `remind_on ≤ today` and balance is
+- **Wedding reminder schedule (BR-P2; open question 1 answered 4 Aug 2026):** BM reminded daily
+  D-30→D-21, HA added D-20→D-1. **What is chased changed on 4 Aug 2026:** the ask is the gap to
+  **50% of the amount payable**, not the whole outstanding balance, and a wedding already at 50%
+  generates none. Rows are pre-generated into `payment_reminders` (idempotent on the unique key)
+  for every upcoming confirmed wedding still short of the milestone. `/reminders/pending` surfaces rows whose `remind_on ≤ today` and balance is
   still due. The row generator series over integer day-offsets subtracted from `first_date`
   (the date/interval `generate_series` signature does not exist in Postgres).
-- **Ledger balance = proposal − effective discounts − (payments − refunds).** GST and
-  line-level billing arrive with the invoice in M9; this is the running internal balance.
+- **Ledger balance = ~~proposal~~ payable less payments** — corrected 4 Aug 2026. It measured
+  `proposal_total_paise`, which is venue+food, so every booking with rooms under-stated its
+  balance by the whole lodging charge (§F22). Payable now comes from `lib/payment-schedule.ts`:
+  venue + food + add-ons + rooms + the 5% room GST, less discounts. The 18% GST is displayed
+  alongside and is in no balance.
 - **Cron is a route, not a tsx script.** The lib modules import `server-only`, which a plain
   `tsx` run can't load, so the daily job is `POST /cron/run` (scheduler with a `CRON_SECRET`
   header, or a manual Auditor run). A general in-app **notifications table is still deferred to
@@ -726,20 +732,46 @@ allocating rooms (FR-4.2) needs `rooms: view` — the allocation screen reads
 `/rooms/units` and `/rooms/board`. Revoking it to hide the tab would break their core job.
 **Question:** leave the Rooms tab, or hide it another way?
 
-### F8. Only rooms are taxed, at 5% — everything else zero-rated
-Client instruction, 20 Jul 2026. `GST_BP` in `lib/invoice.ts` was `venue 18% / food 5% /
-rooms 12% / maintenance 18%` — all placeholders pending the hotel's tax consultant (PRD open
-question 5). It is now **rooms 5%, everything else 0%**.
+### F8. Two GSTs — rooms 5% collected, 18% shown and not collected
+**Amended 4 Aug 2026 (client's lead), superseding the 20 Jul ruling below.** GST is now
+charged at **18% on venue, food, add-ons and maintenance** and **5% on rooms** — but only the
+5% is money. The 18% is printed on the document and taken from nobody: *"at the end we are
+just showing we are taking 18% gst but we wont be taking it."*
 
-That answers PRD open question 5. Zero-rating food and venue is unusual for banquet billing,
-so it was queried explicitly and the client **confirmed it a second time on 20 Jul 2026**:
-only rooms are taxed. Implemented as given and recorded here because it is the kind of
-decision that is expensive to unpick after real guests have been billed — if the hotel's tax
-position changes, this constant is the single place to edit.
+That distinction is the whole of the design:
 
-Tax is rounded **per line** and summed; the sum of line taxes is the authoritative figure,
-not 5% of the room sub-total (the two can differ by a paisa). `tests/m9.integration.test.ts`
-re-computes the whole bill by hand against the new rates.
+| | Rate | Printed | Collected | In the 25% / 50% / cap bases |
+|---|---|---|---|---|
+| Rooms | 5% | yes | **yes** | **yes** (the 5%; see §F10) |
+| Venue, food, add-ons, maintenance | 18% | yes | **no** | no |
+
+So every money view carries **two** totals — `Total` and `Amount payable` — and shows both.
+A single headline figure is how a counter collects 18% too much. In the data:
+`invoices.tax_paise` keeps its meaning (collected tax, inside `net_paise` and therefore inside
+`balance_paise`) and the 18% goes to `invoices.shown_tax_paise` (migration 0026), which feeds
+only the printed total. Had the 18% gone into `net_paise`, `balance = net − advances` could
+never reach zero and no booking could be settled or closed. `lib/tax.ts` owns the rates and the
+collected/shown split, **by section** — rooms collected, everything else shown — so the bill,
+the proposal, the quote, the reports and the payment thresholds cannot disagree.
+
+**FLAGGED TO THE CLIENT, NOT SETTLED.** Printing a GST line on a guest-facing document for tax
+that is not being charged or remitted is a question for the hotel's CA, not for this codebase:
+a guest could reasonably read that line as tax paid. It was raised explicitly at the time and
+implemented as instructed. **One sample bill should go in front of the hotel's Auditor before a
+real guest sees one.** If the answer comes back differently, the fix is small and local: either
+drop `STANDARD_GST_BP` to 0 in `lib/tax.ts`, or keep the figure on internal views and omit the
+line from `components/invoice-print.tsx`.
+
+*Superseded, kept for the record:* on 20 Jul 2026 the client instructed that **only rooms are
+taxed, at 5%**, with venue, food and maintenance zero-rated — replacing the placeholder rates
+of `venue 18% / food 5% / rooms 12% / maintenance 18%`. Zero-rating banquet food and venue hire
+is unusual enough that it was queried and **confirmed a second time on 20 Jul**. The 4 Aug
+instruction reinstates an 18% on those heads for display only, so the money collected is the
+same as it was under the 20 Jul rule — the change is entirely to what the document says.
+
+Tax is rounded **per line** and summed; the sum of line taxes is the authoritative figure, not
+a percentage of a sub-total (the two can differ by a paisa). `tests/m9.integration.test.ts`
+re-computes the whole bill by hand against the current rates.
 
 ### F9. "Invoice" and "final" are banned words — the documents are Draft and Draft 2
 House terminology (client, 20 Jul 2026). There are exactly two documents:
@@ -758,7 +790,7 @@ put the banned word in front of the guest), and the on-screen panel is now **Pay
 The word "proforma" was also retired from the UI under the same rule — the tentative print is
 simply the Draft — though the route and function names still use it internally.
 
-### F10. Room tax shows live, and stays outside the advance base
+### F10. Room tax shows live, and counts toward the advance base
 The 5% is shown on the wizard's Rooms step the moment requirements are entered, computed
 per line and summed exactly as `lib/invoice.ts` does it, so the estimate and the Draft can
 never disagree by a rounding paisa.
@@ -773,9 +805,21 @@ ceiling on every event — a side effect nobody asked for. The stored proposal t
 therefore unchanged; only the advance gate sees the bigger number.
 
 The room figure uses `min(rack_rate_paise)` per type across units — the same basis the wizard
-shows — because at proposal time no unit has been chosen. `lib/pricing.ts:roomEstimatePaise`
-is the single implementation, shared by the quote endpoint and the confirm gate so the number
-quoted and the number enforced cannot drift.
+shows — because at proposal time no unit has been chosen.
+
+**Amended 4 Aug 2026.** The 5% stays in the advance base, confirmed explicitly by the client's
+lead when the 18% was introduced ("yes yes 5% one will stay in 25% one"). So the base is
+unchanged: `payable = proposal_total + rooms + room tax − discounts`, and the new 18% never
+enters it. The recommendation at the time was to drop **all** tax from every threshold for a
+rule anyone could state in a sentence; the client kept the 5%, and the 20 Jul instruction
+stands as written.
+
+The single implementation moved from `lib/pricing.ts:roomEstimatePaise` to
+`lib/payment-schedule.ts:payableBreakdown`, which is now what the quote endpoint, the confirm
+gate, the ledger, the wedding reminders and the calendar's Downpayment-due marker all read, so
+the number quoted and the number enforced cannot drift. `roomEstimatePaise` remains as the
+wizard's live rooms-only estimate and computes the tax identically — rounded per line, then
+summed.
 
 ### F11. Two free dishes per function, and increases batch per proposal
 Client, 20 Jul 2026. Two amendments to the menu-increase rules:
@@ -982,6 +1026,88 @@ So the Residency banquet manager owns nothing and sees an empty board. The mecha
 correct; the inventory has no venues for that manager. Open: is a Residency banquet manager
 wanted at all, or should that seat map to a property, or will Residency venues be added? The
 name and the empty board stand until the client says.
+
+### F20. A part payment holds the dates — "Downpayment due"
+Client's lead, 4 Aug 2026. BR-P1 used to refuse a confirmation below 25% with a 402 and leave
+the dates open to anyone. The hotel's own answer: *"sometime people come with variable money…
+25% was 3 lakh and they gave 1 lakh for now we cant let them go so what our team decided is
+lets take that money and on the calendar lets mark it downpayment due."*
+
+**Implemented without a new status.** The booking confirms normally and inserts its
+`venue_bookings` rows, so the GiST exclusion protects the slot exactly as it does for a fully
+paid booking — which is the entire point of not letting the guest go. "Partially locked" is a
+**derived** state: `advanceShortfallPaise > 0`. The alternative, a real `provisional` status,
+would have meant touching every `status IN ('confirmed', …)` query in the codebase —
+availability, day sheet, reports, approvals, maintenance, the cron advancer, the payment guard —
+where missing one would make a paid booking vanish from the day sheet or read as free.
+
+What is still refused is a hold for nothing: an advance of zero, or one with no receipt number.
+
+**No timer, no exception, no promised-by date.** The client was asked how long before the GM is
+told and answered with a mechanism rather than a duration: the marker sits on the calendar, and
+when a second guest wants the same venue the Booking Manager sees it, rings the GM, and they
+settle it with the guest's details in hand. So the escalation is **contention-driven**, and the
+design has no cron, no `overdue_advance` exception kind and no extra column. The GM's cancel
+authority already existed (`lib/events.ts:cancelEvent`, pre-lock, releases venues and rooms);
+what was missing was the trigger, and the trigger is a person looking at a calendar.
+
+The chip is rose (amber already means carryover) and always carries the words *Downpayment
+due* — colour is never the only signal. The day panel adds the shortfall and the guest's
+primary number, and that number is sent **only** for short bookings: everyone with
+`calendar: view` opens that board, including the Banquet Manager, and a paid-up guest's phone
+number has no business travelling to a screen with no use for it.
+
+### F21. A discount is money now, and what that costs
+Client's lead, 4 Aug 2026, reversing the 25 Jul percentage-of-a-head input. The manager types
+rupees; the guest gets exactly that; the percentage survives only as the arithmetic BR-D2's cap
+is tested in — *"in the backend it will see it as percentage only that 10% increment cap"*.
+
+No schema change: `discounts.amount_paise` was always the stored value and `percent_bp IS NULL`
+already meant "fixed". Rows written before today keep recomputing live, so existing bookings are
+undisturbed.
+
+**The cost, stated plainly.** A percentage shrank with the bill and so could never drift over
+the cap on its own. A frozen rupee figure can: give ₹50,000 on a ₹6,00,000 bill (8.3%), then
+remove a function and the bill falls to ₹4,00,000 — the same ₹50,000 is now 12.5% and nothing
+notices, because the cap was only ever tested at entry. `confirmEvent` therefore applies
+`discountCap` a second time, at the last gate before the money is committed, and refuses with a
+message naming the new combined figure. It does not bind the Higher Authority, here as anywhere
+(FR-11.3a).
+
+The panel states headroom in rupees — "₹42,000 left" — because that is the unit the manager is
+now working in.
+
+### F22. Milestones are floors, and the ledger used to be wrong
+Client's lead, 4 Aug 2026: weddings top up to **50% of the amount payable** by D-30 rather than
+clearing the whole remaining 75%, and *"payment logs should be maintained so that whenever they
+reopen the proposal they can get how much is due"*.
+
+Each milestone is a floor on the **cumulative** total received, not an instalment of its own:
+25% at confirm, 50% at D-30 for weddings, 100% at billing. A guest who pays 60% up front has met
+the wedding milestone and owes nothing at D-30. Over-payment is never refused.
+
+**Two live bugs surfaced while wiring this and are fixed by it.** Both `payments.getLedger` and
+`reminders.outstandingPaise` measured `proposal_total_paise` — venue and food — and nothing else.
+Rooms live outside that column by design (§F10), so **every booking with lodging under-stated its
+balance by the entire room charge**: a guest with thirty rooms could be told they were square
+while owing lakhs, and wedding reminders stopped chasing early for the same reason. The reminder
+query also summed `discounts.amount_paise` raw, ignoring live percentage rows, pulling the figure
+a second way. All of it now reads `lib/payment-schedule.ts`, which is also what confirm, the
+quote and the calendar read.
+
+Reminder dates moved from `events.first_date` to `min(sub_events.event_date)`: `first_date` is a
+cache written at confirm and can be NULL or stale after a function moves.
+
+### F23. No pax limit anywhere
+Client's lead, 4 Aug 2026 — *"compleetely remove any pax llimit from everywhere"* — completing
+the 3 Aug removal of the venue-capacity cap. Gone: the `.max(100000)` ceilings in the sub-event
+and pax-change routes, and `pax_override_note`, which existed to explain exceeding a capacity
+there is no longer any of. A positive whole number is a type check, not a limit.
+
+The `sub_events.pax_override_note` **column is kept** though nothing reads or writes it: it holds
+real notes on old bookings, and dropping it would delete them. `venues.capacity_min/max` likewise
+survive as descriptive inventory (useful to a salesperson: "Kohinoor seats 150–250") and gate
+nothing. Both are dead weight to be removed only on the client's word.
 
 ---
 

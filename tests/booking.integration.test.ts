@@ -164,9 +164,33 @@ d('confirm gates', () => {
     expect(ev!.status).toBe('confirmed')
   })
 
-  it('refuses confirm when the advance is below 25% (402)', async () => {
+  it('takes a part advance, holds the dates, and carries the rest as due (4 Aug 2026)', async () => {
+    // BR-P1 used to 402 here and leave the dates open to anyone. The hotel's answer: take the
+    // money, hold the venue, show the debt. "we cant let them go."
     const id = await makeEnquiry()
-    await expect(confirmEvent(actor, id, advance(1_000_000))).rejects.toMatchObject({ status: 402 })
+    const res = await confirmEvent(actor, id, advance(1_000_000))
+    expect(res.advanceRequiredPaise).toBe(3_775_000) // 25% of 1,51,00,000
+    expect(res.advanceShortfallPaise).toBe(2_775_000)
+
+    // The hold is real — the GiST exclusion protects this slot exactly as for a paid booking.
+    const bookings = await db.select({ id: schema.venueBookings.id }).from(schema.venueBookings).where(eq(schema.venueBookings.eventId, id))
+    expect(bookings).toHaveLength(1)
+
+    // And it is visible where a manager pricing a competing enquiry will be looking.
+    const { advanceShortfallByEvent } = await import('@/lib/payment-schedule')
+    expect((await advanceShortfallByEvent([id])).get(id)).toBe(2_775_000)
+
+    // Topping it up clears the marker; the milestone is a floor on the cumulative total.
+    const { recordPayment } = await import('@/lib/payments')
+    await recordPayment(actor, id, { kind: 'part_payment', amountPaise: 2_775_000, mode: 'cash', receiptNo: `TOP-${Date.now()}`, receivedOn: '2026-08-04' })
+    expect((await advanceShortfallByEvent([id])).has(id)).toBe(false)
+  })
+
+  it('still refuses a hold for nothing — no advance at all is a 402', async () => {
+    const id = await makeEnquiry()
+    await expect(confirmEvent(actor, id)).rejects.toMatchObject({ status: 402 })
+    const bookings = await db.select({ id: schema.venueBookings.id }).from(schema.venueBookings).where(eq(schema.venueBookings.eventId, id))
+    expect(bookings).toHaveLength(0)
   })
 
   it('refuses confirm while a 35+ room request is pending (BR-L2)', async () => {

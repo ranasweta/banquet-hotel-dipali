@@ -24,7 +24,6 @@ type Fn = {
   startTime: string
   endTime: string
   pax: number
-  paxOverrideNote: string | null
   venueName: string | null
   tierName: string | null
   menuComplete: boolean
@@ -92,12 +91,6 @@ export function OperationsBoard({ days = 15 }: { days?: number }) {
                     <p className="text-xs uppercase tracking-wide text-muted-foreground">guests</p>
                   </div>
                 </header>
-
-                {f.paxOverrideNote && (
-                  <p className="mt-2 text-sm text-amber-700 dark:text-amber-500">
-                    Capacity override: {f.paxOverrideNote}
-                  </p>
-                )}
 
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                   {f.tierName ? (

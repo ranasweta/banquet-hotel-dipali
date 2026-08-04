@@ -10,7 +10,8 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const bodySchema = z
   .object({
     // The advance the Booking Manager attests was received (FR-11.4). Optional because an
-    // advance may already be on file; confirm re-checks the recorded total ≥ 25%.
+    // advance may already be on file; confirm re-checks that SOME money is recorded and
+    // reports what is still short of the 25% (client's lead, 4 Aug 2026).
     advance: z
       .object({
         amount_paise: z.number().int().positive(),
@@ -42,5 +43,16 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     : undefined
 
   const result = await confirmEvent(actor, id, advance)
-  return ok({ event: { id: result.id, code: result.code, status: 'confirmed', proposalTotalPaise: result.proposalTotalPaise } })
+  return ok({
+    event: {
+      id: result.id,
+      code: result.code,
+      status: 'confirmed',
+      proposalTotalPaise: result.proposalTotalPaise,
+      // > 0 when the dates were held on a part payment. The screen says so rather than
+      // letting a partially-locked booking look like any other.
+      advanceShortfallPaise: result.advanceShortfallPaise,
+      advanceRequiredPaise: result.advanceRequiredPaise,
+    },
+  })
 })
