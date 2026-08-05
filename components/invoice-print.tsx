@@ -306,61 +306,21 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                     </div>
                   </div>
 
-                  {/* ══════════ FUNCTIONS — THE BRIEF ══════════
-                      Page one says WHAT is happening, one line per function, and nothing more.
-                      The elaborated venue and menu for each follows on its own page below
-                      (client, 5 Aug 2026: the single running document read as congested). */}
+                  {/* ══════════ FUNCTIONS ══════════
+                      The charges run one function after another as they always did — the
+                      document is read straight down. Only the MENUS were congesting it, and
+                      they now sit on exclusive sheets at the back (client, 6 Aug 2026). */}
                   {functions.length > 0 && (
-                    <>
-                      <PillRow title="Your Functions" tag="In brief · one page each follows" />
-                      <div className="fn avoid">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th style={{ width: '20%' }}>Function</th>
-                              <th style={{ width: '22%' }}>Date &amp; time</th>
-                              <th style={{ width: '22%' }}>Venue</th>
-                              <th className="c" style={{ width: '8%' }}>Pax</th>
-                              <th style={{ width: '13%' }}>Menu</th>
-                              <th className="n" style={{ width: '15%' }}>Amount (₹)</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {functions.map((f) => (
-                              <tr key={`brief-${f.name}-${f.date}-${f.startTime}`}>
-                                <td>
-                                  <span className="it-name">{titleCase(f.name)}</span>
-                                </td>
-                                <td className="calc">
-                                  {fmtDM(f.date)} · {fmtTime(f.startTime)} – {fmtTime(f.endTime)}
-                                  {f.overnight ? ' [+1]' : ''}
-                                </td>
-                                <td className="calc">{f.venueName ?? '—'}</td>
-                                <td className="c calc">{f.pax}</td>
-                                <td className="calc">{f.menu?.tierName ?? '—'}</td>
-                                <td className="n amt">{formatPaise(f.subtotalPaise)}</td>
-                              </tr>
-                            ))}
-                            <tr className="sub">
-                              <td colSpan={5} className="lbl">
-                                Venue, food &amp; add-ons
-                              </td>
-                              <td className="n val">{formatPaise(totals.proposalPaise)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
+                    <PillRow title="Functions" tag="Venue · Food · Add-ons · Menus annexed" />
                   )}
 
-                  {/* ══════════ ONE PAGE PER FUNCTION ══════════ */}
                   {functions.map((f) => (
-                    <FunctionPage key={`${f.name}-${f.date}-${f.startTime}`} fn={f} />
+                    <FunctionBlock key={`${f.name}-${f.date}-${f.startTime}`} fn={f} />
                   ))}
 
                   {/* ══════════ ROOMS ══════════ */}
                   {lodges.length > 0 && (
-                    <section className="docpage">
+                    <>
                       <PillRow title="Accommodation" tag="Rack-rate estimate" />
                       <div className="fn avoid">
                         <div className="fn-bar">
@@ -409,7 +369,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                           </tbody>
                         </table>
                       </div>
-                    </section>
+                    </>
                   )}
 
                   {/* ══════════ EXTRAS ══════════
@@ -464,7 +424,6 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                   )}
 
                   {/* ══════════ STATEMENT ══════════ */}
-                  <section className="docpage">
                   <PillRow title="Statement of Charges" tag="Sub-totals · Tax · Advance" />
 
                   <div className="summary avoid">
@@ -727,7 +686,6 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                       <div className="sub">Authorised Signatory</div>
                     </div>
                   </div>
-                  </section>
                 </div>
 
                 <div className="footer">
@@ -741,6 +699,9 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
           </tbody>
         </table>
       </div>
+
+      {/* ══════════ MENUS — a sheet each, after the proposal, before the Terms ══════════ */}
+      <MenuPages doc={doc} />
 
       {/* ══════════ TERMS & CONDITIONS ANNEXURE — facsimile of the client's PDF ══════════ */}
       <TermsAnnexure />
@@ -768,166 +729,200 @@ function PillRow({ title, tag }: { title: string; tag: string }) {
 }
 
 /**
- * One function, on a page of its own (client, 5 Aug 2026) — its venue and food charges, then
- * its menu set out in full. The running document put every function and every menu end to end
- * and read as congested; a page each is the same information with room to breathe.
+ * One function's charges card — venue, food, add-ons, sub-total — running straight on from
+ * the last, which is how the document has always read (client, 6 Aug 2026: forcing each of
+ * these onto its own sheet left half-empty pages and was never what was asked for).
+ *
+ * Its MENU is not here. Menus are the one thing that genuinely congested the document, so
+ * each now gets an exclusive sheet of its own at the back — see `MenuPages`.
  *
  * NOTHING INTERNAL APPEARS HERE. The per-plate rate is quoted all-in, with no wedding uplift
- * or chef line broken out of it; dishes carry no "Extra" flag and segments no pick counter;
- * and the two-free-increases allowance is not mentioned at all. Those are the rules the hotel
- * prices BY, not terms the guest is party to, and the same figures reach them either way.
+ * or chef line broken out of it. Those are the rules the hotel prices BY, not terms the guest
+ * is party to, and the same figures reach them either way (client, 5 Aug 2026).
  */
-function FunctionPage({ fn }: { fn: ProposalFunction }) {
+function FunctionBlock({ fn }: { fn: ProposalFunction }) {
   return (
-    <section className="docpage">
-      <PillRow title={titleCase(fn.name)} tag={`${fmtDMY(fn.date)} · ${fn.venueName ?? 'Venue to be confirmed'}`} />
-      <div className="fn avoid">
-        {/* The page already carries the function's name in its heading; repeating it here
-            just made the top of every page say the same word twice. */}
-        <div className="fn-bar">
-          <div className="fn-name">Charges</div>
-          <div className="fn-meta">
-            <span className="mchip">{fmtDMY(fn.date)}</span>
-            <span className="mchip">
-              {fmtTime(fn.startTime)} – {fmtTime(fn.endTime)}
-              {fn.overnight ? ' [+1]' : ''}
-            </span>
-            <span className="mchip solid">{fn.pax} PAX</span>
-          </div>
+    <div className="fn avoid">
+      <div className="fn-bar">
+        <div className="fn-name">{titleCase(fn.name)}</div>
+        <div className="fn-meta">
+          <span className="mchip">{fmtDMY(fn.date)}</span>
+          <span className="mchip">
+            {fmtTime(fn.startTime)} – {fmtTime(fn.endTime)}
+            {fn.overnight ? ' [+1]' : ''}
+          </span>
+          <span className="mchip solid">{fn.pax} PAX</span>
         </div>
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: '46%' }}>Particulars</th>
-              <th className="c" style={{ width: '12%' }}>
-                Qty
-              </th>
-              <th className="n" style={{ width: '18%' }}>
-                Rate
-              </th>
-              <th className="n" style={{ width: '24%' }}>
-                Amount (₹)
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {fn.venueName && (
-              <tr>
-                <td>
-                  <span className="it-name">Venue — {fn.venueName}</span>
-                  {/* "Rate card" is how the hotel prices, not something the guest is buying.
-                      A single venue needs no gloss at all; a bundle does, because they are
-                      getting two halls for one line. */}
-                  {fn.isBundle && (
-                    <span className="it-desc">
-                      Exclusive use of both halls
-                      {fn.bundleMembers.length ? ` — ${fn.bundleMembers.join(' and ')}` : ''}, for the
-                      full duration of the function.
-                    </span>
-                  )}
-                </td>
-                <td className="c calc">1 event</td>
-                {/* BR-R1: no rate card is a gate, never a zero. "To be confirmed" rather than
-                    "on approval" — whose approval is our business, not the guest's. */}
-                <td className="n calc">{fn.venueRatePaise == null ? 'To be confirmed' : formatPaise(fn.venueRatePaise)}</td>
-                <td className="n amt">{fn.venueRatePaise == null ? '—' : formatPaise(fn.venueRatePaise)}</td>
-              </tr>
-            )}
-            {fn.menu && (
-              <tr>
-                <td>
-                  <span className="it-name">Food — {fn.menu.tierName}</span>
-                  {/* One all-in per-plate figure. The wedding uplift and any chef speciality are
-                      inside it and are not itemised: they are how the hotel arrives at the
-                      price, not a surcharge the guest is being asked to agree to. */}
-                  <span className="it-desc">
-                    {formatPaise(fn.menu.perPlatePaise)} per plate, on {fn.pax} guaranteed guests.
-                  </span>
-                </td>
-                <td className="c calc">{fn.pax} pax</td>
-                <td className="n calc">{formatPaise(fn.menu.perPlatePaise)} / plate</td>
-                <td className="n amt">{formatPaise(fn.foodAmountPaise)}</td>
-              </tr>
-            )}
-            {fn.addons.map((a) =>
-              a.ratePaise === 0 ? (
-                <tr key={a.description}>
-                  <td>
-                    <span className="it-name">{titleCase(a.description)}</span>
-                    <span className="it-desc">Shown at nil value.</span>
-                  </td>
-                  <td className="c calc">{a.qty}</td>
-                  <td className="n calc">
-                    <span className="free">COMPLIMENTARY</span>
-                  </td>
-                  <td className="n amt">{formatPaise(0)}</td>
-                </tr>
-              ) : (
-                <tr key={a.description}>
-                  <td>
-                    <span className="it-name">Add-on — {titleCase(a.description)}</span>
-                  </td>
-                  <td className="c calc">{a.qty}</td>
-                  <td className="n calc">{formatPaise(a.ratePaise)}</td>
-                  <td className="n amt">{formatPaise(a.amountPaise)}</td>
-                </tr>
-              ),
-            )}
-            <tr className="sub">
-              <td colSpan={3} className="lbl">
-                {titleCase(fn.name)} sub-total
-              </td>
-              <td className="n val">{formatPaise(fn.subtotalPaise)}</td>
-            </tr>
-          </tbody>
-        </table>
       </div>
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: '46%' }}>Particulars</th>
+            <th className="c" style={{ width: '12%' }}>
+              Qty
+            </th>
+            <th className="n" style={{ width: '18%' }}>
+              Rate
+            </th>
+            <th className="n" style={{ width: '24%' }}>
+              Amount (₹)
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {fn.venueName && (
+            <tr>
+              <td>
+                <span className="it-name">Venue — {fn.venueName}</span>
+                {/* "Rate card" is how the hotel prices, not something the guest is buying.
+                    A single venue needs no gloss at all; a bundle does, because they are
+                    getting two halls for one line. */}
+                {fn.isBundle && (
+                  <span className="it-desc">
+                    Exclusive use of both halls
+                    {fn.bundleMembers.length ? ` — ${fn.bundleMembers.join(' and ')}` : ''}, for the
+                    full duration of the function.
+                  </span>
+                )}
+              </td>
+              <td className="c calc">1 event</td>
+              {/* BR-R1: no rate card is a gate, never a zero. "To be confirmed" rather than
+                  "on approval" — whose approval is our business, not the guest's. */}
+              <td className="n calc">{fn.venueRatePaise == null ? 'To be confirmed' : formatPaise(fn.venueRatePaise)}</td>
+              <td className="n amt">{fn.venueRatePaise == null ? '—' : formatPaise(fn.venueRatePaise)}</td>
+            </tr>
+          )}
+          {fn.menu && (
+            <tr>
+              <td>
+                <span className="it-name">Food — {fn.menu.tierName}</span>
+                {/* One all-in per-plate figure. The wedding uplift and any chef speciality are
+                    inside it and are not itemised: they are how the hotel arrives at the
+                    price, not a surcharge the guest is being asked to agree to. */}
+                <span className="it-desc">
+                  {formatPaise(fn.menu.perPlatePaise)} per plate, on {fn.pax} guaranteed guests. Menu
+                  set out in full overleaf.
+                </span>
+              </td>
+              <td className="c calc">{fn.pax} pax</td>
+              <td className="n calc">{formatPaise(fn.menu.perPlatePaise)} / plate</td>
+              <td className="n amt">{formatPaise(fn.foodAmountPaise)}</td>
+            </tr>
+          )}
+          {fn.addons.map((a) =>
+            a.ratePaise === 0 ? (
+              <tr key={a.description}>
+                <td>
+                  <span className="it-name">{titleCase(a.description)}</span>
+                  <span className="it-desc">Shown at nil value.</span>
+                </td>
+                <td className="c calc">{a.qty}</td>
+                <td className="n calc">
+                  <span className="free">COMPLIMENTARY</span>
+                </td>
+                <td className="n amt">{formatPaise(0)}</td>
+              </tr>
+            ) : (
+              <tr key={a.description}>
+                <td>
+                  <span className="it-name">Add-on — {titleCase(a.description)}</span>
+                </td>
+                <td className="c calc">{a.qty}</td>
+                <td className="n calc">{formatPaise(a.ratePaise)}</td>
+                <td className="n amt">{formatPaise(a.amountPaise)}</td>
+              </tr>
+            ),
+          )}
+          <tr className="sub">
+            <td colSpan={3} className="lbl">
+              {titleCase(fn.name)} sub-total
+            </td>
+            <td className="n val">{formatPaise(fn.subtotalPaise)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
-      {fn.menu && (
-        <div className="fn avoid">
-          <div className="fn-bar">
-            <div className="fn-name">
-              Menu
-              <em>
-                {fn.menu.tierName} · {titleCase(fn.name)}
-              </em>
-            </div>
-            <div className="fn-meta">
-              <span className="mchip">{formatPaise(fn.menu.perPlatePaise)} / plate</span>
-              <span className="mchip solid">{fn.pax} PAX</span>
+/**
+ * THE MENUS — one exclusive sheet each, between the proposal and the Terms annexure
+ * (client, 6 Aug 2026).
+ *
+ * This is the only thing that ever needed a page of its own. A tier can run to forty-odd
+ * dishes across a dozen segments, and printing that under every function's charges turned
+ * the document into a wall. Off the charges card and onto its own sheet, a menu is the one
+ * thing on the page and reads like a menu rather than a schedule.
+ *
+ * Each sheet is a page in the proposal's own hand — the gilt bar, the pill header, the
+ * three-column segment grid — so it belongs to the document rather than arriving as a
+ * photocopy. Functions with no menu chosen yet simply have no sheet.
+ *
+ * NOTHING INTERNAL APPEARS HERE: no "n of m" pick counter, no "Extra" badge, no free-increase
+ * allowance. Those describe the ceiling the kitchen works to, and a guest reading "3 of 2"
+ * learns a rule they were never party to (client, 5 Aug 2026).
+ */
+function MenuPages({ doc }: { doc: ProposalDocument }) {
+  const menus = doc.functions.filter((f) => f.menu)
+  if (menus.length === 0) return null
+
+  return (
+    <>
+      {menus.map((fn, i) => (
+        <div className="page menupage" key={`menu-${fn.name}-${fn.date}-${fn.startTime}`}>
+          <div className="gild" />
+          <div className="pad">
+            <PillRow title={`${titleCase(fn.name)} — Menu`} tag={`Menu ${i + 1} of ${menus.length}`} />
+            <div className="fn">
+              <div className="fn-bar">
+                <div className="fn-name">
+                  {fn.menu!.tierName}
+                  <em>
+                    {fmtLong(fn.date)}
+                    {fn.venueName ? ` · ${fn.venueName}` : ''}
+                  </em>
+                </div>
+                <div className="fn-meta">
+                  <span className="mchip">{formatPaise(fn.menu!.perPlatePaise)} / plate</span>
+                  <span className="mchip solid">{fn.pax} PAX</span>
+                </div>
+              </div>
+              <div className="menu-body">
+                <div className="menu-grid">
+                  {fn.menu!.segments
+                    .filter((s) => s.dishes.length > 0)
+                    .map((s) => (
+                      <div className="seg" key={s.name}>
+                        <div className="seg-h">
+                          <span className="seg-n">{s.name}</span>
+                        </div>
+                        <ul className="dishes">
+                          {s.dishes.map((d) => (
+                            <li key={d.name}>
+                              {d.name}
+                              {d.note ? ` (${d.note})` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                </div>
+                <div className="menu-note">
+                  The menu as agreed at the date of issue. Any change is settled with the Banquet
+                  Manager before the function.
+                </div>
+              </div>
             </div>
           </div>
-          <div className="menu-body">
-            <div className="menu-grid">
-              {fn.menu.segments
-                .filter((s) => s.dishes.length > 0)
-                .map((s) => (
-                  <div className="seg" key={s.name}>
-                    <div className="seg-h">
-                      <span className="seg-n">{s.name}</span>
-                    </div>
-                    {/* Dishes only. No "n of m" counter and no Extra badge: both describe the
-                        allowance the kitchen works to, and a guest reading "3 of 2" learns
-                        about a rule they were never told and do not need. */}
-                    <ul className="dishes">
-                      {s.dishes.map((d) => (
-                        <li key={d.name}>
-                          {d.name}
-                          {d.note ? ` (${d.note})` : ''}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-            </div>
-            <div className="menu-note">
-              The menu as agreed at the date of issue. Any change is settled with the Banquet
-              Manager before the function.
+          <div className="footer">
+            <div className="thanks">{titleCase(fn.name)}</div>
+            <div>
+              Hotel Dipali Sagar · Proposal {doc.event.code} · {doc.doc.isDraft2 ? 'Draft 2' : 'Draft'}
             </div>
           </div>
         </div>
-      )}
-    </section>
+      ))}
+    </>
   )
 }
 
@@ -1215,12 +1210,6 @@ const CSS = `
   color:var(--gold-deep); font-weight:700}
 .pd tr.sub .val{font-weight:700; color:var(--ink); font-size:10.2pt}
 
-/* ══════════ A SECTION THAT OWNS ITS PAGE ══════════
-   Each function, the accommodation and the statement start on a fresh sheet (client,
-   5 Aug 2026). On screen there is no paper to break, so they get a rule and breathing
-   room instead — enough to read as separate sections without pretending to be pages. */
-.pd .docpage{margin-top:6mm; padding-top:5mm; border-top:1px solid var(--rule-soft)}
-
 /* ══════════ MENU SNAPSHOT ══════════ */
 .pd .menu-body{padding:3.8mm 5mm 3.4mm}
 .pd .menu-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:3.6mm}
@@ -1239,6 +1228,25 @@ const CSS = `
 .pd .menu-note{margin-top:2.6mm; padding-top:2.2mm; border-top:1px solid var(--rule-soft);
   font-size:7.2pt; color:var(--soft); line-height:1.45}
 .pd .menu-note b{color:var(--gold-deep); font-weight:700}
+
+/* ══════════ A MENU'S OWN SHEET ══════════
+   A .page like the proposal's, so the gilt bar, pill header and footer are the same
+   furniture rather than a lookalike. Screen gets the gap between sheets that .tcpage
+   uses; print gets a real page break. Given the whole sheet the grid can breathe, so the
+   segment cards and the dish list both come up a size from their in-document setting. */
+.pd .menupage{margin-top:14px}
+.pd .menupage .pad{padding-top:8mm; padding-bottom:6mm}
+/* Columns, not a grid, for the full-sheet menu. A grid row is as tall as its tallest card,
+   so Soups (two dishes) took the height of Veg Starters (six) and the difference was dead
+   paper — barely visible inside the document, most of the sheet on a sheet of its own.
+   Columns pack each card against the last and the segments still read in course order,
+   down column one and on to column two. .seg keeps its break-inside:avoid, so a card is
+   never split between columns. */
+.pd .menupage .menu-grid{display:block; column-count:3; column-gap:4.4mm}
+.pd .menupage .seg{margin-bottom:4.4mm}
+.pd .menupage .dishes li{font-size:8.6pt; line-height:1.42; margin-bottom:1.1mm}
+.pd .menupage .seg-n{font-size:7.1pt}
+.pd .menupage .footer{margin-top:0}
 
 .pd .note{border:1px solid var(--rule); border-radius:14px; margin-top:2.6mm;
   background:linear-gradient(100deg,var(--champagne),#FFFCF4); padding:2.8mm 4.4mm;
@@ -1376,6 +1384,14 @@ const CSS = `
      above says so.) Every measurement below is therefore the real printed margin. */
   @page{size:A4; margin:0}
   .pd .page,.pd .tcpage{box-shadow:none; margin:0; width:auto}
+  /* Each menu starts a fresh sheet — the one thing that was ever asked to (client,
+     6 Aug 2026). */
+  .pd .menupage{break-before:page; page-break-before:always}
+  /* …but a menu card is the one .fn that may span sheets. The blanket break-inside:avoid
+     below would shove a forty-dish tier onto the next page whole and then overflow it
+     anyway. .seg keeps its own avoid, so a break lands between segment cards, never
+     through the middle of one. */
+  .pd .menupage .fn{break-inside:auto; page-break-inside:auto}
   .pd .pad{padding:0 13mm}
   .pd .masthead{padding:9mm 13mm 6mm}
   .pd .footer{padding:3mm 13mm 9mm}
@@ -1387,10 +1403,6 @@ const CSS = `
   .pd .sign,.pd .pay,.pd .two,.pd .glance,.pd .note,.pd .footer,.pd .seg,
   .pd .fn table,.pd .fn thead,.pd .fn tr{break-inside:avoid; page-break-inside:avoid}
   .pd .pill-row,.pd .fn-bar{break-after:avoid; page-break-after:avoid}
-  /* One function per sheet, then accommodation, then the statement. The rule and the
-     screen spacing are dropped — on paper the page break IS the separation. */
-  .pd .docpage{break-before:page; page-break-before:always;
-    margin-top:0; padding-top:0; border-top:none}
   .pd table.sheet,.pd table.sheet>tbody,.pd table.sheet>tbody>tr,.pd table.sheet>tbody>tr>td{
     break-inside:auto; page-break-inside:auto}
   /* The annexure is exactly two sheets. Each is given the height of one, so the box border
