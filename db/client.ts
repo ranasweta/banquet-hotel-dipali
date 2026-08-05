@@ -54,6 +54,15 @@ export function createClient(envVar: 'DATABASE_URL' | 'TEST_DATABASE_URL' = 'DAT
   return postgres(connectionString(envVar), {
     // Overridable so a single-connection server (e.g. an embedded Postgres used for
     // local verification) can be driven without connection resets.
+    //
+    // WORTH RAISING FOR LOCAL DEV against a remote database (4 Aug 2026). Several endpoints
+    // now fetch their sources concurrently — `notificationsFor` reads eleven — and five
+    // connections make those queries queue behind one another again. Measured against Neon
+    // us-east-1 from India, /notifications went from ~17s to ~1.4s at DB_POOL_MAX=24 with no
+    // other change. Leave the DEFAULT alone: on Vercel every serverless instance holds its
+    // own pool, so a large max multiplied by warm instances is how a Postgres connection
+    // limit gets exhausted — and production does not need it, the app and the database
+    // being in the same region.
     max: Number(process.env.DB_POOL_MAX ?? 5),
     types: { bigint: paiseAsNumber },
     onnotice: (notice) => {

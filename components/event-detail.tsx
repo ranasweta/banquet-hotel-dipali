@@ -16,6 +16,7 @@ import { EventRooms } from '@/components/event-rooms'
 import { EventBilling } from '@/components/event-billing'
 import { EventMaintenance } from '@/components/event-maintenance'
 import { RequestChange } from '@/components/request-change'
+import { CancelBooking } from '@/components/cancel-booking'
 import { EventLockInvoice } from '@/components/event-lock-invoice'
 import { EventTrail } from '@/components/event-trail'
 import { titleCase } from '@/lib/text'
@@ -188,6 +189,15 @@ export function EventDetailView({
           <Link href={`/bookings/${event.id}/proforma`} className="text-sm text-primary hover:underline">
             Print Draft →
           </Link>
+          {/* Last in the column and unstyled until opened: cancelling is rare, destructive, and
+              releases the dates to whoever asks next. It is also the GM's remedy when a
+              part-paid booking never completes its advance (client's lead, 4 Aug 2026). */}
+          <CancelBooking
+            eventId={event.id}
+            code={event.code}
+            status={event.status}
+            canCancel={canEditBookings}
+          />
         </div>
       </div>
 

@@ -259,14 +259,21 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
  * costs exactly one query, and only genuinely short ones pay for the exact figure.
  */
 export async function advanceShortfallByEvent(eventIds: string[]): Promise<Map<string, number>> {
-  const out = new Map<string, number>()
   const rows = await payableRows(eventIds)
-  for (const r of rows) {
-    const gross = grossPayable(r)
-    if (r.paid >= percentOfPaise(gross, ADVANCE_PCT)) continue
-    const discount = await effectiveDiscountPaise(r.eventId)
-    const required = percentOfPaise(Math.max(0, gross - discount), ADVANCE_PCT)
+  // Anything already covering the undiscounted quarter is settled — a discount only ever
+  // lowers the requirement — so it never needs its discounts priced at all.
+  const candidates = rows.filter((r) => r.paid < percentOfPaise(grossPayable(r), ADVANCE_PCT))
+
+  // Priced together, not one after another. Each `effectiveDiscountPaise` is three queries,
+  // and awaiting them in a loop cost three network round trips PER short booking — about
+  // three quarters of a second each against a remote database, on a screen that draws a whole
+  // month at once. The candidate list is short by construction, so one batch covers it.
+  const discounts = await Promise.all(candidates.map((r) => effectiveDiscountPaise(r.eventId)))
+
+  const out = new Map<string, number>()
+  candidates.forEach((r, i) => {
+    const required = percentOfPaise(Math.max(0, grossPayable(r) - discounts[i]!), ADVANCE_PCT)
     if (r.paid < required) out.set(r.eventId, required - r.paid)
-  }
+  })
   return out
 }

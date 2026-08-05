@@ -20,6 +20,15 @@ import { formatPaise } from '@/lib/money'
  *  - **Touched means gone.** The list is still computed from live data, so an item vanishes by
  *    itself once resolved; `notification_reads` additionally drops anything the user has already
  *    clicked, so something they've dealt with stops following them around.
+ *
+ * EVERY SOURCE IS FETCHED AT ONCE (4 Aug 2026). The feed reads eleven independent things and
+ * used to `await` each in turn. Nothing here depends on anything else here — the ordering was
+ * incidental — but on a remote database each await is a full network round trip, and this
+ * endpoint is polled by the notification bell on EVERY page. Measured against Neon us-east-1
+ * from India it took 5–22 seconds per call and held two of the pool's five connections for the
+ * duration, which is what made the rest of the app feel broken rather than merely slow.
+ * A source that does not apply to this role resolves to an empty list rather than being
+ * skipped, so the shape stays flat and the role rules stay in one readable place.
  */
 
 // The decider sets are imported, not re-declared: they were three separate literals here
@@ -35,12 +44,93 @@ export async function notificationsFor(
   const today = new Date().toISOString().slice(0, 10)
   const items: Notification[] = []
 
-  if (EXCEPTION_DECIDERS.has(user.roleName)) {
+  const decidesExceptions = EXCEPTION_DECIDERS.has(user.roleName)
+  const decidesChanges = CHANGE_DECIDERS.has(user.roleName)
+  const pricesDelicacies = DELICACY_PRICERS.has(user.roleName)
+  const doesMaintenance = MAINTENANCE_ROLES.has(user.roleName)
+  const seesStale = user.roleName === 'booking_manager' || user.roleName === 'auditor'
+  const shortfallScope =
+    user.roleName === 'auditor'
+      ? {}
+      : user.roleName === 'lodge_manager'
+        ? { unitId: user.lodgingUnitId ?? undefined }
+        : { ownerId: user.id }
+  // A Lodge Manager with no lodge assigned would otherwise read as "every lodge".
+  const seesShortfalls = !(user.roleName === 'lodge_manager' && !user.lodgingUnitId)
+  const none = <T,>(): Promise<T[]> => Promise.resolve([])
+
+  const [
+    bundles,
+    myExceptions,
+    revisions,
+    myChangeRequests,
+    delicaciesToPrice,
+    myDelicacies,
+    openMaintenance,
+    shortfalls,
+    reminders,
+    stale,
+    read,
+  ] = await Promise.all([
+    decidesExceptions ? listBundles() : none<Awaited<ReturnType<typeof listBundles>>[number]>(),
+    decidesExceptions ? none<Awaited<ReturnType<typeof listExceptions>>[number]>() : listExceptions({ mineId: user.id }),
+    db.execute(sql`
+      SELECT a.seq, a.new_value AS "summary", a.field, a.at, a.event_id AS "eventId",
+             e.code AS "eventCode", u.full_name AS "byName"
+        FROM audit_log a
+        JOIN events e ON e.id = a.event_id
+        JOIN users u ON u.id = a.user_id
+       WHERE a.field IN ('authority_edit', 'authority_override')
+         AND e.created_by = ${user.id}
+         AND a.user_id <> ${user.id}
+       ORDER BY a.at DESC
+       LIMIT 50
+    `) as unknown as Promise<{ seq: string; summary: string | null; field: string; at: string; eventId: string; eventCode: string; byName: string }[]>,
+    decidesChanges ? none<Awaited<ReturnType<typeof listChangeRequests>>[number]>() : listChangeRequests({ mineId: user.id }),
+    pricesDelicacies
+      ? (db.execute(sql`
+          SELECT r.id, r.description, r.requested_at AS "at", e.code AS "eventCode"
+          FROM chef_requests r
+          JOIN sub_events se ON se.id = r.sub_event_id
+          JOIN events e ON e.id = se.event_id
+          WHERE r.status = 'pending'
+          ORDER BY r.requested_at
+        `) as unknown as Promise<{ id: string; description: string; at: string; eventCode: string }[]>)
+      : none<{ id: string; description: string; at: string; eventCode: string }>(),
+    pricesDelicacies
+      ? none<{ id: string; description: string; status: string; chargePaise: number | null; at: string; eventCode: string }>()
+      : (db.execute(sql`
+          SELECT r.id, r.description, r.status, r.charge_paise AS "chargePaise",
+                 COALESCE(r.priced_at, r.requested_at) AS "at", e.code AS "eventCode"
+          FROM chef_requests r
+          JOIN sub_events se ON se.id = r.sub_event_id
+          JOIN events e ON e.id = se.event_id
+          WHERE r.requested_by = ${user.id} AND r.status <> 'pending'
+          ORDER BY "at" DESC
+        `) as unknown as Promise<{ id: string; description: string; status: string; chargePaise: number | null; at: string; eventCode: string }[]>),
+    doesMaintenance
+      ? (db.execute(sql`
+          SELECT e.id, e.code, e.updated_at AS "at"
+          FROM events e
+          WHERE e.status = 'completed'
+            AND NOT EXISTS (SELECT 1 FROM lock_signoffs s WHERE s.event_id = e.id AND s.designation = 'maintenance')
+          ORDER BY e.updated_at DESC
+        `) as unknown as Promise<{ id: string; code: string; at: string }[]>)
+      : none<{ id: string; code: string; at: string }>(),
+    seesShortfalls ? listRoomShortfalls(shortfallScope) : none<Awaited<ReturnType<typeof listRoomShortfalls>>[number]>(),
+    pendingReminders(user.roleName, today),
+    seesStale ? listStaleEnquiries(today) : none<Awaited<ReturnType<typeof listStaleEnquiries>>[number]>(),
+    db.execute(sql`
+      SELECT notification_id AS id FROM notification_reads WHERE user_id = ${user.id}
+    `) as unknown as Promise<{ id: string }[]>,
+  ])
+
+  if (decidesExceptions) {
     // ONE notice per proposal, not per request (client's lead, 1 Aug 2026). A wedding raising a
     // menu increase, a 35+ room ask and an over-cap discount is one thing for the GM to sit
     // down with, and telling him about it three times is the drip-feed he objected to. Change
     // requests are inside the bundle now, so they are deliberately not listed separately below.
-    for (const b of await listBundles()) {
+    for (const b of bundles) {
       const sections = b.bySection.map((s) => `${s.n} ${s.section}`).join(', ')
       items.push({
         id: `bundle:${b.eventId}:${b.pendingCount}`,
@@ -52,7 +142,7 @@ export async function notificationsFor(
     }
   } else {
     // The raiser hears back about their own request, and about nothing else.
-    for (const x of await listExceptions({ mineId: user.id })) {
+    for (const x of myExceptions) {
       if (x.status === 'pending') continue
       items.push({
         id: `exc-done:${x.id}`,
@@ -69,18 +159,6 @@ export async function notificationsFor(
   // only way the Booking Manager learns his guest's menu changed is this notice. Derived from
   // the ONE summary row each save writes (lib/gm-authority.ts) — the field-level rows beside it
   // would turn a single save into six notifications.
-  const revisions = (await db.execute(sql`
-    SELECT a.seq, a.new_value AS "summary", a.field, a.at, a.event_id AS "eventId",
-           e.code AS "eventCode", u.full_name AS "byName"
-      FROM audit_log a
-      JOIN events e ON e.id = a.event_id
-      JOIN users u ON u.id = a.user_id
-     WHERE a.field IN ('authority_edit', 'authority_override')
-       AND e.created_by = ${user.id}
-       AND a.user_id <> ${user.id}
-     ORDER BY a.at DESC
-     LIMIT 50
-  `)) as unknown as { seq: string; summary: string | null; field: string; at: string; eventId: string; eventCode: string; byName: string }[]
   for (const r of revisions) {
     items.push({
       id: `gm-edit:${r.seq}`,
@@ -94,10 +172,10 @@ export async function notificationsFor(
     })
   }
 
-  if (!CHANGE_DECIDERS.has(user.roleName)) {
+  if (!decidesChanges) {
     // The raiser hears the outcome, the same way they do for an exception or a delicacy.
     // Without this branch a Booking Manager whose venue move was refused was never told.
-    for (const c of await listChangeRequests({ mineId: user.id })) {
+    for (const c of myChangeRequests) {
       if (c.status === 'pending') continue
       items.push({
         id: `cr-done:${c.id}`,
@@ -110,44 +188,20 @@ export async function notificationsFor(
   }
 
   // Chef: delicacies waiting on a price. Everyone else hears back once theirs is settled.
-  if (DELICACY_PRICERS.has(user.roleName)) {
-    const rows = (await db.execute(sql`
-      SELECT r.id, r.description, r.requested_at AS "at", e.code AS "eventCode"
-      FROM chef_requests r
-      JOIN sub_events se ON se.id = r.sub_event_id
-      JOIN events e ON e.id = se.event_id
-      WHERE r.status = 'pending'
-      ORDER BY r.requested_at
-    `)) as unknown as { id: string; description: string; at: string; eventCode: string }[]
-    for (const r of rows) {
+  if (pricesDelicacies) {
+    for (const r of delicaciesToPrice) {
       items.push({ id: `chef:${r.id}`, kind: 'chef', message: `Price a delicacy — ${r.eventCode}: ${r.description}`, href: '/chef', at: r.at })
     }
   } else {
-    const rows = (await db.execute(sql`
-      SELECT r.id, r.description, r.status, r.charge_paise AS "chargePaise",
-             COALESCE(r.priced_at, r.requested_at) AS "at", e.code AS "eventCode"
-      FROM chef_requests r
-      JOIN sub_events se ON se.id = r.sub_event_id
-      JOIN events e ON e.id = se.event_id
-      WHERE r.requested_by = ${user.id} AND r.status <> 'pending'
-      ORDER BY "at" DESC
-    `)) as unknown as { id: string; description: string; status: string; chargePaise: number | null; at: string; eventCode: string }[]
-    for (const r of rows) {
+    for (const r of myDelicacies) {
       const outcome = r.status === 'priced' ? `priced ${formatPaise(Number(r.chargePaise ?? 0))}/plate` : 'declined'
       items.push({ id: `chef-done:${r.id}`, kind: 'chef', message: `Chef ${outcome} — ${r.eventCode}: ${r.description}`, href: '/chef', at: r.at })
     }
   }
 
   // Maintenance: a completed event left open blocks the lock checklist (FR-5.2).
-  if (MAINTENANCE_ROLES.has(user.roleName)) {
-    const rows = (await db.execute(sql`
-      SELECT e.id, e.code, e.updated_at AS "at"
-      FROM events e
-      WHERE e.status = 'completed'
-        AND NOT EXISTS (SELECT 1 FROM lock_signoffs s WHERE s.event_id = e.id AND s.designation = 'maintenance')
-      ORDER BY e.updated_at DESC
-    `)) as unknown as { id: string; code: string; at: string }[]
-    for (const r of rows) {
+  if (doesMaintenance) {
+    for (const r of openMaintenance) {
       items.push({ id: `maint:${r.id}`, kind: 'maintenance', message: `Close maintenance — ${r.code} is completed`, href: '/maintenance', at: r.at })
     }
   }
@@ -160,15 +214,8 @@ export async function notificationsFor(
   // Scoped the way every other queue is — the proposal's owner hears about their own, a
   // Lodge Manager about their own lodge, and the Auditor about all of it. A shortfall is
   // derived live, so fixing the booking makes the notice disappear on its own.
-  const shortfallScope =
-    user.roleName === 'auditor'
-      ? {}
-      : user.roleName === 'lodge_manager'
-        ? { unitId: user.lodgingUnitId ?? undefined }
-        : { ownerId: user.id }
-  // A Lodge Manager with no lodge assigned would otherwise read as "every lodge".
-  if (!(user.roleName === 'lodge_manager' && !user.lodgingUnitId)) {
-    for (const sf of await listRoomShortfalls(shortfallScope)) {
+  if (seesShortfalls) {
+    for (const sf of shortfalls) {
       const stay = `${sf.checkIn} to ${sf.checkOut}`
       items.push({
         // Keyed on the requirement row: a proposal can hold two lines of the same category
@@ -185,21 +232,18 @@ export async function notificationsFor(
     }
   }
 
-  for (const r of await pendingReminders(user.roleName, today)) {
+  for (const r of reminders) {
     // What to collect to reach the milestone, not the whole outstanding balance — the wedding
     // asks for 50% by D-30 and settles the rest at billing (client, 4 Aug 2026).
     items.push({ id: `rem:${r.id}`, kind: 'payment', message: `Payment due — ${r.eventCode}: collect ${formatPaise(r.shortfallPaise)} to reach ${r.milestonePct}%`, href: `/bookings/${r.eventId}`, at: r.remindOn })
   }
-  if (user.roleName === 'booking_manager' || user.roleName === 'auditor') {
-    for (const s of await listStaleEnquiries(today)) {
+  if (seesStale) {
+    for (const s of stale) {
       items.push({ id: `stale:${s.id}`, kind: 'stale', message: `Stale enquiry — ${s.code} (${s.ageDays}d untouched)`, href: `/bookings/${s.id}`, at: s.updatedAt })
     }
   }
 
   // Drop anything this user has already clicked through.
-  const read = (await db.execute(sql`
-    SELECT notification_id AS id FROM notification_reads WHERE user_id = ${user.id}
-  `)) as unknown as { id: string }[]
   const dismissed = new Set(read.map((r) => r.id))
 
   return items
