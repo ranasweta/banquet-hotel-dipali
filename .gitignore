@@ -46,3 +46,6 @@ next-env.d.ts
 
 .vercel
 .env*
+
+# Claude Code: share the skills, keep each machine's own permission allowlist local
+.claude/settings.local.json
