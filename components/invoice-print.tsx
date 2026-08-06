@@ -607,6 +607,16 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                     </div>
                   </div>
 
+                </div>
+
+                {/* ══════════ THE CLOSING SHEET ══════════
+                    Inclusions, the Terms note, the signatures and the footer band, wrapped
+                    together so the band can be pushed to the FOOT of the sheet in print
+                    (client, 6 Aug 2026 — it was landing directly under the signatures with
+                    half a sheet of blank paper below it, which reads as a printing fault).
+                    A plain div on screen: the wrapper does nothing until @media print. */}
+                <div className="closing">
+                  <div className="pad">
                   {/* ══════════ INCLUSIONS ══════════ */}
                   <PillRow title="Inclusions & Notes" tag="What this estimate covers" />
 
@@ -686,12 +696,13 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                       <div className="sub">Authorised Signatory</div>
                     </div>
                   </div>
-                </div>
+                  </div>
 
-                <div className="footer">
-                  <div className="thanks">We look forward to hosting your celebration.</div>
-                  <div>
-                    Hotel Dipali Sagar · +91 07582 263910 · Proposal {event.code} · {doc.doc.isDraft2 ? 'Draft 2' : 'Draft'}
+                  <div className="footer">
+                    <div className="thanks">We look forward to hosting your celebration.</div>
+                    <div>
+                      Hotel Dipali Sagar · +91 07582 263910 · Proposal {event.code} · {doc.doc.isDraft2 ? 'Draft 2' : 'Draft'}
+                    </div>
                   </div>
                 </div>
               </td>
@@ -1087,6 +1098,12 @@ const CSS = `
   font-family:var(--sans); color:var(--ink); background:#EDE8DD;
   font-size:10.5pt; line-height:1.5; -webkit-font-smoothing:antialiased;
   font-variant-numeric:tabular-nums; padding:24px 12px;
+  /* The sheet is a fixed 210mm inside a pane that scrolls (app/(app)/layout.tsx). Below
+     roughly a 1100px window the pane is narrower than that, and without this the backdrop
+     paints only as wide as the PANE while the sheet runs on past it — so scrolling right
+     tore the document along a vertical line, beige one side and bare the other. Sizing to
+     the content keeps the backdrop under the whole sheet at every width. */
+  min-width:max-content;
 }
 .pd *{box-sizing:border-box; margin:0; padding:0}
 .pd .page{width:210mm; margin:0 auto; background:var(--paper); position:relative;
@@ -1376,7 +1393,9 @@ const CSS = `
 .pd .tcpageno{text-align:center; font-size:9.5pt; margin-top:4mm}
 
 @media print{
-  .pd{background:#fff; padding:0}
+  /* min-width:max-content is a screen fix for the scrolling pane; on paper there is no
+     pane and no scrolling, and leaving it on lets a wide table dictate the sheet width. */
+  .pd{background:#fff; padding:0; min-width:0}
   /* margin:0 hands the margins to the document instead of the browser. Two things follow:
      the gilt bar and masthead run to the sheet edge as the template draws them, and Chrome
      is left no margin box to print its URL / date / page-number strip into. (The print
@@ -1386,7 +1405,12 @@ const CSS = `
   .pd .page,.pd .tcpage{box-shadow:none; margin:0; width:auto}
   /* Each menu starts a fresh sheet — the one thing that was ever asked to (client,
      6 Aug 2026). */
-  .pd .menupage{break-before:page; page-break-before:always}
+  /* Same rule as the closing sheet: the band belongs at the foot. A menu sheet has no
+     repeating frame to allow for, so it takes the sheet less 4mm of slack. min-height,
+     not height — a tier too long for one sheet must still be free to run onto a second. */
+  .pd .menupage{break-before:page; page-break-before:always;
+    display:flex; flex-direction:column; min-height:293mm}
+  .pd .menupage>.pad{flex:1}
   /* …but a menu card is the one .fn that may span sheets. The blanket break-inside:avoid
      below would shove a forty-dish tier onto the next page whole and then overflow it
      anyway. .seg keeps its own avoid, so a break lands between segment cards, never
@@ -1403,6 +1427,18 @@ const CSS = `
   .pd .sign,.pd .pay,.pd .two,.pd .glance,.pd .note,.pd .footer,.pd .seg,
   .pd .fn table,.pd .fn thead,.pd .fn tr{break-inside:avoid; page-break-inside:avoid}
   .pd .pill-row,.pd .fn-bar{break-after:avoid; page-break-after:avoid}
+  /* THE FOOTER BELONGS AT THE FOOT. The closing matter is given the sheet it already
+     lands on, as a flex column tall enough to fill it, so the ivory band is pushed to the
+     bottom edge instead of sitting under the signatures with blank paper beneath it.
+     The subtraction is the repeating frame this block does NOT get to use — the gild bar
+     and its 7mm of clearance at the top of every sheet, and the closing rule with its 10mm
+     at the bottom, measured at 21.8mm — plus 4mm of slack. The slack is the point: at an
+     exact 21.8mm the block fills the sheet to the last hair, and anything that nudges the
+     frame (a font that loads, a re-spaced rule) tips it onto a second, near-empty sheet.
+     4mm low is invisible against the 13.8mm the rule already leaves below it. */
+  .pd .closing{break-before:page; page-break-before:always;
+    display:flex; flex-direction:column; min-height:calc(100vh - 26mm)}
+  .pd .closing>.pad{flex:1}
   .pd table.sheet,.pd table.sheet>tbody,.pd table.sheet>tbody>tr,.pd table.sheet>tbody>tr>td{
     break-inside:auto; page-break-inside:auto}
   /* The annexure is exactly two sheets. Each is given the height of one, so the box border
