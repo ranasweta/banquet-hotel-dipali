@@ -1,0 +1,63 @@
+# Manual build → push → deploy to Cloud Run. Mirrors the commands in README.md.
+#
+# Secrets live in GitHub (Settings → Secrets and variables → Actions):
+#   GCP_SA_KEY       service account JSON key, roles:
+#                    artifactregistry.writer, run.admin, iam.serviceAccountUser
+#   DATABASE_URL, SESSION_SECRET, STORAGE_KEY, CRON_SECRET
+#
+# Migrations are NOT run here — `pnpm migrate` still runs from a workstation and must
+# finish BEFORE this workflow deploys, or the new code queries columns that do not exist
+# yet (Dockerfile:8-10, docs/OPERATIONS.md).
+name: Deploy to Cloud Run
+
+on:
+  workflow_dispatch:
+
+# Two deploys racing would leave the newer revision behind the older one.
+concurrency:
+  group: deploy-cloud-run
+  cancel-in-progress: false
+
+env:
+  REGION: asia-southeast1
+  SERVICE: hdwed
+  IMAGE: asia-southeast1-docker.pkg.dev/hdofficial/hdwed/hdwed
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      # Tagged by commit SHA rather than the README's :v1, which is mutable — re-pushing
+      # it destroys the only image you could roll back to, and nothing records which
+      # commit a running revision came from.
+      - name: Build and push
+        run: |
+          docker build -t "$IMAGE:$GITHUB_SHA" .
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker push "$IMAGE:$GITHUB_SHA"
+
+      # ^##^ sets ## as the delimiter, because DATABASE_URL contains commas.
+      # --set-env-vars replaces the whole set, so this list is the complete runtime env.
+      - name: Deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          STORAGE_KEY: ${{ secrets.STORAGE_KEY }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image="$IMAGE:$GITHUB_SHA" \
+            --region="$REGION" \
+            --port=3000 \
+            --cpu=1 --memory=1Gi \
+            --min-instances=1 --max-instances=1 \
+            --allow-unauthenticated \
+            --set-env-vars="^##^DATABASE_URL=${DATABASE_URL}##SESSION_SECRET=${SESSION_SECRET}##STORAGE_KEY=${STORAGE_KEY}##CRON_SECRET=${CRON_SECRET}##DB_POOL_MAX=10"

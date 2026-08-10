@@ -44,6 +44,9 @@ next-env.d.ts
 /storage/*
 !/storage/README.md
 
+# gcp service account key (goes into the GCP_SA_KEY github secret, never into git)
+key.json
+
 .vercel
 .env*
 !.env.example
