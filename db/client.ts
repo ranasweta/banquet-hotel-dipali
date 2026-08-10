@@ -64,6 +64,14 @@ export function createClient(envVar: 'DATABASE_URL' | 'TEST_DATABASE_URL' = 'DAT
     // limit gets exhausted — and production does not need it, the app and the database
     // being in the same region.
     max: Number(process.env.DB_POOL_MAX ?? 5),
+    // Hand back idle connections before the other end drops them. The pool now lives for
+    // the whole life of a serverless instance (db/drizzle.ts), and a Vercel instance stays
+    // warm far longer than Neon waits before autosuspending its compute — which kills every
+    // open socket. Without this, the first request after a quiet spell can be handed a dead
+    // connection and fail, which is the "it worked, then after a while it didn't" shape.
+    // Sixty seconds is comfortably under Neon's five-minute idle window; reconnecting costs
+    // one in-region handshake on the next query, which is a few milliseconds.
+    idle_timeout: 60,
     types: { bigint: paiseAsNumber },
     onnotice: (notice) => {
       // 42P07 is "relation already exists, skipping" from CREATE ... IF NOT EXISTS —
