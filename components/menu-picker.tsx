@@ -463,8 +463,11 @@ export function MenuPicker({
             const snap = savedForThisTier?.categories.find((c) => c.categoryName === cat.name)
             return (
               <div key={cat.id} className="rounded-lg border p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                {/* Wraps rather than overflows: on a phone a two-line category name ("Veg
+                    Appetizer") used to push the count and the swap/increase buttons past the
+                    right edge of the card, where they could not be reached. */}
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
                     <span className="font-medium">{cat.name}</span>
                     {allIncluded ? (
                       <Badge variant="outline" className="text-muted-foreground">all included</Badge>
@@ -498,7 +501,7 @@ export function MenuPicker({
                       </Badge>
                     )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex shrink-0 items-center gap-2">
                     <span
                       className={cn(
                         'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium tabular-nums',

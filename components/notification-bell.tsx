@@ -95,9 +95,11 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        // left-0 (not right-0): the bell lives in a narrow sidebar, so the panel opens rightward
-        // into the page. Capped to the viewport in both directions so it never overflows.
-        <div className="absolute left-0 z-30 mt-1 w-[min(22rem,calc(100vw-2rem))] max-h-[min(24rem,70vh)] overflow-y-auto overscroll-contain rounded-lg border bg-popover shadow-lg">
+        // The panel opens away from whichever edge the bell is against, or it opens off-screen.
+        // At lg+ the bell is in the 240px sidebar, so it opens rightward into the page; below lg
+        // the bell is the last item in the top bar, flush to the right edge, so it must open
+        // leftward instead. Capped to the viewport in both directions on top of that.
+        <div className="absolute right-0 z-30 mt-1 w-[min(22rem,calc(100vw-2rem))] max-h-[min(24rem,70vh)] overflow-y-auto overscroll-contain rounded-lg border bg-popover shadow-lg lg:left-0 lg:right-auto">
           <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
             <span className="text-xs font-medium">
               {items.length === 0 ? 'All clear' : `${items.length} need${items.length === 1 ? 's' : ''} you`}
