@@ -47,6 +47,33 @@ applied in order by `pnpm migrate`. Pre-launch the team folded changes into `000
 **post-launch, never edit `0001` — add a new numbered migration** so production upgrades forward
 without a rebuild.
 
+## ✅ Production moved to Singapore — 11 Aug 2026
+
+Done, during a maintenance window with writes stopped. Dump 44 s + restore 48 s. Verified
+against the source before anything was repointed:
+
+| Check | Result |
+|---|---|
+| Tables | 41 → 41 |
+| Rows (all tables) | 3,938, every count equal |
+| `event_code_seq` | 1049 → 1049 |
+| Exclusion constraints | both present |
+| Triggers / indexes / FKs / checks / enums | 16 / 75 / 66 / 31 / 8 — identical |
+
+**No schema change.** `pg_restore` reproduced the schema exactly as it stood on the old
+account; only the host moved. Query latency from India fell from ~296 ms to ~98 ms, and
+production's own path is Cloud Run → database inside one region.
+
+The dump file was deleted immediately after verification — it is every guest's name, number and
+payment record in one unencrypted file, and the old project is the real rollback anyway.
+
+**The old project `curly-violet-63131529` (account `sjoffice7@gmail.com`, `us-east-1`) still
+holds the pre-cutover data. Do not delete it for at least a week.** The redundant
+`hidden-resonance-76799876` ("Banquet SG") in that same old account can go once this is settled.
+
+The runbook below is kept because it is the procedure, not a one-off — the same steps apply to
+the eventual Cloud SQL move.
+
 ## Moving the database to Singapore (cutover runbook)
 
 Cloud Run is in `asia-southeast1` and the database was in `aws-us-east-1` — roughly 230 ms per
