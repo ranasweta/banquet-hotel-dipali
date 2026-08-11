@@ -14,8 +14,8 @@ const bodySchema = z.object({ as_of: z.string().regex(ISO_DATE).optional() }).op
  * Is this the scheduler rather than a person?
  *
  * Two shapes are accepted because two callers exist. Our own header (`x-cron-secret`) is
- * what a self-hosted scheduler or a manual curl uses; `Authorization: Bearer` is what Vercel
- * Cron sends, and it is not negotiable — the platform picks the header, not us.
+ * what Cloud Scheduler and a manual curl send; `Authorization: Bearer` was Vercel Cron's,
+ * kept because it costs a line and nothing is gained by breaking an old caller.
  */
 function isScheduler(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
@@ -26,13 +26,13 @@ function isScheduler(req: NextRequest): boolean {
 }
 
 /**
- * GET /cron/run — the same job, for Vercel Cron, which issues a GET and cannot be told to
- * POST. Scheduler-only: there is no body, so no `as_of`, and a browser hitting this URL
- * without the secret gets a 403 rather than silently advancing every event in the hotel.
+ * GET /cron/run — the same job for a caller that can only issue a GET. Scheduler-only:
+ * there is no body, so no `as_of`, and a browser hitting this URL without the secret gets a
+ * 403 rather than silently advancing every event in the hotel.
  *
- * Scheduled daily at 03:00 UTC (08:30 IST, before the hotel's day starts) — see vercel.json.
- * The reasoning lives here rather than beside the schedule because vercel.json is strict
- * JSON: it has no comment syntax, and Vercel rejects any property it does not recognise.
+ * The live schedule is a Cloud Scheduler job (08:30 IST, before the hotel's day starts)
+ * calling POST — see docs/OPERATIONS.md. It lives in GCP rather than in this repo, so
+ * changing the time is a console edit and leaves no trace here.
  *
  * This job is why an event ever reaches Completed. Nothing else advances a status, so
  * without it nothing can be locked, invoiced or billed.

@@ -65,13 +65,14 @@ COPY --from=builder --chown=node:node /app/public ./public
 
 # The local document driver's directory, owned by the user that will write to it.
 #
-# READ THIS BEFORE DEPLOYING. lib/storage.ts falls back to ./storage whenever neither
-# BLOB_STORE_ID nor BLOB_READ_WRITE_TOKEN is set, and its assertPersistent() guard only
-# fires on Vercel — in a container it will not fire. An unmounted /app/storage therefore
-# accepts an Aadhaar upload, reports success, and loses the file on the next deploy. Because
-# confirming an event requires both Aadhaar sides on record, that surfaces weeks later as
-# "no booking can be confirmed", nowhere near the cause. Either configure a blob store, or
-# mount a durable volume at /app/storage and back it up with the database (rule 7).
+# READ THIS BEFORE DEPLOYING. lib/storage.ts falls back to ./storage whenever GCS_BUCKET is
+# unset. Its assertPersistent() guard now fires on Cloud Run (K_SERVICE) and Vercel, but a
+# plain container sets neither, so there it will still not fire. An unmounted /app/storage
+# therefore accepts an Aadhaar upload, reports success, and loses the file on the next
+# deploy. Because confirming an event requires both Aadhaar sides on record, that surfaces
+# weeks later as "no booking can be confirmed", nowhere near the cause. Either set
+# GCS_BUCKET, or mount a durable volume at /app/storage and back it up with the database
+# (rule 7).
 RUN install -d -o node -g node /app/storage
 
 USER node

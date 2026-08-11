@@ -1,6 +1,7 @@
 # Joining this codebase
 
-Written 11 Aug 2026, for a second developer picking up the storage driver. Read
+Written 11 Aug 2026 for a second developer, and updated the same day once the storage driver
+landed — §6 describes what is built, not what to build. Read
 `CLAUDE.md` first — it is the source of truth for conventions and business rules, and several
 of them are non-obvious enough that ignoring one produces code that looks right and bills the
 guest wrongly.
@@ -72,50 +73,49 @@ There is **no Google Secret Manager**. GitHub Actions secrets are the mechanism:
 - Migrations are **not** run by the workflow. `npm run migrate` against production must finish
   before the deploy, or new code queries columns that do not exist.
 
-## 6. Your task: the GCS storage driver
+## 6. Storage: done on 11 Aug, and why it looks the way it does
 
-`lib/storage.ts` chooses a driver by asking one question — are blob credentials present?
+`lib/storage.ts` chooses a driver by asking one question — is a bucket configured?
 
 ```
-BLOB_STORE_ID or BLOB_READ_WRITE_TOKEN  ->  Vercel Blob
-neither                                 ->  the local `storage/` directory
+GCS_BUCKET set  ->  Google Cloud Storage, private bucket `hdwed-docs` (asia-southeast1)
+unset           ->  the local `storage/` directory
 ```
 
-Add a third: Google Cloud Storage. Five things must stay true.
+Vercel Blob is gone; so is `@vercel/blob`. Four things must stay true if you touch this.
 
 **1. Encryption stays in this process.** AES-256-GCM happens *before* bytes leave (CLAUDE.md
 rule 7). GCS is transport, not the security boundary — a bucket snapshot or a leaked URL must
 yield ciphertext. Do not substitute Google-managed encryption for it.
 
-**2. The bucket is private.** Uniform bucket-level access, no public objects. Signed URLs are
-not needed: bytes are already served through a route that checks permission.
+**2. The bucket is private.** Uniform bucket-level access, public access prevention enforced.
+Signed URLs are not needed: bytes are already served through a route that checks permission.
+Nothing authenticates with a key file — Cloud Run's own service account holds Storage Object
+Admin **on that bucket**, and the SDK picks it up through ADC.
 
-**3. `assertPersistent` is currently dead on Cloud Run.** It only throws when
-`process.env.VERCEL` is set (`lib/storage.ts:66`), so on GCP an upload silently writes to a
-container disk that forgets. **Two real Aadhaar images were lost this way on 11 Aug.** Fix that
-guard even before the bucket exists — a loud failure beats silent loss.
+**3. `assertPersistent` was dead on Cloud Run, and that cost real data.** It only checked
+`process.env.VERCEL`, so on GCP an upload wrote to a container disk that forgets, reported
+success, and lost the file on the next revision. **Two real Aadhaar images went that way on
+11 Aug.** It now also checks `K_SERVICE`, and `tests/storage.test.ts` locks that behaviour —
+if you are tempted to loosen the guard, read that test first.
 
-**4. Migrating existing files is not a copy.** The two drivers use different envelopes:
+**4. Object versioning is deliberately OFF.** Soft delete (7 days) is the recovery net
+instead. Versioning would retain every *replaced* Aadhaar image indefinitely, which quietly
+undoes the deletion that rule 7 requires. Bounded recovery, not permanent history.
+
+### The two envelope formats
+
+Both still exist, told apart by the shape of the `file_key` — a bucket key has a slash:
 
 ```
-local  <uuid>.enc            [12B IV][16B tag][ciphertext],  content type in a .type sidecar
-blob   documents/<uuid>.enc  [12B IV][16B tag][ciphertext of [2B len][type][bytes]]
+local   <uuid>.enc            [12B IV][16B tag][ciphertext],  content type in a .type sidecar
+bucket  documents/<uuid>.enc  [12B IV][16B tag][ciphertext of [2B len][type][bytes]]
 ```
 
-A migration must read, re-wrap and re-upload, then rewrite `guest_documents.file_key`. As long
-as `STORAGE_KEY` is unchanged everything decrypts.
-
-**5. Split the migration by where the bytes are.** Of 50 documents:
-
-| Location | Count | Who can move them |
-|---|---|---|
-| Vercel Blob | 16 | anyone with the blob credentials |
-| One laptop's `storage/` | 32 | **only from that laptop** |
-| Gone | 2 | nobody — must be re-collected |
-
-⚠️ **The 16 in Vercel Blob are only reachable through Vercel.** Deleting that project makes 16
-real bookings' KYC unrecoverable while the database still points at them. They must move
-*before* Vercel is switched off.
+So a row written by one driver still reads under the other. No migration ran: the 48 documents
+that existed before the cutover were all created during testing and were discarded with the
+Vercel project. If real files ever need moving between drivers it is a read, re-wrap and
+re-upload, then a rewrite of `guest_documents.file_key` — not a copy.
 
 ### If you also store rendered PDFs
 
@@ -126,12 +126,17 @@ exists to prevent.
 
 ## 7. Also outstanding, not yours unless you take it
 
-- **No cron on GCP.** The daily job lived in `vercel.json`, which is Vercel-only. Without a
-  Cloud Scheduler job calling `POST /api/v1/cron/run` with the `CRON_SECRET` header,
-  `advanceEventStatuses` never runs — no event reaches `completed`, so nothing can be locked,
-  invoiced or billed. Nothing announces this.
 - **The old Neon project must survive.** `curly-violet-63131529` on `sjoffice7@gmail.com` holds
   the pre-cutover data and is the only rollback. Not before a week has passed.
+- **Backups are not configured yet.** Neon PITR, and a restore that brings the database and the
+  bucket to the same point — a `guest_documents` row without its object is a booking that
+  cannot be confirmed.
+
+The daily job is no longer outstanding: Cloud Scheduler job `hdwed-daily` (asia-southeast1,
+`30 8 * * *` Asia/Kolkata) calls `POST /api/v1/cron/run` with the `x-cron-secret` header. It
+lives in GCP, not in this repo, so changing the time leaves no trace here. Without it
+`advanceEventStatuses` never runs, no event reaches `completed`, and nothing can be locked,
+invoiced or billed — and nothing announces that.
 
 ## 8. Two habits that cost time on 11 Aug
 
