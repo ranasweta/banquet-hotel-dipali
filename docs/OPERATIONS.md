@@ -74,14 +74,25 @@ come BEFORE the connection string or pg_dump fails with "too many command-line a
 
 ### 1. Take the connection strings
 
+**The SOURCE string does not come from the CLI.** `neonctl` is signed in to the new account, so
+it cannot see the old one at all. Production's string is the `DATABASE_URL` already in
+`.env.local` — read it from there rather than logging back and forth between accounts:
+
 ```bash
-ORG=org-fragrant-brook-41215212
-npx neonctl branches list --project-id curly-violet-63131529 --org-id $ORG   # confirm the branch name
-npx neonctl connection-string <branch> --project-id curly-violet-63131529 --database-name neondb --org-id $ORG
-npx neonctl connection-string main    --project-id hidden-resonance-76799876 --database-name neondb --org-id $ORG
+SRC="$(node -e 'require("dotenv").config({path:[".env.local"],quiet:true});process.stdout.write(process.env.DATABASE_URL)')"
 ```
 
-These contain live credentials. Keep them out of chat, tickets and commits.
+The TARGET comes from the new account:
+
+```bash
+DST="$(npx neonctl connection-string main \
+        --project-id soft-butterfly-04494096 \
+        --database-name neondb \
+        --org-id org-wild-haze-39954386 | tr -d '\r\n')"
+```
+
+Both contain live credentials. Keep them in shell variables — never echo them, and never paste
+them into chat, a ticket or a commit.
 
 ### 2. Stop writes
 
@@ -92,9 +103,13 @@ finishing exists only in the old database and is lost, and in this system a book
 ### 3. Dump and restore
 
 ```bash
-pg_dump "$OLD_URL" --format=custom --no-owner --no-privileges --file=banquet.dump
-pg_restore --dbname="$NEW_URL" --no-owner --no-privileges --single-transaction banquet.dump
+pg_dump --format=custom --no-owner --no-privileges --file=banquet.dump "$SRC"
+pg_restore --dbname="$DST" --no-owner --no-privileges --single-transaction banquet.dump
 ```
+
+Options before the connection string, per the note above. **Delete `banquet.dump` when the
+cutover is verified** — it is every guest's name, number and payment record in one unencrypted
+file.
 
 `--single-transaction` is not optional. A partial restore is the dangerous outcome: it can leave
 the schema looking complete while missing a constraint, and the missing constraint is the thing
