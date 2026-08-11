@@ -29,6 +29,48 @@ const KIND_TARGET: Record<string, string> = {
 }
 
 /**
+ * One fetch, however many bells are on screen, and at most one every TTL.
+ *
+ * Two problems, one mechanism. The bell is mounted TWICE — once in the mobile header, once in
+ * the desktop sidebar (app-nav.tsx) — because the layout needs it in two places and CSS hides
+ * whichever does not apply. CSS hiding does not stop a component running, so every navigation
+ * fired the request twice. And `/notifications` is not cheap: `notificationsFor` DERIVES the
+ * feed from eleven queries on every call, so a bell icon was costing twenty-two queries a page
+ * against a database on another continent.
+ *
+ * Sharing the in-flight promise collapses the pair into one request. The 15-second window then
+ * collapses a burst of navigation into one as well — long enough to cover clicking through
+ * three screens, short enough that a decision made elsewhere still surfaces while the user is
+ * still looking at the app.
+ *
+ * A REJECTION IS NEVER CACHED. Remembering a failure for fifteen seconds would turn one dropped
+ * connection into a quarter-minute of the bell insisting it is broken.
+ *
+ * CLEARED ON SIGN-OUT (app-nav.tsx). Module state outlives a client-side navigation to /login,
+ * and the front desk shares a machine: without this, signing in as someone else within the
+ * window would show them the previous user's queue.
+ */
+const TTL_MS = 15_000
+let cache: { at: number; promise: Promise<{ notifications: Notification[] }> } | null = null
+
+function loadNotifications(): Promise<{ notifications: Notification[] }> {
+  const now = Date.now()
+  if (cache && now - cache.at < TTL_MS) return cache.promise
+
+  const promise = api<{ notifications: Notification[] }>('/notifications')
+  cache = { at: now, promise }
+  promise.catch(() => {
+    if (cache?.promise === promise) cache = null
+  })
+  return promise
+}
+
+/** Drops the shared feed so the next read goes to the server. */
+export function clearNotificationCache(): void {
+  cache = null
+}
+
+/**
  * Notification bell: the signed-in user's actionable feed (FR-9.1), refreshed on navigation.
  *
  * Clicking an item marks it read and takes the user to the screen where they can act on it, so

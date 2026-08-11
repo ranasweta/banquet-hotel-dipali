@@ -28,7 +28,7 @@ import {
 } from 'lucide-react'
 import { api } from '@/lib/http'
 import { Button } from '@/components/ui/button'
-import { NotificationBell } from '@/components/notification-bell'
+import { NotificationBell, clearNotificationCache } from '@/components/notification-bell'
 import { cn } from '@/lib/utils'
 
 type Perm = { module: string; action: string }
@@ -157,6 +157,17 @@ export function AppNav({
           <Link
             key={item.href}
             href={resolveHref(item)}
+            // NOT prefetched, deliberately. Next.js prefetches every Link in the viewport, and
+            // the whole sidebar is always in the viewport — rendered twice over, at that (the
+            // desktop aside and the mobile drawer both call this). Every prefetch makes the
+            // SERVER render that page, which runs that page's database queries. So landing
+            // anywhere quietly asked the server to build a dozen screens nobody opened, each
+            // one paying the round trip to a database on another continent.
+            //
+            // The cost of turning it off is that a click now fetches its own payload. Against
+            // a co-located database that is a few milliseconds; against prefetching sixteen
+            // pages to save one click, it is the better trade by a wide margin.
+            prefetch={false}
             onClick={opts.onNavigate}
             aria-current={active ? 'page' : undefined}
             aria-label={opts.collapsed ? item.label : undefined}
