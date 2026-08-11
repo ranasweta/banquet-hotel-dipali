@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server'
-import { asc, eq } from 'drizzle-orm'
+import { asc, eq, sql } from 'drizzle-orm'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { db, schema } from '@/db/drizzle'
@@ -23,6 +23,7 @@ export const GET = route(async () => {
       .select({
         id: schema.users.id,
         fullName: schema.users.fullName,
+        loginId: schema.users.loginId,
         mobile: schema.users.mobile,
         email: schema.users.email,
         isActive: schema.users.isActive,
@@ -60,9 +61,19 @@ export const GET = route(async () => {
   })
 })
 
+// Mirrors the users_login_id_format CHECK in migration 0027, which is the real enforcement —
+// the seed and psql write users too. This copy only buys a 400 with a readable message
+// instead of a constraint violation.
+const loginIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9._-]{3,32}$/, 'ID must be 3-32 characters: letters, digits, dot, underscore or hyphen')
+
 const createSchema = z.object({
   fullName: z.string().trim().min(1).max(120),
-  mobile: z.string().trim().min(4).max(20),
+  loginId: loginIdSchema,
+  // Contact information since 0027, no longer the login. Optional.
+  mobile: z.string().trim().max(20).optional().or(z.literal('')).transform((v) => v || undefined),
   email: z.email().max(200).optional().or(z.literal('')).transform((v) => v || undefined),
   roleId: z.uuid(),
   password: z.string().min(8).max(200),
@@ -85,19 +96,22 @@ export const POST = route(async (req: NextRequest) => {
       .limit(1)
     if (!role) throw badRequest('roleId does not refer to an existing role')
 
+    // Case-insensitively, matching the unique index on lower(login_id) (0027) — otherwise
+    // 'Rahul' passes this check, then the database rejects it as a duplicate of 'rahul'.
     const [dupe] = await tx
       .select({ id: schema.users.id })
       .from(schema.users)
-      .where(eq(schema.users.mobile, input.mobile))
+      .where(sql`lower(${schema.users.loginId}) = ${input.loginId.toLowerCase()}`)
       .limit(1)
-    if (dupe) throw conflict(`A user with mobile ${input.mobile} already exists`)
+    if (dupe) throw conflict(`A user with ID ${input.loginId} already exists`)
 
     const passwordHash = await bcrypt.hash(input.password, 10)
     const [row] = await tx
       .insert(schema.users)
       .values({
         fullName: input.fullName,
-        mobile: input.mobile,
+        loginId: input.loginId,
+        mobile: input.mobile ?? null,
         email: input.email ?? null,
         passwordHash,
         roleId: input.roleId,
@@ -105,6 +119,7 @@ export const POST = route(async (req: NextRequest) => {
       .returning({
         id: schema.users.id,
         fullName: schema.users.fullName,
+        loginId: schema.users.loginId,
         mobile: schema.users.mobile,
         email: schema.users.email,
         isActive: schema.users.isActive,

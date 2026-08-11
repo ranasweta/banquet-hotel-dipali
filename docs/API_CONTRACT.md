@@ -6,7 +6,8 @@ Errors: `{ error: { code, message } }` with proper HTTP status; constraint
 races return 409 with a human-readable message.
 
 ## Auth
-- `POST /auth/login` { mobile, password } → session cookie + user + role + permissions
+- `POST /auth/login` { login_id, password } → session cookie + user + role + permissions
+  (`login_id` matched case-insensitively; was `mobile` before migration 0027)
 - `POST /auth/logout`
 - `GET  /auth/me` → user, role, permission matrix (drives UI visibility)
 

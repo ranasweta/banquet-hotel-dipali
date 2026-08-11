@@ -42,7 +42,10 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
 ## Stack
 - PostgreSQL 16, Drizzle ORM (introspect from `db/schema.sql`, keep SQL as
   the source of truth — schema changes happen in SQL migrations first)
-- Auth: session-based (iron-session or NextAuth credentials), mobile + password
+- Auth: session-based (iron-session or NextAuth credentials), `users.login_id` + password
+  (migration 0027, client 11 Aug 2026). The ID is Admin-chosen and unique on
+  `lower(login_id)` — every lookup must lower() both sides. `users.mobile` is contact
+  information now: nullable, not unique, and identifies nobody.
 - Zod validation on every API input
 
 ## Non-negotiable rules

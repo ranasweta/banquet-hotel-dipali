@@ -47,7 +47,11 @@ export const modules = pgTable("modules", {
 export const users = pgTable("users", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	fullName: text("full_name").notNull(),
-	mobile: text().notNull(),
+	// What is typed at sign-in (migration 0027). Unique on lower(login_id), so every lookup
+	// must lower() both sides or a user can exist that cannot sign in.
+	loginId: text("login_id").notNull(),
+	// Contact information only since 0027 — nullable, and no longer unique.
+	mobile: text(),
 	email: text(),
 	passwordHash: text("password_hash").notNull(),
 	roleId: uuid("role_id").notNull(),
@@ -67,7 +71,9 @@ export const users = pgTable("users", {
 			foreignColumns: [lodgingUnits.id],
 			name: "users_lodging_unit_id_fkey"
 		}),
-	unique("users_mobile_key").on(table.mobile),
+	// login_id's uniqueness is a functional index on lower(login_id) (0027), which Drizzle
+	// cannot express here. It is enforced by the database; the API also checks it to return
+	// a friendly 409 rather than a constraint violation.
 	unique("users_email_key").on(table.email),
 ]);
 

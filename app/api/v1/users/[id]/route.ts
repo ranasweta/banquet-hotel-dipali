@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { db, schema } from '@/db/drizzle'
@@ -11,9 +11,17 @@ import { badRequest, conflict, ok, notFound, route } from '@/lib/api'
 const updateSchema = z
   .object({
     fullName: z.string().trim().min(1).max(120).optional(),
-    // The mobile is the login id, so changing it changes how this person signs in. Unique
-    // at the database level; the duplicate is caught below to name the clash.
-    mobile: z.string().trim().min(4).max(20).optional(),
+    // The login id is what this person types to sign in, so renaming it changes their
+    // access immediately. Unique on lower(login_id) at the database level (migration 0027);
+    // the duplicate is caught below to name the clash. The regex mirrors that migration's
+    // CHECK constraint, which is the real enforcement.
+    loginId: z
+      .string()
+      .trim()
+      .regex(/^[A-Za-z0-9._-]{3,32}$/, 'ID must be 3-32 characters: letters, digits, dot, underscore or hyphen')
+      .optional(),
+    // Contact information since 0027, no longer the login. May be cleared.
+    mobile: z.string().trim().max(20).optional(),
     email: z.email().max(200).or(z.literal('')).optional(),
     roleId: z.uuid().optional(),
     isActive: z.boolean().optional(),
@@ -33,6 +41,7 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
     const [before] = await tx
       .select({
         fullName: schema.users.fullName,
+        loginId: schema.users.loginId,
         mobile: schema.users.mobile,
         email: schema.users.email,
         roleId: schema.users.roleId,
@@ -52,18 +61,21 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
       .limit(1)
     if (!role) throw badRequest('roleId does not refer to an existing role')
 
-    if (input.mobile !== undefined && input.mobile !== before.mobile) {
+    // Case-insensitively, matching the unique index on lower(login_id) (0027). Compared
+    // that way too, so re-saving 'admin' as 'Admin' is a rename, not a false clash.
+    if (input.loginId !== undefined && input.loginId.toLowerCase() !== before.loginId.toLowerCase()) {
       const [dupe] = await tx
         .select({ id: schema.users.id })
         .from(schema.users)
-        .where(eq(schema.users.mobile, input.mobile))
+        .where(sql`lower(${schema.users.loginId}) = ${input.loginId.toLowerCase()}`)
         .limit(1)
-      if (dupe) throw conflict(`A user with mobile ${input.mobile} already exists`)
+      if (dupe) throw conflict(`A user with ID ${input.loginId} already exists`)
     }
 
     const patch: Record<string, unknown> = {}
     if (input.fullName !== undefined) patch.fullName = input.fullName
-    if (input.mobile !== undefined) patch.mobile = input.mobile
+    if (input.loginId !== undefined) patch.loginId = input.loginId
+    if (input.mobile !== undefined) patch.mobile = input.mobile || null
     if (input.email !== undefined) patch.email = input.email || null
     if (input.roleId !== undefined) patch.roleId = input.roleId
     if (input.isActive !== undefined) patch.isActive = input.isActive
@@ -76,6 +88,7 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
       .returning({
         id: schema.users.id,
         fullName: schema.users.fullName,
+        loginId: schema.users.loginId,
         mobile: schema.users.mobile,
         email: schema.users.email,
         isActive: schema.users.isActive,
@@ -85,8 +98,8 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
     // Audit the visible field changes; the password is audited as an event, never a value.
     const entries = diffEntries(
       { entity: 'users', entityId: id },
-      { fullName: before.fullName, mobile: before.mobile, email: before.email, roleId: before.roleId, isActive: before.isActive },
-      { fullName: row!.fullName, mobile: row!.mobile, email: row!.email, roleId: row!.roleId, isActive: row!.isActive },
+      { fullName: before.fullName, loginId: before.loginId, mobile: before.mobile, email: before.email, roleId: before.roleId, isActive: before.isActive },
+      { fullName: row!.fullName, loginId: row!.loginId, mobile: row!.mobile, email: row!.email, roleId: row!.roleId, isActive: row!.isActive },
     )
     if (input.password !== undefined) {
       entries.push({ entity: 'users', entityId: id, action: 'update', field: 'password_hash', newValue: '(reset)' })
