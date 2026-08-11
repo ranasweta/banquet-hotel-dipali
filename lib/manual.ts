@@ -16,9 +16,10 @@ export type ManualStep = {
   body: string
   /** A rule or consequence worth setting apart from the instruction. */
   note?: string
-  /** A screenshot of the step, under `public/manual/`. Width and height are the file's own,
-   *  so the page reserves the right space before the image loads and nothing jumps. */
-  image?: { src: string; width: number; height: number; alt: string }
+  /** Screenshots of the step, under `public/manual/`, in the order they are worked through.
+   *  Width and height are each file's own, so the page reserves the right space before the
+   *  image loads and the text below it does not jump. */
+  images?: { src: string; width: number; height: number; alt: string }[]
 }
 
 export type ManualSection = {
@@ -49,56 +50,66 @@ const BOOKING_MANAGER: RoleGuide = {
           title: '1 · Date & event',
           body: 'Pick the From and To dates of the whole event, the event type and the guest’s name.',
           note: 'These two dates are the declared run. Every function and every room night must fall inside them, so set them wide enough before you go on. The event type is fixed once the proposal exists.',
-          image: {
-            src: '/manual/booking-1-date-event.png',
-            width: 1467,
-            height: 870,
-            alt: 'Step 1 of the wizard: From and To dates, event type and guest name',
-          },
+          images: [
+            {
+              src: '/manual/booking-01-date-event.png',
+              width: 1467,
+              height: 870,
+              alt: 'Step 1 of the wizard: From and To dates, event type and guest name',
+            },
+          ],
         },
         {
           title: '2 · KYC',
           body: 'Enter the contact numbers, then capture both sides of the Aadhaar with the camera or upload an image.',
           note: 'The number of contacts shown is required to confirm — a wedding asks for three. Aadhaar is NOT: you can add it here or later from the booking’s own page, so a date is never lost waiting for a card. Capture it all the same; the images are encrypted, and sending them over WhatsApp instead defeats that.',
-          image: {
-            src: '/manual/booking-2-kyc.png',
-            width: 1431,
-            height: 1063,
-            alt: 'Step 2: contact numbers, and Aadhaar front and back by camera or upload',
-          },
+          images: [
+            {
+              src: '/manual/booking-02-kyc.png',
+              width: 1431,
+              height: 1063,
+              alt: 'Step 2: contact numbers, and Aadhaar front and back by camera or upload',
+            },
+          ],
         },
         {
           title: '3 · Functions & menu',
           body: 'Add each function with its date, time, venue, name and pax, then press Choose dishes on it. The one-tap names — Mehndi, Sangeet, Wedding, Reception, Tilak — fill the name for you, and each new function carries over the date, pax and menu of the one before it.',
           note: 'Venues only appear once the date and time are set, and only the free ones do. A hall can hold several functions in a day as long as the times do not overlap; an end time earlier than the start runs past midnight, which is what the “+1” means.',
-          image: {
-            src: '/manual/booking-3-functions.png',
-            width: 1341,
-            height: 1006,
-            alt: 'Step 3: the list of functions, each with a Choose dishes button, and the Add function form',
-          },
+          images: [
+            {
+              src: '/manual/booking-03-functions.png',
+              width: 1341,
+              height: 1006,
+              alt: 'Step 3: the list of functions, each with a Choose dishes button, and the Add function form',
+            },
+          ],
         },
         {
           title: '4 · Rooms',
           body: 'Add a line per lodge and room category: how many, and the check-in and check-out dates. Each line tells you how many of that category are free on those exact nights as you type.',
           note: 'Room numbers are not chosen here — reception assigns those. Over 35 rooms on one booking goes to the GM: the rooms are written down either way, and the request is what has to clear before you confirm. The rooms total and its 5% both count toward the 25% advance.',
-          image: {
-            src: '/manual/booking-7-rooms.png',
-            width: 1423,
-            height: 961,
-            alt: 'Step 4: room requirement lines with live availability, and the rooms total with 5% tax',
-          },
+          images: [
+            {
+              src: '/manual/booking-04-rooms.png',
+              width: 1423,
+              height: 961,
+              alt: 'Step 4: room requirement lines with live availability, and the rooms total with 5% tax',
+            },
+          ],
         },
         {
           title: '5 · Payment review',
           body: 'Check the totals, add any discount, record what the guest has actually paid, then Confirm.',
           note: 'Read the guest the Amount payable, never the Total printed on the proposal — the gap between them is the 18% nobody collects. Confirm needs some advance recorded: a receipt, not a promise. Nothing is held for zero.',
-          image: {
-            src: '/manual/booking-8-payment-review.png',
-            width: 1366,
-            height: 1026,
-            alt: 'Step 5: the totals, showing Amount payable, the 18% shown but not collected, the printed total and the advance required',
-          },
+          images: [
+            {
+              src: '/manual/booking-05-payment-review.png',
+              width: 1366,
+              height: 1026,
+              alt: 'Step 5: the totals, showing Amount payable, the 18% shown but not collected, the printed total and the advance required',
+            },
+          ],
         },
       ],
     },
@@ -110,12 +121,20 @@ const BOOKING_MANAGER: RoleGuide = {
           title: 'Pick the tier, then the dishes',
           body: 'Choose the per-plate tier first. Each segment carries its own allowance — “pick 3” — and counts up as the guest chooses. A segment marked “all included” is read-only: every dish on it comes anyway.',
           note: 'The function stays “Menu incomplete” until every segment with an allowance is full. That is not an error and it does not stop you confirming — but it does stop the event being locked at the end.',
-          image: {
-            src: '/manual/booking-4-dish-picker.png',
-            width: 1248,
-            height: 1015,
-            alt: 'The dish picker: an all-included segment, and a pick-3 segment with swap and increase',
-          },
+          images: [
+            {
+              src: '/manual/booking-06-tier-list.png',
+              width: 1342,
+              height: 654,
+              alt: 'The Menu (per plate) dropdown open on the Add function form, listing every tier',
+            },
+            {
+              src: '/manual/booking-07-dish-picker.png',
+              width: 1248,
+              height: 1015,
+              alt: 'The dish picker: an all-included segment, and a pick-3 segment with swap and increase',
+            },
+          ],
         },
         {
           title: 'Swap trades a dish, it does not add one',
@@ -126,33 +145,53 @@ const BOOKING_MANAGER: RoleGuide = {
           title: 'Increase gives more, it does not add one',
           body: 'Pressing Increase on a segment removes its limit — the badge changes to “pick 4 +1”. Every dish taken past the original count is an extra and shows in violet.',
           note: 'Two extras per FUNCTION are free — not two per segment, which on a four-function wedding would be forty. The rest have to go to the GM.',
-          image: {
-            src: '/manual/booking-5-extras.png',
-            width: 1278,
-            height: 1014,
-            alt: 'A segment after Increase: the allowance reads pick 4 +1 and the extra dish is shown in violet',
-          },
+          images: [
+            {
+              src: '/manual/booking-08-extras.png',
+              width: 1278,
+              height: 1014,
+              alt: 'A segment after Increase: the allowance reads pick 4 +1 and the extra dish is shown in violet',
+            },
+          ],
         },
         {
           title: 'Send the extras to the GM',
           body: 'The Extra dishes panel lists every extra on the function by name and tells you how many are free and how many are outstanding. Press “Send to the GM” when the guest has settled.',
           note: 'Sending is your call, and it is per function rather than saved up to the end. An extra that is never sent holds the whole event back at the lock.',
-          image: {
-            src: '/manual/booking-6-chef-and-addons.png',
-            width: 1323,
-            height: 978,
-            alt: 'The Extra dishes panel with Send to the GM, the Chef delicacy box, and Add-ons',
-          },
+          images: [
+            {
+              src: '/manual/booking-09-send-to-gm.png',
+              width: 1323,
+              height: 978,
+              alt: 'The Extra dishes panel with Send to the GM, the Chef delicacy box, and Add-ons',
+            },
+          ],
         },
         {
           title: 'Preferences',
-          body: 'Type a note against a dish — "dal spicy", "less oil". It is a kitchen instruction that reaches the day sheet.',
-          note: 'A preference is never a charge. If the guest wants something not on the card, that is a Chef delicacy instead.',
+          body: 'Press “+ preference” under any dish the guest has taken and type the instruction — “less spicy”, “no garlic”. It travels with that dish to the Banquet Manager’s day sheet and on to the kitchen.',
+          note: 'A preference is never a charge, and it never changes the per-plate rate. If the guest wants something that is not on the card at all, that is a Chef delicacy instead.',
+          images: [
+            {
+              src: '/manual/booking-10-preferences.png',
+              width: 1176,
+              height: 763,
+              alt: 'Two segments of the picker with a preference note reading "less spicy" typed under a chosen dish',
+            },
+          ],
         },
         {
           title: 'Chef delicacy',
-          body: 'Ask for an off-menu dish here. The Chef sets the per-plate charge; you cannot price it yourself.',
-          note: 'Once priced it joins the per-plate rate and lands on the proposal total.',
+          body: 'Describe the off-menu dish and press “Ask the chef”. Only the Chef can put a price on it — you cannot, and neither can the GM.',
+          note: 'Once priced it joins the per-plate rate, so it is multiplied by the pax and lands on the proposal total, the balance and the Draft. Until then it shows on the Banquet Manager’s board as awaiting the Chef’s price, so do not promise it to the guest as agreed.',
+          images: [
+            {
+              src: '/manual/booking-11-chef-delicacy.png',
+              width: 1245,
+              height: 567,
+              alt: 'The Chef delicacy box with "Sushi" typed and an Ask the chef button, above the Add-ons form',
+            },
+          ],
         },
         {
           title: 'Add-ons',
@@ -201,8 +240,16 @@ const BOOKING_MANAGER: RoleGuide = {
       steps: [
         {
           title: 'Two totals, always',
-          body: 'Total is with all tax on it. Amount payable is what you collect. Read the guest the Amount payable.',
-          note: 'Rooms carry 5% and it is collected. The 18% on venue, food and add-ons is printed for the record and collected from nobody — quoting the Total takes 18% too much.',
+          body: 'Amount payable is what you collect. The Total printed on the proposal is that plus the 18%. Read the guest the Amount payable.',
+          note: 'Rooms carry 5% and it IS collected. The 18% on venue, food and add-ons is printed for the record and collected from nobody — quoting the printed Total takes 18% too much. Every instalment, including the 25%, is a percentage of the Amount payable and never of the printed total.',
+          images: [
+            {
+              src: '/manual/booking-12-money.png',
+              width: 1320,
+              height: 1050,
+              alt: 'The totals: estimated total, less discounts, Amount payable, the 18% shown but not collected, the printed total and the advance required',
+            },
+          ],
         },
         {
           title: 'Maintenance lands late',

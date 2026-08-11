@@ -63,16 +63,17 @@ export function UserManual({ roleName }: { roleName: string }) {
                       of the app, and routing them through the image optimiser costs a
                       transform per screenshot for no gain. `h-auto` keeps the aspect ratio
                       once `w-full` has scaled it down on a narrow window. */}
-                  {step.image ? (
+                  {step.images?.map((img) => (
                     <Image
-                      src={step.image.src}
-                      alt={step.image.alt}
-                      width={step.image.width}
-                      height={step.image.height}
+                      key={img.src}
+                      src={img.src}
+                      alt={img.alt}
+                      width={img.width}
+                      height={img.height}
                       unoptimized
                       className="mt-2 h-auto w-full max-w-2xl rounded-lg border shadow-sm"
                     />
-                  ) : null}
+                  ))}
                 </li>
               ))}
             </ol>
