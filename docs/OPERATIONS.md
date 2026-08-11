@@ -134,10 +134,27 @@ Do not delete `curly-violet-63131529` for at least a week. It is the rollback: r
 `DATABASE_URL` back and redeploy. Once deleted, anything written after the cutover is the only
 copy, and there is no way back.
 
-**The test database moves too.** `dipali_test` has no data worth keeping — create it on the new
-project and run `npx tsx db/migrate.ts --test` then the seed. The suite is currently timing out
-at 45 s per test because of the same distance; from India, Singapore is roughly a third of the
-round trip to Virginia.
+### The test database has already moved (11 Aug 2026)
+
+`dipali_test` now lives on the Singapore project — it held nothing worth preserving, so it was
+created fresh and migrated rather than dumped. All 26 migrations applied, and the verification
+above passes on it: both exclusion constraints present, `audit_no_update` on `audit_log`,
+`event_code_seq` at its start value.
+
+Measured from a laptop in India, median of twelve queries after warm-up:
+
+| | Median | Min | Max |
+|---|---|---|---|
+| `us-east-1` (Virginia) | 296 ms | 230 | 312 |
+| `ap-southeast-1` (Singapore) | **101 ms** | 89 | 117 |
+
+`tests/user-admin.integration.test.ts` — same ten tests, same code — went from **132.7 s to
+60.5 s**. That is why the suite was tripping the 45 s per-test timeout.
+
+**Production will gain far more than this 2.9×.** These numbers are India → database. The
+production path is Cloud Run → database, and once both sit in Singapore that is a same-region
+hop of a few milliseconds rather than 101 ms. The figures above are the floor of the
+improvement, not the ceiling.
 
 ## The daily job (`POST /cron/run`)
 
