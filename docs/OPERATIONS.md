@@ -15,6 +15,22 @@ Required environment variables (see `.env.example`; never commit `.env.local`):
 | `SEED_PASSWORD` | initial password for seeded users (rotate after first login) |
 | `CRON_SECRET` | optional; header secret so a scheduler can call `POST /cron/run` |
 | `DB_POOL_MAX` | optional; postgres.js pool size (default 5) |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | optional; web push for the installed app. Generate once with `npx web-push generate-vapid-keys`. Without both, the app still installs and push is silently inert — it never errors, so a missing key looks like "notifications don't work" |
+| `VAPID_SUBJECT` | optional; `mailto:` address the push service can reach you at |
+
+## The installable app (PWA)
+
+The app installs from the browser — "Add to Home Screen" — and is the same deployment, so there
+is no bundle to ship and no version to skew against the API. `app/manifest.ts` defines it and
+`public/sw.js` is the service worker.
+
+**The service worker caches `/_next/static/*` and nothing else**, on purpose: those filenames
+carry a content hash so their bytes can never change. Pages and API responses are never cached —
+every screen is permission-gated and reads live data, and a cached day sheet is a menu that has
+since changed. There is no offline mode, by design.
+
+Rotating the VAPID pair invalidates every existing subscription; staff must press "Notify me on
+this phone" again. Dead endpoints prune themselves — a push refused with 404/410 deletes its row.
 
 ## Database backups (NFR-4)
 
