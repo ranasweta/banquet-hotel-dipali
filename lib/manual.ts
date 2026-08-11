@@ -218,8 +218,8 @@ const LODGE_MANAGER: RoleGuide = {
       steps: [
         {
           title: 'The rooms sign-off',
-          body: 'An event that used rooms cannot be locked until the lodge line on its checklist is signed off. Reconcile what was actually used against what the proposal committed before signing.',
-          note: 'The checklist lives on the booking itself, which your role cannot open today — ask the Auditor to record it until that is opened up.',
+          body: 'Once an event has run, it appears on your dashboard under Awaiting your sign-off. Reconcile what was actually used against what the proposal committed, then press Sign off.',
+          note: 'A booking that used rooms cannot be locked, invoiced or billed until you do. Only events that actually took rooms appear — the rest never needed you.',
         },
       ],
     },
@@ -261,7 +261,7 @@ const BANQUET_MANAGER: RoleGuide = {
         },
         {
           title: 'Chef dishes',
-          body: 'Off-menu delicacies the Chef has priced appear alongside the tier menu, so nothing on the pass is a surprise.',
+          body: 'Off-menu delicacies appear alongside the tier menu. One still marked "awaiting the Chef’s price" has been asked for but not agreed — plan for it, but do not treat it as settled.',
         },
         {
           title: 'Add-ons',
@@ -275,8 +275,8 @@ const BANQUET_MANAGER: RoleGuide = {
       steps: [
         {
           title: 'The day-sheet sign-off',
-          body: 'No event can be locked or billed until the banquet line on its checklist is signed off. Sign it once the functions have run as they were listed.',
-          note: 'The checklist lives on the booking itself, which your role cannot open today — ask the Auditor to record it until that is opened up.',
+          body: 'Once the functions have run, the event appears on your dashboard under Awaiting your sign-off. Press it when they ran as they were listed.',
+          note: 'No event can be locked, invoiced or billed until you do. You are only shown events at your own properties.',
         },
       ],
     },

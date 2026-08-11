@@ -10,6 +10,6 @@ import { getDashboardForRole } from '@/lib/dashboard'
  */
 export const GET = route(async () => {
   const user = await requireAuth()
-  const data = await getDashboardForRole(user.roleName)
+  const data = await getDashboardForRole(user.roleName, undefined, user)
   return ok(data)
 })

@@ -17,7 +17,7 @@ export default async function DashboardPage() {
 
   const [permissions, board] = await Promise.all([
     getPermissionMatrix(user.roleId),
-    getDashboardForRole(user.roleName),
+    getDashboardForRole(user.roleName, undefined, user),
   ])
   const canAdmin = permissions.some((p) => p.module === 'roles_users' && p.action === 'view')
   const u = { fullName: user.fullName, roleName: user.roleName }

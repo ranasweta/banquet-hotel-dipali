@@ -28,7 +28,7 @@ type Fn = {
   tierName: string | null
   menuComplete: boolean
   segments: { name: string; dishes: Dish[] }[]
-  chefDishes: string[]
+  chefDishes: { description: string; pending: boolean }[]
   addons: { description: string; qty: number }[]
 }
 type Day = { date: string; isToday: boolean; functions: Fn[] }
@@ -137,13 +137,28 @@ export function OperationsBoard({ days = 15 }: { days?: number }) {
                 )}
 
                 {f.chefDishes.length > 0 && (
-                  <p className="mt-3 text-sm">
+                  <div className="mt-3 text-sm">
                     <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                       Chef delicacies
                     </span>
-                    <br />
-                    {f.chefDishes.join(', ')}
-                  </p>
+                    {/* A pending ask is set apart rather than listed as agreed: the guest has
+                        asked for it, the Chef has not costed it, and the floor needs to know
+                        the difference before it plans around the dish. */}
+                    <ul className="mt-0.5 space-y-0.5">
+                      {f.chefDishes.map((c) => (
+                        <li key={c.description} className="flex flex-wrap items-baseline gap-x-1.5">
+                          <span className={c.pending ? 'text-muted-foreground' : undefined}>
+                            {c.description}
+                          </span>
+                          {c.pending && (
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                              awaiting the Chef&apos;s price
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
 
                 {f.addons.length > 0 && (
