@@ -130,6 +130,10 @@ export function AppNav({
       toast.error('Could not sign you out — check your connection and try again.')
       return
     }
+    // The bell's feed is shared across mounts and outlives a client-side navigation, so it has
+    // to be dropped by hand. The front desk shares a machine: the next person to sign in must
+    // not inherit this one's queue.
+    clearNotificationCache()
     router.replace('/login')
     router.refresh()
   }
