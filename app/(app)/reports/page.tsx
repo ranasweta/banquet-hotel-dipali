@@ -10,10 +10,7 @@ export default async function ReportsPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Reports</h1>
-        <p className="text-muted-foreground">Occupancy, revenue, pipeline, exceptions, maintenance and outstanding balances.</p>
-      </div>
+      <h1 className="text-2xl font-semibold">Reports</h1>
       <ReportsView />
     </div>
   )

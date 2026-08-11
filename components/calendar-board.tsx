@@ -366,12 +366,11 @@ function DayPanel({
 
       {blocked ? (
         <p className="p-4 text-sm text-muted-foreground">
-          This date is outside the rolling window your role can open, so nothing is loaded for
-          it. It is not necessarily free.
+          Outside the window your role can open — not necessarily free.
         </p>
       ) : chips.length === 0 ? (
         <p className="p-4 text-sm text-muted-foreground">
-          Nothing booked. Enquiries never appear here — the calendar shows locked-in deals only.
+          Nothing booked.
         </p>
       ) : (
         <ul className="divide-y">

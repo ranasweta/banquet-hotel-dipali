@@ -17,10 +17,9 @@ export default async function MaintenancePage() {
       <div>
         <h1 className="text-2xl font-semibold">Maintenance</h1>
         <p className="text-muted-foreground">
-          Log extra costs against a live or completed event — generator hours, extra staff, damages.
           {canEdit
-            ? ' Charges can be added until you close the event’s maintenance.'
-            : ' You have read access; only the Maintenance team can add charges.'}
+            ? 'Charges can be added until you close the event’s maintenance.'
+            : 'Read only — the Maintenance team adds charges.'}
         </p>
       </div>
       <MaintenanceLog canEdit={canEdit} />

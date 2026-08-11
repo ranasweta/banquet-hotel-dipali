@@ -15,8 +15,7 @@ export default async function ChefPage() {
       <div>
         <h1 className="text-2xl font-semibold">Chef requests</h1>
         <p className="text-muted-foreground">
-          Off-menu asks from guests. The charge is <strong>per plate</strong> — it joins the menu
-          rate and lands on the proposal total as soon as it&apos;s set.
+          The charge is <strong>per plate</strong>.
         </p>
       </div>
       <ChefQueue canPrice={canPrice} />

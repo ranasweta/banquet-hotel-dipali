@@ -396,8 +396,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
       {step === 0 && (
         <StepCard title="Date & event">
           <p className="text-sm text-muted-foreground">
-            When does the event run, and is it a wedding? Every function you add later must fall
-            inside these dates.
+            Every function must fall inside these dates.
           </p>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="From date">
@@ -534,7 +533,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
                 <span className="tabular-nums">{formatPaise(roomsTotalPaise + roomsTaxPaise)}</span>
               </div>
               <p className="pt-1 text-xs text-muted-foreground">
-                Rooms and their tax count toward the 25% advance needed to block the dates.
+                Rooms and their tax count toward the 25% advance.
               </p>
             </div>
           )}
@@ -1364,10 +1363,8 @@ function ReviewStep({
             </table>
           </div>
           <p className="text-xs text-muted-foreground">
-            Rooms are a rack-rate estimate until the Lodge Manager allocates them; maintenance is
-            added to the payment review once logged. Every instalment — the advance, the wedding
-            50% and the settlement — is a percentage of the amount payable, never of the printed
-            total.
+            Rooms are a rack-rate estimate until they are allocated. Every instalment is a
+            percentage of the amount payable, never of the printed total.
           </p>
 
           {/* Per-head percentage discounts — applied here so the total and the 25% advance
@@ -1378,9 +1375,8 @@ function ReviewStep({
 
           {alreadyConfirmed ? (
             <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
-              This booking is already confirmed. Your edits — functions, rooms, contacts and dates —
-              are saved as you make them; the venue holds move with the functions. No advance is
-              collected here.
+              Already confirmed. Edits save as you make them and the venue holds move with the
+              functions. No advance is collected here.
             </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

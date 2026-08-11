@@ -8,8 +8,7 @@ export default async function UsersPage() {
       <div>
         <h1 className="text-2xl font-semibold">Users</h1>
         <p className="text-muted-foreground">
-          Add staff, assign a role, and enable or disable access. A disabled user is
-          signed out on their next request.
+          A disabled user is signed out on their next request.
         </p>
       </div>
       <UsersAdmin />

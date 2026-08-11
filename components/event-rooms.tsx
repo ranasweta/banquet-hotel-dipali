@@ -315,7 +315,7 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
             {busy ? 'Saving…' : 'Save rooms'}
           </Button>
           <p className="text-xs text-muted-foreground">
-            Room numbers are assigned at reception — this records the lodge, category and dates only.
+            Lodge, category and dates only — room numbers are assigned at reception.
           </p>
         </div>
       )}

@@ -462,8 +462,7 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
         <div>
           <h2 className="text-lg font-semibold">The proposal</h2>
           <p className="text-sm text-muted-foreground">
-            Everything the Booking Manager filled in. Change anything here and it is written straight
-            to the booking — purple marks what is being asked for.
+            Changes here are written straight to the booking.
           </p>
         </div>
 
@@ -778,8 +777,7 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              A rupee discount you give here is not held to the 10% cap and takes effect at once — it is
-              your approval. It flows through the bill, the balance and the advance everywhere.
+              Your discount is not held to the 10% cap and takes effect at once.
             </p>
           </CardContent>
         </Card>

@@ -137,8 +137,7 @@ function Section({
                     {/* Same editor the event page uses — one implementation, two ways in. */}
                     <EventMaintenance eventId={e.id} editable={canEdit && !e.closed} />
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Closing freezes these entries and signs off the maintenance line for the lock
-                      checklist (FR-5.2). Totals flow to the payment review.
+                      Closing freezes these entries and signs off the maintenance line.
                     </p>
                   </div>
                 )}

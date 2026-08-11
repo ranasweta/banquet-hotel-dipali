@@ -18,10 +18,8 @@ export default async function MenuMasterPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold">Menu master</h1>
-        <p className="max-w-2xl text-muted-foreground">
-          Every tier, its per-plate rate and the dishes on it. Rates are dated: a new price
-          applies to functions on or after its date, and menus already saved keep the rate
-          they were saved with — a booked event is never re-priced.
+        <p className="text-muted-foreground">
+          Rates are dated — a menu already saved keeps the rate it was saved with.
         </p>
       </div>
       <MenuMaster canEdit={can('create_edit')} canDelete={can('delete')} />

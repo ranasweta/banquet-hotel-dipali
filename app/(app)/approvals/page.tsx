@@ -22,9 +22,7 @@ export default async function ApprovalsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Approvals</h1>
           <p className="text-muted-foreground">
-            {canDecide
-              ? 'One row per proposal. Open it to see every request on that booking together, decide them in one go, and edit the proposal itself.'
-              : 'Exceptions you’ve raised and their outcomes. Only the Higher Authority can decide.'}
+            {canDecide ? 'One row per proposal.' : 'Requests you’ve raised, and their outcomes.'}
           </p>
         </div>
         {canDecide && (
