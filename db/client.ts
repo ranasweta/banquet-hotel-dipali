@@ -64,6 +64,15 @@ export function createClient(envVar: 'DATABASE_URL' | 'TEST_DATABASE_URL' = 'DAT
     // limit gets exhausted — and production does not need it, the app and the database
     // being in the same region.
     max: Number(process.env.DB_POOL_MAX ?? 5),
+    // NO idle_timeout, deliberately. Setting it to 60 looked right — the pool now lives for
+    // the life of a serverless instance, so returning idle connections before Neon's
+    // autosuspend kills them seemed like cheap insurance. It is not cheap: with it set,
+    // tests/approvals.integration.test.ts HANGS, three of eleven tests dying on the 45s
+    // timeout, and it reproduced across runs (3 failures, then 2) where removing it passed
+    // 11/11. A query dispatched as the idle timer fires appears never to settle, which in
+    // production would be a request that hangs rather than errors. postgres.js recycles
+    // connections via max_lifetime and reconnects after a connection error anyway, so the
+    // protection was largely redundant. Leave it at the default (null).
     types: { bigint: paiseAsNumber },
     onnotice: (notice) => {
       // 42P07 is "relation already exists, skipping" from CREATE ... IF NOT EXISTS —

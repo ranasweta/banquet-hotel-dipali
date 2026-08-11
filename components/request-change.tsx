@@ -36,7 +36,10 @@ export function RequestChange({ sub }: { sub: SubEvent }) {
       // then dead-end on the missing-rate gate (BR-R1).
       api<{ venues: (Venue & { priceable?: boolean })[] }>('/booking-options')
         .then((r) => setVenues(r.venues.filter((v) => v.priceable !== false)))
-        .catch(() => {})
+        // Swallowed, this left the venue list silently empty and the user staring at a
+        // dropdown with nothing in it, unable to tell a load failure from "no venue is
+        // available for this change".
+        .catch(() => toast.error('Could not load the venue list — close this and reopen to retry.'))
     }
   }, [open, venues.length])
 

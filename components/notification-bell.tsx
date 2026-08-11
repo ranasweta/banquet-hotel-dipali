@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { Bell, Check } from 'lucide-react'
+import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { cn } from '@/lib/utils'
 
@@ -38,6 +39,11 @@ const KIND_TARGET: Record<string, string> = {
  */
 export function NotificationBell() {
   const [items, setItems] = useState<Notification[]>([])
+  // Distinct from "no notifications": a swallowed fetch error used to leave the list empty,
+  // and an empty list reads as the reassuring "All clear" — so during the outage on 10 Aug
+  // this bell would have told every user nothing needed them while the database was refusing
+  // connections. Failure must never be indistinguishable from good news.
+  const [failed, setFailed] = useState(false)
   const [open, setOpen] = useState(false)
   const pathname = usePathname()
   const router = useRouter()
@@ -46,8 +52,8 @@ export function NotificationBell() {
   useEffect(() => {
     let active = true
     api<{ notifications: Notification[] }>('/notifications')
-      .then((r) => { if (active) setItems(r.notifications) })
-      .catch(() => {})
+      .then((r) => { if (active) { setItems(r.notifications); setFailed(false) } })
+      .catch(() => { if (active) setFailed(true) })
     return () => { active = false }
   }, [pathname])
 
@@ -68,8 +74,17 @@ export function NotificationBell() {
 
   async function dismiss(ids: string[]) {
     // Drop it locally first so the row goes the moment it's touched; the write follows.
+    // If the write fails, put the rows BACK: they were not marked read, and leaving them
+    // hidden would quietly lose work the user still has to do — they would reappear on the
+    // next page load with no explanation for why they returned.
+    const previous = items
     setItems((prev) => prev.filter((n) => !ids.includes(n.id)))
-    await api('/notifications/read', { method: 'POST', body: JSON.stringify({ ids }) }).catch(() => {})
+    try {
+      await api('/notifications/read', { method: 'POST', body: JSON.stringify({ ids }) })
+    } catch {
+      setItems(previous)
+      toast.error('Could not mark that as read — it is still waiting for you.')
+    }
   }
 
   async function openItem(n: Notification) {
@@ -95,12 +110,18 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        // left-0 (not right-0): the bell lives in a narrow sidebar, so the panel opens rightward
-        // into the page. Capped to the viewport in both directions so it never overflows.
-        <div className="absolute left-0 z-30 mt-1 w-[min(22rem,calc(100vw-2rem))] max-h-[min(24rem,70vh)] overflow-y-auto overscroll-contain rounded-lg border bg-popover shadow-lg">
+        // The panel opens away from whichever edge the bell is against, or it opens off-screen.
+        // At lg+ the bell is in the 240px sidebar, so it opens rightward into the page; below lg
+        // the bell is the last item in the top bar, flush to the right edge, so it must open
+        // leftward instead. Capped to the viewport in both directions on top of that.
+        <div className="absolute right-0 z-30 mt-1 w-[min(22rem,calc(100vw-2rem))] max-h-[min(24rem,70vh)] overflow-y-auto overscroll-contain rounded-lg border bg-popover shadow-lg lg:left-0 lg:right-auto">
           <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
             <span className="text-xs font-medium">
-              {items.length === 0 ? 'All clear' : `${items.length} need${items.length === 1 ? 's' : ''} you`}
+              {failed
+                ? 'Couldn’t load'
+                : items.length === 0
+                  ? 'All clear'
+                  : `${items.length} need${items.length === 1 ? 's' : ''} you`}
             </span>
             {items.length > 0 && (
               <button
@@ -113,7 +134,12 @@ export function NotificationBell() {
             )}
           </div>
 
-          {items.length === 0 ? (
+          {failed ? (
+            <div className="p-3 text-sm text-muted-foreground">
+              Couldn&apos;t load your notifications. This does <strong>not</strong> mean there are
+              none — reload the page to try again.
+            </div>
+          ) : items.length === 0 ? (
             <div className="p-3 text-sm text-muted-foreground">Nothing needs your attention.</div>
           ) : (
             <ul className="p-1">

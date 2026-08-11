@@ -38,6 +38,23 @@ export function ok<T>(data: T, status = 200): NextResponse {
   return NextResponse.json(data, { status })
 }
 
+/**
+ * Postgres 22P02, `invalid_text_representation` — raised when a value cannot be cast to the
+ * column's type, which in practice means a URL segment that is not a UUID.
+ *
+ * Walks the cause chain: Drizzle wraps a driver error in its own "Failed query" error and
+ * keeps the original on `cause`, so the code is one level down rather than on `err` itself.
+ * Bounded, so a self-referencing cause cannot spin.
+ */
+function isInvalidTextRepresentation(err: unknown): boolean {
+  let cursor: unknown = err
+  for (let depth = 0; cursor && depth < 5; depth += 1) {
+    if ((cursor as { code?: unknown }).code === '22P02') return true
+    cursor = (cursor as { cause?: unknown }).cause
+  }
+  return false
+}
+
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof ApiError) {
     return NextResponse.json({ error: { code: err.code, message: err.message } }, { status: err.status })
@@ -49,6 +66,17 @@ export function errorResponse(err: unknown): NextResponse {
       { error: { code: 'validation', message: `${where}: ${first?.message ?? 'invalid input'}` } },
       { status: 400 },
     )
+  }
+  // A malformed id in the URL — `/events/not-a-uuid` — reaches Postgres, which refuses the
+  // cast and raises 22P02. Left alone that surfaced as the generic 500 below, which is the
+  // same alarming "Something went wrong" the staff see during a real outage, for what is
+  // only a stale bookmark or a mistyped link. Answer it exactly as a well-formed id that
+  // matches nothing: 404. Handled here rather than by adding a UUID check to forty route
+  // handlers. Still logged, but as a warning, so a genuine bug that puts a bad value into a
+  // query stays visible without being alarmed on as a crash.
+  if (isInvalidTextRepresentation(err)) {
+    console.warn('Malformed identifier in request:', err)
+    return NextResponse.json({ error: { code: 'not_found', message: 'Not found' } }, { status: 404 })
   }
   // Unknown/unexpected: log server-side, return an opaque 500 (never leak internals).
   console.error('Unhandled route error:', err)

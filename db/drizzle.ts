@@ -15,8 +15,14 @@
  *    import this same `db`, so an integration test drives them against the throwaway
  *    test database and can never touch dev data.
  *
- * Singleton across hot reloads: Next re-evaluates modules on every dev change, and a
- * fresh pool per reload would exhaust the connection limit.
+ * Singleton, in EVERY environment. It is memoised on `globalThis` because Next re-evaluates
+ * modules on each dev hot reload, but the memo must not be conditional on NODE_ENV — the
+ * usual Prisma-style `if (NODE_ENV !== 'production')` idiom pairs that global with a
+ * module-level const, and there is no module-level const here. Skipping the memo in
+ * production meant the proxy below built a fresh, never-closed pool on every property
+ * access: `db.select`, `db.insert`, `db.transaction` were a connection each, so one
+ * dashboard render opened twenty-odd. That is a TCP+TLS handshake per query, and
+ * eventually a 500 when the connection limit is reached. See tests/db-pool.test.ts.
  */
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js'
 import { createClient, type Sql } from './client'
@@ -32,10 +38,8 @@ function getDb(): PostgresJsDatabase<typeof schema> {
   const envVar = process.env.VITEST ? 'TEST_DATABASE_URL' : 'DATABASE_URL'
   const sql = globalForDb.__sql ?? createClient(envVar)
   const instance = drizzle(sql, { schema })
-  if (process.env.NODE_ENV !== 'production') {
-    globalForDb.__sql = sql
-    globalForDb.__db = instance
-  }
+  globalForDb.__sql = sql
+  globalForDb.__db = instance
   return instance
 }
 

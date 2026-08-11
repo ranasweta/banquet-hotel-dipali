@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname, useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import {
   BadgeCheck,
   BarChart3,
@@ -114,7 +115,18 @@ export function AppNav({
     .sort((a, b) => b.length - a.length)[0]
 
   async function logout() {
-    await api('/auth/logout', { method: 'POST' })
+    // Only the server can end the session — the cookie is httpOnly, so the browser cannot
+    // clear it. If that call fails the user is STILL signed in, and sending them to /login
+    // anyway would paint a sign-in screen over a live session: on the shared machine at the
+    // front desk, that is the worst possible outcome. Say it failed and stay put.
+    // Previously this was an unguarded `await`, so a failure rejected here and the two lines
+    // below never ran — the button did nothing at all, silently.
+    try {
+      await api('/auth/logout', { method: 'POST' })
+    } catch {
+      toast.error('Could not sign you out — check your connection and try again.')
+      return
+    }
     router.replace('/login')
     router.refresh()
   }

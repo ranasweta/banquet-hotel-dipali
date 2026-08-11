@@ -24,12 +24,30 @@ type Reminder = {
 /** Wedding milestone reminders due for the signed-in user's role (FR-9.1 / BR-P2). */
 export function DashboardReminders() {
   const [reminders, setReminders] = useState<Reminder[] | null>(null)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     api<{ reminders: Reminder[] }>('/reminders/pending')
       .then((r) => setReminders(r.reminders))
-      .catch(() => setReminders([]))
+      // A failure used to be recorded as an empty list, which renders as nothing at all —
+      // indistinguishable from "no payments are due". That is the one wrong answer here: a
+      // manager reads the absent panel as permission to stop chasing money.
+      .catch(() => setFailed(true))
   }, [])
+
+  if (failed) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Payment reminders</CardTitle>
+        </CardHeader>
+        <CardContent className="text-sm text-muted-foreground">
+          Couldn&apos;t load reminders just now — this is not the same as none being due.
+          Refresh to try again.
+        </CardContent>
+      </Card>
+    )
+  }
 
   if (!reminders || reminders.length === 0) return null
 
