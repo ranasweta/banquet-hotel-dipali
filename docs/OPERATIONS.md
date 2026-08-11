@@ -47,32 +47,79 @@ applied in order by `pnpm migrate`. Pre-launch the team folded changes into `000
 **post-launch, never edit `0001` — add a new numbered migration** so production upgrades forward
 without a rebuild.
 
+## ✅ Production moved to Singapore — 11 Aug 2026
+
+Done, during a maintenance window with writes stopped. Dump 44 s + restore 48 s. Verified
+against the source before anything was repointed:
+
+| Check | Result |
+|---|---|
+| Tables | 41 → 41 |
+| Rows (all tables) | 3,938, every count equal |
+| `event_code_seq` | 1049 → 1049 |
+| Exclusion constraints | both present |
+| Triggers / indexes / FKs / checks / enums | 16 / 75 / 66 / 31 / 8 — identical |
+
+**No schema change.** `pg_restore` reproduced the schema exactly as it stood on the old
+account; only the host moved. Query latency from India fell from ~296 ms to ~98 ms, and
+production's own path is Cloud Run → database inside one region.
+
+The dump file was deleted immediately after verification — it is every guest's name, number and
+payment record in one unencrypted file, and the old project is the real rollback anyway.
+
+**The old project `curly-violet-63131529` (account `sjoffice7@gmail.com`, `us-east-1`) still
+holds the pre-cutover data. Do not delete it for at least a week.** The redundant
+`hidden-resonance-76799876` ("Banquet SG") in that same old account can go once this is settled.
+
+The runbook below is kept because it is the procedure, not a one-off — the same steps apply to
+the eventual Cloud SQL move.
+
 ## Moving the database to Singapore (cutover runbook)
 
 Cloud Run is in `asia-southeast1` and the database was in `aws-us-east-1` — roughly 230 ms per
 query, before the database does any work. Neon cannot change a project's region, so the move is
 a new project plus a dump and restore.
 
-| | Project | Region |
-|---|---|---|
-| From | `curly-violet-63131529` ("Banquet") | `aws-us-east-1` |
-| To | `hidden-resonance-76799876` ("Banquet SG") | `aws-ap-southeast-1` |
+| | Account | Project | Region |
+|---|---|---|---|
+| From | `sjoffice7@gmail.com` | `curly-violet-63131529` ("Banquet") | `aws-us-east-1` |
+| To | `hdofficialroot@gmail.com` | `soft-butterfly-04494096` ("Hotel Dipali") | `aws-ap-southeast-1` |
 
-Both PG 16, both with a `neondb` database owned by `neondb_owner`, so only the host changes.
+Both PG 16, both with a `neondb` owned by `neondb_owner`, so only the host changes. The move
+crosses Neon ACCOUNTS as well as regions, which changes nothing about the data: a dump and
+restore speak Postgres, not Neon, so only project creation needed the new login.
 
-**Before you start:** PostgreSQL **16** client tools (`pg_dump` must be ≥ the server's major
-version). No local install? `docker run --rm -v "$PWD:/w" -w /w postgres:16 pg_dump …`.
+**Before you start:** PostgreSQL **16** client tools. Installed here via
+`scoop install postgresql16` — the binaries are NOT on PATH, so:
+
+```bash
+export PATH="$HOME/scoop/apps/postgresql16/current/bin:$PATH"
+```
+
+On Windows, getopt stops parsing options at the first positional argument, so every option must
+come BEFORE the connection string or pg_dump fails with "too many command-line arguments".
 
 ### 1. Take the connection strings
 
+**The SOURCE string does not come from the CLI.** `neonctl` is signed in to the new account, so
+it cannot see the old one at all. Production's string is the `DATABASE_URL` already in
+`.env.local` — read it from there rather than logging back and forth between accounts:
+
 ```bash
-ORG=org-fragrant-brook-41215212
-npx neonctl branches list --project-id curly-violet-63131529 --org-id $ORG   # confirm the branch name
-npx neonctl connection-string <branch> --project-id curly-violet-63131529 --database-name neondb --org-id $ORG
-npx neonctl connection-string main    --project-id hidden-resonance-76799876 --database-name neondb --org-id $ORG
+SRC="$(node -e 'require("dotenv").config({path:[".env.local"],quiet:true});process.stdout.write(process.env.DATABASE_URL)')"
 ```
 
-These contain live credentials. Keep them out of chat, tickets and commits.
+The TARGET comes from the new account:
+
+```bash
+DST="$(npx neonctl connection-string main \
+        --project-id soft-butterfly-04494096 \
+        --database-name neondb \
+        --org-id org-wild-haze-39954386 | tr -d '\r\n')"
+```
+
+Both contain live credentials. Keep them in shell variables — never echo them, and never paste
+them into chat, a ticket or a commit.
 
 ### 2. Stop writes
 
@@ -83,9 +130,13 @@ finishing exists only in the old database and is lost, and in this system a book
 ### 3. Dump and restore
 
 ```bash
-pg_dump "$OLD_URL" --format=custom --no-owner --no-privileges --file=banquet.dump
-pg_restore --dbname="$NEW_URL" --no-owner --no-privileges --single-transaction banquet.dump
+pg_dump --format=custom --no-owner --no-privileges --file=banquet.dump "$SRC"
+pg_restore --dbname="$DST" --no-owner --no-privileges --single-transaction banquet.dump
 ```
+
+Options before the connection string, per the note above. **Delete `banquet.dump` when the
+cutover is verified** — it is every guest's name, number and payment record in one unencrypted
+file.
 
 `--single-transaction` is not optional. A partial restore is the dangerous outcome: it can leave
 the schema looking complete while missing a constraint, and the missing constraint is the thing
@@ -134,7 +185,14 @@ Do not delete `curly-violet-63131529` for at least a week. It is the rollback: r
 `DATABASE_URL` back and redeploy. Once deleted, anything written after the cutover is the only
 copy, and there is no way back.
 
-### The test database has already moved (11 Aug 2026)
+### Rehearsed, and the test database has already moved (11 Aug 2026)
+
+The whole cutover was rehearsed against a throwaway database: **dump 38 s + restore 42 s = 80 s**
+for the entire production database (204 KB). All eighteen table row counts matched the source,
+`event_code_seq` came across as 1049, and both exclusion constraints and `audit_no_update`
+were present. The rehearsal copy and its dump file were then deleted — both held real guest
+names, numbers and payment records, and neither should outlive the check.
+
 
 `dipali_test` now lives on the Singapore project — it held nothing worth preserving, so it was
 created fresh and migrated rather than dumped. All 26 migrations applied, and the verification
