@@ -53,15 +53,24 @@ Cloud Run is in `asia-southeast1` and the database was in `aws-us-east-1` — ro
 query, before the database does any work. Neon cannot change a project's region, so the move is
 a new project plus a dump and restore.
 
-| | Project | Region |
-|---|---|---|
-| From | `curly-violet-63131529` ("Banquet") | `aws-us-east-1` |
-| To | `hidden-resonance-76799876` ("Banquet SG") | `aws-ap-southeast-1` |
+| | Account | Project | Region |
+|---|---|---|---|
+| From | `sjoffice7@gmail.com` | `curly-violet-63131529` ("Banquet") | `aws-us-east-1` |
+| To | `hdofficialroot@gmail.com` | `soft-butterfly-04494096` ("Hotel Dipali") | `aws-ap-southeast-1` |
 
-Both PG 16, both with a `neondb` database owned by `neondb_owner`, so only the host changes.
+Both PG 16, both with a `neondb` owned by `neondb_owner`, so only the host changes. The move
+crosses Neon ACCOUNTS as well as regions, which changes nothing about the data: a dump and
+restore speak Postgres, not Neon, so only project creation needed the new login.
 
-**Before you start:** PostgreSQL **16** client tools (`pg_dump` must be ≥ the server's major
-version). No local install? `docker run --rm -v "$PWD:/w" -w /w postgres:16 pg_dump …`.
+**Before you start:** PostgreSQL **16** client tools. Installed here via
+`scoop install postgresql16` — the binaries are NOT on PATH, so:
+
+```bash
+export PATH="$HOME/scoop/apps/postgresql16/current/bin:$PATH"
+```
+
+On Windows, getopt stops parsing options at the first positional argument, so every option must
+come BEFORE the connection string or pg_dump fails with "too many command-line arguments".
 
 ### 1. Take the connection strings
 
@@ -134,7 +143,14 @@ Do not delete `curly-violet-63131529` for at least a week. It is the rollback: r
 `DATABASE_URL` back and redeploy. Once deleted, anything written after the cutover is the only
 copy, and there is no way back.
 
-### The test database has already moved (11 Aug 2026)
+### Rehearsed, and the test database has already moved (11 Aug 2026)
+
+The whole cutover was rehearsed against a throwaway database: **dump 38 s + restore 42 s = 80 s**
+for the entire production database (204 KB). All eighteen table row counts matched the source,
+`event_code_seq` came across as 1049, and both exclusion constraints and `audit_no_update`
+were present. The rehearsal copy and its dump file were then deleted — both held real guest
+names, numbers and payment records, and neither should outlive the check.
+
 
 `dipali_test` now lives on the Singapore project — it held nothing worth preserving, so it was
 created fresh and migrated rather than dumped. All 26 migrations applied, and the verification
