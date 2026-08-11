@@ -44,8 +44,14 @@ next-env.d.ts
 /storage/*
 !/storage/README.md
 
+# gcp service account key (goes into the GCP_SA_KEY github secret, never into git)
+key.json
+
 .vercel
 .env*
+# Last matching pattern wins, so this negation must stay BELOW every .env* rule above it —
+# it is what puts the (secret-free) template back into the repo.
+!.env.example
 
 # Claude Code: share the skills, keep each machine's own permission allowlist local
 .claude/settings.local.json

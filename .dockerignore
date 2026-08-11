@@ -1,0 +1,40 @@
+# Build context hygiene. Everything here is either rebuilt inside the image, secret, or
+# reference material the code never reads.
+
+.git
+.gitignore
+node_modules
+.next
+out
+build
+coverage
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets. These must arrive as runtime environment, never baked into a layer.
+.env
+.env.*
+*.pem
+
+# Encrypted KYC documents written by the local storage driver. Never ship guest
+# documents inside an image (CLAUDE.md rule 7); the README is the only tracked file.
+storage/*
+!storage/README.md
+
+# Vercel-specific state, irrelevant to a container build.
+.vercel
+vercel.json
+
+# The hotel's source documents and the approved proposal markup. lib/proposal.ts and
+# components/invoice-print.tsx reproduce these by hand and only cite them in comments —
+# nothing reads them at build or runtime, and they are ~1.4 MB of context.
+*.pdf
+Hotel-Dipali-Proposal-TEMPLATE_1.html
+
+# Docs and tests play no part in the runtime image. Note the test suite therefore runs
+# in CI, not in the build — it needs TEST_DATABASE_URL and a live database anyway.
+docs
+tests
+drizzle
+Dockerfile
+.dockerignore
