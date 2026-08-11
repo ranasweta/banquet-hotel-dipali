@@ -103,11 +103,11 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
 7. **Aadhaar images** go to object storage (or `storage/` locally in dev),
    encrypted at rest, referenced by `guest_documents.file_key`. Never log
    Aadhaar data; never return file bytes without a permission check.
-   `lib/storage.ts` picks its driver from `BLOB_STORE_ID` **or**
-   `BLOB_READ_WRITE_TOKEN` — a dashboard-connected store provides the former and
-   authenticates by OIDC, so checking only the token silently falls back to disk.
-   Vercel Blob with `access: 'private'` when either is set, the local `storage/`
-   directory when neither is. On Vercel with neither, an upload throws rather
+   `lib/storage.ts` picks its driver from `GCS_BUCKET`: a private Google Cloud
+   Storage bucket when set, the local `storage/` directory when not. The client
+   authenticates as the Cloud Run service account through ADC, so no key file is
+   shipped and nothing needs rotating. On a host whose disk is ephemeral —
+   `K_SERVICE` (Cloud Run) or `VERCEL` — with no bucket, an upload throws rather
    than writing somewhere that forgets.
    AES-256-GCM encryption happens **before** the bytes leave the process either
    way, so a leaked URL or a bucket snapshot yields ciphertext. The local driver

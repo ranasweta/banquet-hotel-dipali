@@ -10,64 +10,75 @@ import { join, resolve } from 'node:path'
  * only an opaque `file_key` is kept in `guest_documents`. NEVER log document bytes or
  * Aadhaar data.
  *
- * Two drivers behind one interface, chosen by whether a blob store is configured:
+ * Two drivers behind one interface, chosen by whether a bucket is configured:
  *
- *   BLOB_STORE_ID or BLOB_READ_WRITE_TOKEN  ->  Vercel Blob, `access: 'private'`
- *   neither                                 ->  the local `storage/` directory
+ *   GCS_BUCKET set  ->  Google Cloud Storage, private bucket
+ *   unset           ->  the local `storage/` directory
  *
- * The local driver is not a deployment option, it is the dev convenience. A serverless
- * filesystem is read-only apart from /tmp, and /tmp does not survive between invocations —
- * so on Vercel the local driver would accept an Aadhaar upload, report success, and lose
- * the file. Since confirming an event requires both Aadhaar sides on record, that failure
- * would surface as "no booking can ever be confirmed", a long way from its cause.
+ * The local driver is not a deployment option, it is the dev convenience. Cloud Run's
+ * filesystem lives in the instance's memory and dies with it, so deployed without a bucket
+ * the local driver would accept an Aadhaar upload, report success, and lose the file on the
+ * next revision or restart. Since confirming an event requires both Aadhaar sides on record,
+ * that failure would surface as "no booking can ever be confirmed", a long way from its cause.
  *
- * Encryption is kept even though the blob is private. The key never leaves the server, so a
- * leaked URL, a misconfigured store or a snapshot of the bucket yields ciphertext and
- * nothing else.
+ * Encryption is kept even though the bucket is private. The key never leaves the server, so a
+ * leaked URL, a misconfigured bucket or a snapshot of it yields ciphertext and nothing else.
  *
- * Two envelope formats, told apart by the shape of the file_key — a blob key has a slash:
+ * Two envelope formats, told apart by the shape of the file_key — a bucket key has a slash:
  *
- *   local  `<uuid>.enc`             [12 IV][16 tag][ciphertext], content type in a sidecar
- *   blob   `documents/<uuid>.enc`   [12 IV][16 tag][ciphertext of [2-byte len][type][bytes]]
+ *   local   `<uuid>.enc`             [12 IV][16 tag][ciphertext], content type in a sidecar
+ *   bucket  `documents/<uuid>.enc`   [12 IV][16 tag][ciphertext of [2-byte len][type][bytes]]
  *
- * The blob envelope carries its own content type — a second round trip for a sidecar would
+ * The bucket envelope carries its own content type — a second round trip for a sidecar would
  * be wasteful, and encrypting the type leaks marginally less. The local format is untouched
  * so files written before this change still read back.
  */
 
 const STORAGE_DIR = resolve(process.cwd(), 'storage')
-const BLOB_PREFIX = 'documents/'
+const DOC_PREFIX = 'documents/'
 const IV_LEN = 12
 const TAG_LEN = 16
 
+/** Is a bucket configured? */
+const usingBucket = () => Boolean(process.env.GCS_BUCKET)
+
 /**
- * Is a blob store configured?
+ * The bucket handle, built once.
  *
- * Two credential shapes, because @vercel/blob accepts two: the classic
- * `BLOB_READ_WRITE_TOKEN`, and `BLOB_STORE_ID` with OIDC, which is what a store connected
- * through the dashboard actually provides today — no read-write token appears at all.
- * Checking only the token sent this straight back to the local driver on Vercel, silently,
- * which is the very failure this module exists to prevent.
+ * No credentials are passed: on Cloud Run the client picks up the service account from the
+ * metadata server (ADC), so there is no key file to ship in the image or rotate. The import
+ * is dynamic so a laptop running the local driver never loads the SDK at all.
  */
-const usingBlob = () =>
-  Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID)
+let bucketHandle: Awaited<ReturnType<typeof openBucket>> | undefined
+async function openBucket() {
+  const { Storage } = await import('@google-cloud/storage')
+  return new Storage().bucket(process.env.GCS_BUCKET as string)
+}
+async function bucket() {
+  bucketHandle ??= await openBucket()
+  return bucketHandle
+}
 
 /**
  * Refuses to write to a filesystem that will forget.
  *
  * The local driver is correct on a laptop and catastrophic on a serverless host, and the
  * difference is invisible at the call site — the upload succeeds either way. Deployed
- * without a blob store, the file is gone by the next request, and because confirming an
- * event requires both Aadhaar sides on record the symptom appears as "nothing can be
- * confirmed", nowhere near the cause. Better to fail at the upload, loudly, naming the fix.
+ * without a bucket, the file is gone by the next restart, and because confirming an event
+ * requires both Aadhaar sides on record the symptom appears as "nothing can be confirmed",
+ * nowhere near the cause. Better to fail at the upload, loudly, naming the fix.
+ *
+ * `K_SERVICE` is set by Cloud Run, `VERCEL` by Vercel. Both are hosts whose disk is
+ * ephemeral. A plain container with a durable volume mounted at ./storage sets neither and
+ * is still allowed to use the local driver, as the Dockerfile documents.
  */
 function assertPersistent(): void {
-  if (usingBlob()) return
-  if (process.env.VERCEL) {
+  if (usingBucket()) return
+  if (process.env.K_SERVICE || process.env.VERCEL) {
     throw new Error(
-      'No blob store is configured, so an uploaded document would be written to a ' +
-        'filesystem that does not survive the request. Attach a Vercel Blob store to this ' +
-        'project (it provides BLOB_STORE_ID), or set BLOB_READ_WRITE_TOKEN.',
+      'No bucket is configured, so an uploaded document would be written to a filesystem ' +
+        'that does not survive the instance. Set GCS_BUCKET to the Cloud Storage bucket ' +
+        'holding guest documents.',
     )
   }
 }
@@ -120,17 +131,15 @@ export async function storeEncrypted(
   assertPersistent()
   const id = randomUUID()
 
-  if (usingBlob()) {
-    const { put } = await import('@vercel/blob')
-    const pathname = `${BLOB_PREFIX}${id}.enc`
-    await put(pathname, encrypt(pack(bytes, meta.contentType)), {
-      access: 'private',
-      // The blob holds ciphertext, so its own content type is exactly what it is. The real
+  if (usingBucket()) {
+    const pathname = `${DOC_PREFIX}${id}.enc`
+    await (await bucket()).file(pathname).save(encrypt(pack(bytes, meta.contentType)), {
+      // The object holds ciphertext, so its own content type is exactly what it is. The real
       // one travels inside the envelope.
       contentType: 'application/octet-stream',
-      // We generate the uuid, so the pathname is already unique; a random suffix would only
-      // make the key unpredictable to us.
-      addRandomSuffix: false,
+      // Documents are a few MB at most; a resumable session would be two extra round trips
+      // to protect an upload that either succeeds or is retried by the user anyway.
+      resumable: false,
     })
     return { fileKey: pathname }
   }
@@ -147,16 +156,12 @@ export async function storeEncrypted(
 export async function readDecrypted(
   fileKey: string,
 ): Promise<{ bytes: Buffer; contentType: string }> {
-  // A blob key carries its prefix; a local one is a bare file name. The shape is what
+  // A bucket key carries its prefix; a local one is a bare file name. The shape is what
   // decides the driver, so a database written under one still reads under the other.
-  if (fileKey.startsWith(BLOB_PREFIX)) {
+  if (fileKey.startsWith(DOC_PREFIX)) {
     if (!/^documents\/[a-f0-9-]+\.enc$/.test(fileKey)) throw new Error('Invalid file key')
-    const { get } = await import('@vercel/blob')
-    const found = await get(fileKey, { access: 'private' })
-    if (!found?.stream) throw new Error('Document not found in storage')
-    const chunks: Uint8Array[] = []
-    for await (const chunk of found.stream as unknown as AsyncIterable<Uint8Array>) chunks.push(chunk)
-    return unpack(decrypt(Buffer.concat(chunks)))
+    const [contents] = await (await bucket()).file(fileKey).download()
+    return unpack(decrypt(contents))
   }
 
   // Guard against path traversal — file_key is an opaque name we generated.
@@ -184,9 +189,8 @@ export async function readDecrypted(
  */
 export async function deleteStored(fileKey: string): Promise<void> {
   try {
-    if (fileKey.startsWith(BLOB_PREFIX)) {
-      const { del } = await import('@vercel/blob')
-      await del(fileKey)
+    if (fileKey.startsWith(DOC_PREFIX)) {
+      await (await bucket()).file(fileKey).delete({ ignoreNotFound: true })
       return
     }
     const { rm } = await import('node:fs/promises')

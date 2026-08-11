@@ -22,6 +22,9 @@ env:
   REGION: asia-southeast1
   SERVICE: hdwed
   IMAGE: asia-southeast1-docker.pkg.dev/hdofficial/hdwed/hdwed
+  # Not a secret — a bucket name grants nothing on its own, and the objects in it are
+  # ciphertext. Access comes from the runtime service account, not from knowing the name.
+  BUCKET: hdwed-docs
 
 jobs:
   deploy:
@@ -60,4 +63,4 @@ jobs:
             --cpu=1 --memory=1Gi \
             --min-instances=1 --max-instances=1 \
             --allow-unauthenticated \
-            --set-env-vars="^##^DATABASE_URL=${DATABASE_URL}##SESSION_SECRET=${SESSION_SECRET}##STORAGE_KEY=${STORAGE_KEY}##CRON_SECRET=${CRON_SECRET}##DB_POOL_MAX=10"
+            --set-env-vars="^##^DATABASE_URL=${DATABASE_URL}##SESSION_SECRET=${SESSION_SECRET}##STORAGE_KEY=${STORAGE_KEY}##CRON_SECRET=${CRON_SECRET}##GCS_BUCKET=${BUCKET}##DB_POOL_MAX=10"
