@@ -117,6 +117,56 @@ d('the payable amount', () => {
     expect(bill.payablePaise).toBe(12_100_000)
   })
 
+  /**
+   * Maintenance (client, 11 Aug 2026). The bill has always charged closed maintenance while
+   * this module ignored it, so the Billing panel said "settled" over a Draft that still asked
+   * for money. It counts now — but only against the balance and the settlement, because the
+   * 25% and the 50% fell due before the generator ever ran.
+   */
+  it('counts CLOSED maintenance in the payable, and open maintenance in nothing', async () => {
+    const e = await makeBooking({ venueRatePaise: 10_000_000 })
+    const base = await schedule.payableBreakdown(e)
+    expect(base.maintenancePaise).toBe(0)
+    expect(base.payablePaise).toBe(base.preEventPayablePaise)
+
+    // Open: being typed by the Maintenance team, and in no figure at all.
+    await db.insert(schema.maintenanceEntries).values({
+      eventId: e, item: 'Generator (extra hours)', qty: '4', ratePaise: 50_000,
+      amountPaise: 200_000, createdBy: actor.id, isClosed: false,
+    })
+    const open = await schedule.payableBreakdown(e)
+    expect(open.maintenancePaise).toBe(0)
+    expect(open.payablePaise).toBe(base.payablePaise)
+
+    // Closed: in the payable and in the balance.
+    await db.execute(sql`UPDATE maintenance_entries SET is_closed = true WHERE event_id = ${e}::uuid`)
+    const closed = await schedule.payableBreakdown(e)
+    expect(closed.maintenancePaise).toBe(200_000)
+    expect(closed.payablePaise).toBe(base.preEventPayablePaise + 200_000)
+    expect(closed.balancePaise).toBe(closed.payablePaise - closed.paidPaise)
+  })
+
+  it('never lets maintenance reach back and re-open a met advance', async () => {
+    const e = await makeBooking({ eventType: 'wedding', venueRatePaise: 10_000_000 })
+    const before = await schedule.paymentSchedule(e, '2026-09-01')
+    const advanceBefore = before.milestones.find((m) => m.key === 'advance')!.requiredPaise
+    const weddingBefore = before.milestones.find((m) => m.key === 'wedding_balance')!.requiredPaise
+
+    await db.insert(schema.maintenanceEntries).values({
+      eventId: e, item: 'Damages', qty: '1', ratePaise: 400_000,
+      amountPaise: 400_000, createdBy: actor.id, isClosed: true,
+    })
+
+    const after = await schedule.paymentSchedule(e, '2026-09-01')
+    // The two pre-event milestones are measured on the pre-event base and do not move.
+    expect(after.milestones.find((m) => m.key === 'advance')!.requiredPaise).toBe(advanceBefore)
+    expect(after.milestones.find((m) => m.key === 'wedding_balance')!.requiredPaise).toBe(weddingBefore)
+    // The settlement is measured on the full payable and does.
+    expect(after.milestones.find((m) => m.key === 'settlement')!.requiredPaise).toBe(
+      before.milestones.find((m) => m.key === 'settlement')!.requiredPaise + 400_000,
+    )
+  })
+
   it('drops with a discount, and the discount is the money that was typed', async () => {
     const e = await makeBooking({ venueRatePaise: 10_000_000 })
     await discounts.addDiscount(bm, e, { head: 'venue', amountPaise: 500_000, remark: 'goodwill' })

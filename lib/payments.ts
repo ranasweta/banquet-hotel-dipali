@@ -79,7 +79,9 @@ export type Ledger = {
   roomsPaise: number
   roomsTaxPaise: number
   discountPaise: number
-  /** Everything actually collectable: proposal + rooms + the 5%, less discounts. */
+  /** Closed maintenance, billed and now inside the payable (client, 11 Aug 2026). */
+  maintenancePaise: number
+  /** Everything actually collectable: proposal + rooms + the 5% + maintenance, less discounts. */
   payablePaise: number
   /** The 18% the documents print and nobody pays — shown so the two can be reconciled. */
   shownGstPaise: number
@@ -126,6 +128,7 @@ export async function getLedger(eventId: string): Promise<Ledger> {
     proposalTotalPaise: schedule.proposalPaise,
     roomsPaise: schedule.roomsPaise,
     roomsTaxPaise: schedule.roomsTaxPaise,
+    maintenancePaise: schedule.maintenancePaise,
     discountPaise: schedule.discountPaise,
     payablePaise: schedule.payablePaise,
     shownGstPaise,

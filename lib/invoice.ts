@@ -115,6 +115,28 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   `)) as unknown as { name: string; pax: number; tierName: string; perPlate: number }[]
   for (const f of food) push('food', `${f.tierName} × ${f.pax} pax`, f.pax, Number(f.perPlate), f.pax * Number(f.perPlate), f.name)
 
+  // Chef delicacies — a priced off-menu dish is a per-plate addition to the food rate, and
+  // `foodAndAddonTotal` has always counted it, so the payment review, the payable amount and
+  // every milestone include it. Leaving it off these lines made the Draft the guest holds
+  // cheaper than the balance the same booking was asking for, by pax × the charge.
+  //
+  // It gets its own line rather than being folded into the per-plate rate: the tier rate on
+  // the document has to stay the tier's own rate, or the guest reads a price the menu card
+  // does not carry. Joined through `sub_event_menus` for the same reason the food line is —
+  // a function with no saved menu contributes no food total, so a delicacy on one must not
+  // appear here either, or the two figures part company again in the other direction.
+  const delicacies = (await exec.execute(sql`
+    SELECT se.name, se.pax, c.description, c.charge_paise AS "chargePaise"
+    FROM chef_requests c
+    JOIN sub_events se ON se.id = c.sub_event_id
+    JOIN sub_event_menus m ON m.sub_event_id = se.id
+    WHERE se.event_id = ${eventId} AND c.status = 'priced'
+    ORDER BY se.event_date, se.start_time, c.description
+  `)) as unknown as { name: string; pax: number; description: string; chargePaise: number }[]
+  for (const d of delicacies) {
+    push('food', `Chef delicacy: ${d.description}`, d.pax, Number(d.chargePaise), d.pax * Number(d.chargePaise), d.name)
+  }
+
   // Add-ons — separate food lines (FR-3.6), under the FUNCTION they were ordered for. An
   // add-on hangs off a sub-event, so leaving it unlabelled dropped it into an event-level
   // Food group and the guest saw décor for the Sangeet sitting outside the Sangeet.

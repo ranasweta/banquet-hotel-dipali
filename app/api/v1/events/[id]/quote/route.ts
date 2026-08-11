@@ -50,9 +50,10 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
     displayTotalPaise: bill.payablePaise + shownGstPaise,
     paidPaise: bill.paidPaise,
     // The 25% is measured on the payable amount, rooms and their 5% included (client,
-    // 20/25 Jul 2026 — see SEED_ASSUMPTIONS §F10). The 18% is not in it.
-    advanceRequiredPaise: percentOfPaise(bill.payablePaise, ADVANCE_PCT),
-    weddingMilestonePaise: percentOfPaise(bill.payablePaise, WEDDING_MILESTONE_PCT),
+    // 20/25 Jul 2026 — see SEED_ASSUMPTIONS §F10). The 18% is not in it, and neither is
+    // maintenance: both of these fall due before the event runs (client, 11 Aug 2026).
+    advanceRequiredPaise: percentOfPaise(bill.preEventPayablePaise, ADVANCE_PCT),
+    weddingMilestonePaise: percentOfPaise(bill.preEventPayablePaise, WEDDING_MILESTONE_PCT),
     lines,
     missing: pricing.missing,
   })

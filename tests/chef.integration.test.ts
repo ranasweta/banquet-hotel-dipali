@@ -7,6 +7,8 @@ import { eq, sql } from 'drizzle-orm'
 
 const chef = await import('@/lib/chef')
 const menus = await import('@/lib/menus')
+const invoice = await import('@/lib/invoice')
+const pricing = await import('@/lib/pricing')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -115,5 +117,45 @@ d('chef delicacy', () => {
   it('rejects an empty description', async () => {
     const { subId } = await makeSub()
     await expect(chef.requestDelicacy(bm, subId, '   ')).rejects.toThrow(/Describe/)
+  })
+
+  /**
+   * The bill lines and the payment schedule read the same booking, so they must reach the
+   * same food figure. They did not: `foodAndAddonTotal` counted a priced delicacy and
+   * `computeBillLines` did not, so the Draft the guest holds was pax × the charge cheaper
+   * than the balance the payment review was asking them for.
+   */
+  it('appears on the Draft, and the Draft agrees with the payment review', async () => {
+    const { eventId, subId } = await makeSub()
+    await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: {} })
+
+    const { id } = await chef.requestDelicacy(bm, subId, 'Meethi sewai')
+    await chef.priceDelicacy(theChef, id, { chargePaise: 9_000 })
+
+    const lines = await invoice.computeBillLines(db, eventId)
+    const delicacyLine = lines.find((l) => l.description.includes('Meethi sewai'))
+    expect(delicacyLine).toBeDefined()
+    expect(delicacyLine!.section).toBe('food')
+    expect(delicacyLine!.amountPaise).toBe(9_000 * 100)
+
+    const billedFood = lines.filter((l) => l.section === 'food').reduce((s, l) => s + l.amountPaise, 0)
+    const { foodPaise, addonPaise } = await pricing.foodAndAddonTotal(eventId)
+    expect(billedFood).toBe(foodPaise + addonPaise)
+  })
+
+  it('leaves a declined or unpriced delicacy off the Draft entirely', async () => {
+    const { eventId, subId } = await makeSub()
+    await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: {} })
+
+    const declined = await chef.requestDelicacy(bm, subId, 'Live teppanyaki')
+    await chef.priceDelicacy(theChef, declined.id, { decline: true, remark: 'no equipment' })
+    await chef.requestDelicacy(bm, subId, 'Still being thought about')
+
+    const lines = await invoice.computeBillLines(db, eventId)
+    expect(lines.some((l) => l.description.startsWith('Chef delicacy:'))).toBe(false)
+
+    const billedFood = lines.filter((l) => l.section === 'food').reduce((s, l) => s + l.amountPaise, 0)
+    const { foodPaise, addonPaise } = await pricing.foodAndAddonTotal(eventId)
+    expect(billedFood).toBe(foodPaise + addonPaise)
   })
 })
