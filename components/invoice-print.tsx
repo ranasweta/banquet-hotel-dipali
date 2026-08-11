@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Loader2, Printer } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
@@ -131,12 +131,58 @@ export function InvoicePrint({ eventId, proforma = false }: { eventId: string; p
   )
 }
 
+/** A4 in CSS pixels — the `.page` width, which is 210mm and does not reflow. */
+const SHEET_PX = (210 * 96) / 25.4
+
+/**
+ * Shrinks the sheet on screen so it fits the pane it is scrolling in.
+ *
+ * The document is a real A4 page: `.page` is a fixed 210mm because that is what has to come
+ * out of the printer. On a laptop with the sidebar open the pane is narrower than that, so
+ * the page simply ran off the right-hand edge and had to be scrolled sideways to read — and
+ * a guest-facing document that cannot be read in one piece is the one screen where that
+ * matters most.
+ *
+ * `zoom` rather than `transform: scale()`: zoom changes the LAID-OUT size, so the pane's
+ * scroll width shrinks with it and no horizontal bar is left behind. A transform would paint
+ * the page smaller while still reserving the full 210mm, which is the same overflow with
+ * extra whitespace under it.
+ *
+ * Only ever shrinks — `min(1, …)` — so a wide monitor shows the sheet at its true size rather
+ * than a blown-up one. Print is untouched: the rule is inside `@media screen`, so the PDF is
+ * still exactly A4.
+ */
+function useFitToPane() {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    const pane = el?.parentElement
+    if (!el || !pane) return
+
+    const fit = () => {
+      const style = getComputedStyle(pane)
+      const inner =
+        pane.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+      // The sheet's own breathing room, `padding:24px 12px` on `.pd`.
+      const available = inner - 24
+      el.style.setProperty('--fit', String(Math.min(1, available / SHEET_PX)))
+    }
+
+    fit()
+    const ro = new ResizeObserver(fit)
+    ro.observe(pane)
+    return () => ro.disconnect()
+  }, [])
+  return ref
+}
+
 /**
  * The document itself — pure, so it renders from a `ProposalDocument` and nothing else.
  * Keeping it free of fetching is what lets the markup be checked against the template
  * without a database or a browser session.
  */
 export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
+  const ref = useFitToPane()
   const { event, contacts, functions, lodges, extras, totals, counts } = doc
   const docName = doc.doc.isDraft2 ? 'DRAFT 2' : 'DRAFT'
   const words = paiseToWords(totals.totalPaise)
@@ -144,7 +190,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
   const runTo = event.plannedTo ?? event.lastDate
 
   return (
-    <div className="pd">
+    <div className="pd" ref={ref}>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
       <div className="page">
@@ -1108,6 +1154,9 @@ const CSS = `
 .pd *{box-sizing:border-box; margin:0; padding:0}
 .pd .page{width:210mm; margin:0 auto; background:var(--paper); position:relative;
   box-shadow:0 18px 60px rgba(90,75,40,.22)}
+/* Scaled to the pane on screen only, so the A4 sheet is readable without scrolling
+   sideways; --fit is set by useFitToPane and never exceeds 1. Print keeps true A4. */
+@media screen{ .pd .page{zoom:var(--fit,1)} }
 .pd .pad{padding:0 16mm}
 
 /* ══════════ MASTHEAD ══════════ */
