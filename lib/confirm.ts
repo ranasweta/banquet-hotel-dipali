@@ -191,7 +191,9 @@ export async function confirmEvent(
       // 2026). Rooms and their 5% ARE in it (client, 20 Jul 2026).
       const bill = await payableBreakdown(eventId, tx)
       const proposalTotal = bill.proposalPaise
-      const required = percentOfPaise(bill.payablePaise, ADVANCE_PCT)
+      // The PRE-EVENT base: maintenance is billed but cannot raise an advance that falls due
+      // now, before a single entry exists (client, 11 Aug 2026).
+      const required = percentOfPaise(bill.preEventPayablePaise, ADVANCE_PCT)
       const paid = bill.paidPaise
       const rupees = (n: number) => `₹${(n / 100).toLocaleString('en-IN')}`
 
@@ -201,7 +203,7 @@ export async function confirmEvent(
         throw new ApiError(
           402,
           'advance_required',
-          `An advance must be recorded to block the dates. The full ${ADVANCE_PCT}% comes to ${rupees(required)} on a payable total of ${rupees(bill.payablePaise)}${
+          `An advance must be recorded to block the dates. The full ${ADVANCE_PCT}% comes to ${rupees(required)} on a payable total of ${rupees(bill.preEventPayablePaise)}${
             bill.roomsPaise > 0
               ? ` (venue, food and add-ons ${rupees(proposalTotal)} plus rooms ${rupees(bill.roomsPaise + bill.roomsTaxPaise)} including 5% GST)`
               : ''

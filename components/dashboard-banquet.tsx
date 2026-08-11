@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { CalendarDays, MapPin, Users, Clock, UtensilsCrossed, ArrowLeftRight, CircleCheck } from 'lucide-react'
+import { CalendarDays, MapPin, Users, Clock, UtensilsCrossed, ArrowLeftRight, CheckCircle2, CircleCheck } from 'lucide-react'
 import type { BanquetDashboard } from '@/lib/dashboard'
 import {
   Hero,
@@ -11,6 +11,7 @@ import {
   formatTimeRange,
 } from '@/components/dashboard-shared'
 import { OperationsBoard } from '@/components/operations-board'
+import { SignoffCard } from '@/components/signoff-card'
 import { titleCase } from '@/lib/text'
 
 /**
@@ -18,7 +19,7 @@ import { titleCase } from '@/lib/text'
  * week ahead, change requests they decide (FR-1.9), and functions whose menu still isn't locked.
  */
 export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user: { fullName: string } }) {
-  const { today, upcoming, changeRequests, menuGaps } = data
+  const { today, upcoming, changeRequests, menuGaps, awaitingSignoff } = data
   const nextFn = upcoming[0]
 
   return (
@@ -80,7 +81,7 @@ export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user:
         <KpiTile href="/calendar" icon={<CalendarDays className="size-5" aria-hidden />} value={today.length} label="Functions today" tone={today.length ? 'blue' : 'slate'} />
         <KpiTile href="/calendar" icon={<CalendarDays className="size-5" aria-hidden />} value={upcoming.length} label="Functions · next 7 days" tone="blue" />
         <KpiTile href="/change-requests" icon={<ArrowLeftRight className="size-5" aria-hidden />} value={changeRequests.length} label="Change requests to decide" tone={changeRequests.length ? 'amber' : 'slate'} />
-        <KpiTile href="/calendar" icon={<UtensilsCrossed className="size-5" aria-hidden />} value={menuGaps.length} label="Menus to confirm" tone={menuGaps.length ? 'amber' : 'emerald'} />
+        <KpiTile icon={<CheckCircle2 className="size-5" aria-hidden />} value={awaitingSignoff.length} label="Awaiting your sign-off" tone={awaitingSignoff.length ? 'amber' : 'emerald'} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -94,6 +95,8 @@ export function BanquetDashboard({ data, user }: { data: BanquetDashboard; user:
         </SectionCard>
 
         <div className="space-y-6">
+          <SignoffCard rows={awaitingSignoff} designation="banquet_manager" />
+
           <SectionCard
             icon={<ArrowLeftRight className="size-4 text-muted-foreground" aria-hidden />}
             title="Change requests"

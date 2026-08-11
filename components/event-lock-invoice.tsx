@@ -65,7 +65,21 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
 
   if (!checklist) return <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading…</div>
 
-  const mySignoff = SIGNOFF_LABEL[role] ? role : null
+  /**
+   * The designations this reader may record here, and that are still outstanding.
+   *
+   * The Auditor is included deliberately: `lib/lock.ts` has always accepted them for ANY
+   * designation, but the button was gated on the reader's own role being a designation, so an
+   * Auditor saw nothing and the two blocking lines could not be cleared from this screen at
+   * all. The managers who own them cannot open this page (`bookings` is `none` for both), so
+   * their own route is the Sign-off card on their dashboard — this is the Auditor's backstop
+   * for a manager who has left, or an event nobody signed.
+   */
+  const ITEM_OF: Record<string, string> = { banquet_manager: 'banquet', lodge_manager: 'lodge' }
+  const outstanding = (d: string) => !checklist.items.find((i) => i.key === ITEM_OF[d])?.done
+  const signable = (
+    isAuditor ? Object.keys(SIGNOFF_LABEL) : SIGNOFF_LABEL[role] ? [role] : []
+  ).filter((d) => outstanding(d) && ['in_progress', 'completed'].includes(checklist.status))
 
   return (
     <div className="space-y-5">
@@ -81,11 +95,17 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
           ))}
         </ul>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {(mySignoff || isAuditor) && !checklist.items.find((i) => i.key === (role === 'lodge_manager' ? 'lodge' : 'banquet'))?.done && ['in_progress', 'completed'].includes(checklist.status) && mySignoff && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={() => act(() => api(`/events/${eventId}/signoff`, { method: 'POST', body: JSON.stringify({ designation: mySignoff }) }), 'Signed off')}>
-              Sign off as {SIGNOFF_LABEL[mySignoff]}
+          {signable.map((d) => (
+            <Button
+              key={d}
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => act(() => api(`/events/${eventId}/signoff`, { method: 'POST', body: JSON.stringify({ designation: d }) }), 'Signed off')}
+            >
+              Sign off as {SIGNOFF_LABEL[d]}
             </Button>
-          )}
+          ))}
           {isAuditor && checklist.status === 'completed' && (
             <Button size="sm" disabled={busy || !checklist.canLock} onClick={() => act(() => api(`/events/${eventId}/lock`, { method: 'POST' }), 'Event locked — Draft prepared')}>
               <Lock className="size-3.5" /> Lock &amp; prepare Draft

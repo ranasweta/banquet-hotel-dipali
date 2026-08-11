@@ -10,13 +10,7 @@ export default async function BookingsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Proposals</h1>
-        <p className="text-muted-foreground">
-          Open enquiries and confirmed events. Start a new proposal to pick a date &amp; time,
-          then only the free venues.
-        </p>
-      </div>
+      <h1 className="text-2xl font-semibold">Proposals</h1>
       <BookingsList canCreate={canCreate} canEditConfirmed={canEditConfirmed} />
     </div>
   )

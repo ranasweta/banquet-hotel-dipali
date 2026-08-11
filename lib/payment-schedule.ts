@@ -9,18 +9,33 @@ import { ROOM_GST_BP } from '@/lib/tax'
  * What the guest actually owes, and when — the one arithmetic every screen measures against
  * (client's lead, 4 Aug 2026).
  *
- * THE PAYABLE AMOUNT. Venue + food + add-ons + rooms, less discounts, plus the 5% room tax.
- * The 18% GST introduced on 4 Aug is printed on the document and collected from nobody, so
- * it appears nowhere in this file. Neither does it enter the 10% discount cap — that is
- * measured pre-tax on the undiscounted bill and stays where it is, in lib/discounts.ts.
+ * THE PAYABLE AMOUNT. Venue + food + add-ons + rooms, less discounts, plus the 5% room tax,
+ * plus CLOSED maintenance. The 18% GST introduced on 4 Aug is printed on the document and
+ * collected from nobody, so it appears nowhere in this file. Neither does it enter the 10%
+ * discount cap — that is measured pre-tax on the undiscounted bill and stays where it is, in
+ * lib/discounts.ts.
+ *
+ * MAINTENANCE, AND WHY IT SPLITS THE BASE IN TWO (client, 11 Aug 2026). The bill has always
+ * charged closed maintenance and this module never counted it, so the Billing panel read
+ * "settled" while the Draft still showed money owed. It is in the payable now — but only the
+ * SETTLEMENT is measured on it. Maintenance is logged during and after the event, and folding
+ * it into the 25% or the 50% would raise a threshold that fell due months earlier: a booking
+ * that met its advance in full would go retrospectively short because a generator ran late.
+ * So there are two bases, and each milestone names the one it is owed against:
+ *
+ *   preEventPayablePaise   venue + food + add-ons + rooms + 5%, less discounts
+ *   payablePaise           that, plus closed maintenance — the balance and the settlement
+ *
+ * Only entries the Maintenance team has CLOSED count, matching what the bill charges: an open
+ * entry is still being typed, and a balance that moves under the guest is worse than a late one.
  *
  * THE MILESTONES.
- *   advance          25% of payable, at confirm. Short is allowed now (see lib/confirm.ts):
- *                    the money is taken, the dates are held, and the debt shows on the
- *                    calendar until it clears.
- *   wedding balance  50% of payable, cumulative, 30 days before the first function. Was the
- *                    whole remaining 75% until 4 Aug 2026; the rest settles at billing.
- *   settlement       100% of payable, at billing.
+ *   advance          25% of the pre-event base, at confirm. Short is allowed now (see
+ *                    lib/confirm.ts): the money is taken, the dates are held, and the debt
+ *                    shows on the calendar until it clears.
+ *   wedding balance  50% of the pre-event base, cumulative, 30 days before the first
+ *                    function. Was the whole remaining 75% until 4 Aug 2026.
+ *   settlement       100% of the payable amount, maintenance included, at billing.
  * Over-payment is never refused — each milestone is a floor, not a figure.
  *
  * WHY ONE MODULE. Three places computed a balance before this and all three disagreed:
@@ -46,7 +61,11 @@ export type PayableBreakdown = {
   /** 5% on rooms, rounded per line. The only tax that is money. */
   roomsTaxPaise: number
   discountPaise: number
-  /** proposal + rooms + room tax − discount. Every threshold is a percentage of this. */
+  /** Closed maintenance entries. Zero until the Maintenance team closes the event's log. */
+  maintenancePaise: number
+  /** proposal + rooms + room tax − discount. The base for the 25% and the wedding 50%. */
+  preEventPayablePaise: number
+  /** The pre-event base plus maintenance — what is owed in full, and what the balance measures. */
   payablePaise: number
   paidPaise: number
   balancePaise: number
@@ -59,6 +78,7 @@ type PayableRow = {
   addons: number
   rooms: number
   roomsTax: number
+  maintenance: number
   paid: number
   firstDate: string | null
   isWedding: boolean
@@ -118,6 +138,10 @@ async function payableRows(
            COALESCE((SELECT sum(rl.amount) FROM room_lines rl WHERE rl.event_id = e.id), 0)::bigint AS rooms,
            COALESCE((SELECT sum(round(rl.amount::numeric * ${ROOM_GST_BP} / 10000))
                       FROM room_lines rl WHERE rl.event_id = e.id), 0)::bigint AS "roomsTax",
+           -- CLOSED entries only, exactly as computeBillLines charges them. An open entry is
+           -- still being edited by the Maintenance team.
+           COALESCE((SELECT sum(me.amount_paise) FROM maintenance_entries me
+                      WHERE me.event_id = e.id AND me.is_closed), 0)::bigint AS maintenance,
            COALESCE((SELECT sum(CASE WHEN p.kind = 'refund' THEN -p.amount_paise ELSE p.amount_paise END)
                       FROM payments p WHERE p.event_id = e.id), 0)::bigint AS paid
     FROM events e
@@ -132,13 +156,19 @@ async function payableRows(
     addons: Number(r.addons),
     rooms: Number(r.rooms),
     roomsTax: Number(r.roomsTax),
+    maintenance: Number(r.maintenance),
     paid: Number(r.paid),
     firstDate: (r.firstDate as string) ?? null,
     isWedding: Boolean(r.isWedding),
   }))
 }
 
-/** Payable before discounts — proposal + rooms + room tax. */
+/**
+ * Payable before discounts and before maintenance — proposal + rooms + room tax.
+ *
+ * Deliberately excludes maintenance: this is the figure the 25% and the wedding 50% are owed
+ * against, and both fall due before a single maintenance entry exists.
+ */
 const grossPayable = (r: PayableRow) => r.venue + r.food + r.addons + r.rooms + r.roomsTax
 
 /**
@@ -152,12 +182,15 @@ export async function payableBreakdown(
   const [row] = await payableRows([eventId], exec)
   if (!row) throw new Error(`payableBreakdown: event ${eventId} not found`)
   const discountPaise = await effectiveDiscountPaise(eventId, exec)
-  const payablePaise = Math.max(0, grossPayable(row) - discountPaise)
+  const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
+  const payablePaise = preEventPayablePaise + row.maintenance
   return {
     proposalPaise: row.venue + row.food + row.addons,
     roomsPaise: row.rooms,
     roomsTaxPaise: row.roomsTax,
     discountPaise,
+    maintenancePaise: row.maintenance,
+    preEventPayablePaise,
     payablePaise,
     paidPaise: row.paid,
     balancePaise: payablePaise - row.paid,
@@ -199,17 +232,22 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
   const [row] = await payableRows([eventId])
   if (!row) throw new Error(`paymentSchedule: event ${eventId} not found`)
   const discountPaise = await effectiveDiscountPaise(eventId)
-  const payablePaise = Math.max(0, grossPayable(row) - discountPaise)
+  const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
+  const payablePaise = preEventPayablePaise + row.maintenance
   const paid = row.paid
   const today = asOf ?? new Date().toLocaleDateString('en-CA')
 
+  // `basePaise` is the milestone's own base, not one figure for all three: the advance and
+  // the wedding 50% fall due before the event and are measured on the pre-event payable, so
+  // maintenance logged afterwards cannot reach back and make a met milestone short again.
   const milestone = (
     key: Milestone['key'],
     label: string,
     percent: number,
     dueOn: string | null,
+    basePaise: number,
   ): Milestone => {
-    const requiredPaise = percentOfPaise(payablePaise, percent)
+    const requiredPaise = percentOfPaise(basePaise, percent)
     const shortfallPaise = Math.max(0, requiredPaise - paid)
     return {
       key,
@@ -223,7 +261,9 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
     }
   }
 
-  const milestones: Milestone[] = [milestone('advance', 'Booking advance', ADVANCE_PCT, null)]
+  const milestones: Milestone[] = [
+    milestone('advance', 'Booking advance', ADVANCE_PCT, null, preEventPayablePaise),
+  ]
   if (row.isWedding && row.firstDate) {
     milestones.push(
       milestone(
@@ -231,16 +271,19 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
         'Wedding balance',
         WEDDING_MILESTONE_PCT,
         minusDays(row.firstDate, WEDDING_MILESTONE_DAYS),
+        preEventPayablePaise,
       ),
     )
   }
-  milestones.push(milestone('settlement', 'Settlement', 100, null))
+  milestones.push(milestone('settlement', 'Settlement', 100, null, payablePaise))
 
   return {
     proposalPaise: row.venue + row.food + row.addons,
     roomsPaise: row.rooms,
     roomsTaxPaise: row.roomsTax,
     discountPaise,
+    maintenancePaise: row.maintenance,
+    preEventPayablePaise,
     payablePaise,
     paidPaise: paid,
     balancePaise: payablePaise - paid,

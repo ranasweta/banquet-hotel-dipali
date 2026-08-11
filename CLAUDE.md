@@ -156,12 +156,22 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    not charged is a question for the hotel's CA. Implemented as instructed and
    recorded in `SEED_ASSUMPTIONS.md` §F8; it is a one-constant change.
 12. **The payable amount and the milestones live in `lib/payment-schedule.ts`**, and
-   nothing recomputes them locally. Payable = venue + food + add-ons + rooms + the 5%,
-   less discounts. Milestones are floors on the CUMULATIVE total received, never
-   instalments of their own: **25%** at confirm, **50%** thirty days before the first
-   function for weddings (BR-P2, amended 4 Aug 2026 — was the whole remaining 75%),
+   nothing recomputes them locally. Payable = venue + food + add-ons + rooms + the 5%
+   + **closed maintenance**, less discounts. Milestones are floors on the CUMULATIVE total
+   received, never instalments of their own: **25%** at confirm, **50%** thirty days before
+   the first function for weddings (BR-P2, amended 4 Aug 2026 — was the whole remaining 75%),
    **100%** at billing. Over-payment is always accepted.
    Dates come from `min(sub_events.event_date)`, never the `events.first_date` cache.
+   **Maintenance splits the base in two** (client, 11 Aug 2026). The bill has always charged
+   closed maintenance and this module ignored it, so the Billing panel read "settled" over a
+   Draft that still asked for money. It is in the payable now, but only the **settlement** and
+   the **balance** are measured on it: maintenance is logged during and after the event, and
+   folding it into the 25% or the 50% would raise a threshold that fell due months earlier and
+   make a met milestone retrospectively short. So `preEventPayablePaise` (without maintenance)
+   is the base for the advance and the wedding 50% — `confirmEvent` and the quote route read
+   that one — and `payablePaise` (with it) is the base for the settlement and the balance.
+   Only entries the Maintenance team has **closed** count, matching what `computeBillLines`
+   charges. Maintenance is not in the 10% discount cap either (rule 3's base is unchanged).
 13. **No pax limit anywhere** (client, 4 Aug 2026, completing the 3 Aug removal of the
    venue-capacity cap). A positive whole number is a type check, not a limit — no
    ceiling in Zod, no capacity gate, and `pax_override_note` is gone with the capacity

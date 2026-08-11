@@ -570,8 +570,7 @@ function NewTierForm({
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
       </div>
       <p className="text-xs text-muted-foreground sm:col-span-4">
-        A tier needs a rate before it can be booked, so the opening price is set here rather
-        than left for later.
+        A tier needs a rate before it can be booked.
       </p>
     </div>
   )

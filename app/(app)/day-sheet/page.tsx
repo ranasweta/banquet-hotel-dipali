@@ -15,13 +15,7 @@ export default async function DaySheetPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Next 15 days</h1>
-        <p className="text-muted-foreground">
-          Every confirmed function, with pax, venue, timings and the full menu including
-          guest preferences and chef dishes.
-        </p>
-      </div>
+      <h1 className="text-2xl font-semibold">Next 15 days</h1>
       <OperationsBoard days={15} />
     </div>
   )

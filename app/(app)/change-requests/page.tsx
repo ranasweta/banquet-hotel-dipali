@@ -20,13 +20,7 @@ export default async function ChangeRequestsPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Change requests</h1>
-        <p className="text-muted-foreground">
-          Venue / date / time changes you have asked for, and their outcomes. The Higher
-          Authority decides them alongside the rest of the proposal.
-        </p>
-      </div>
+      <h1 className="text-2xl font-semibold">Change requests</h1>
       <ChangeRequestsQueue canDecide={false} />
     </div>
   )

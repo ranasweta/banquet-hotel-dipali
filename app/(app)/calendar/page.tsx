@@ -8,14 +8,7 @@ export default async function CalendarPage() {
   // date is opened. 3rem accounts for the layout's p-6 top and bottom padding.
   return (
     <div className="flex min-h-full flex-col gap-4">
-      <div>
-        <h1 className="text-2xl font-semibold">Venue calendar</h1>
-        <p className="text-sm text-muted-foreground">
-          Confirmed events across every venue. A hall can hold several functions a day as
-          long as their times don&apos;t overlap; a booking running past midnight shows as a
-          carryover on the next morning.
-        </p>
-      </div>
+      <h1 className="text-2xl font-semibold">Venue calendar</h1>
       <CalendarBoard />
     </div>
   )

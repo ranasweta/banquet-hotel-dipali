@@ -37,8 +37,8 @@ export default async function EditBookingPage({
           <h1 className="text-2xl font-semibold">{confirmedEdit ? 'Edit booking' : 'Continue proposal'}</h1>
           <p className="text-muted-foreground">
             {confirmedEdit
-              ? 'This booking is confirmed. Your edits — functions, rooms, contacts and dates — save as you make them, and the venue holds move with the functions.'
-              : 'Edit anything below and finish at Payment review — the dates block only once a 25% advance is recorded.'}
+              ? 'Edits save as you make them, and the venue holds move with the functions.'
+              : 'Finish at Payment review — the dates block once an advance is recorded.'}
           </p>
         </div>
         <Link href={`/bookings/${id}`} className="shrink-0 text-sm font-medium text-primary underline-offset-4 hover:underline">

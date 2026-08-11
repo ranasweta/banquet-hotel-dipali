@@ -316,8 +316,7 @@ export function LodgingCalendar() {
       {!selected && !loading && (
         <p className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           <Info className="size-3.5 shrink-0" />
-          Pick a date to see what is booked in each category and by whom. Counts are cumulative —
-          room numbers are assigned on the booking&apos;s own rooms tab.
+          Pick a date to see what is booked, and by whom.
         </p>
       )}
     </div>

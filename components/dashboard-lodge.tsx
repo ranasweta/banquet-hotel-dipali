@@ -1,19 +1,22 @@
 import Link from 'next/link'
-import { BedDouble, LogIn, LogOut, DoorOpen, ClipboardList, ShieldCheck, CircleCheck } from 'lucide-react'
+import { BedDouble, LogIn, LogOut, DoorOpen, CheckCircle2, ShieldCheck, CircleCheck } from 'lucide-react'
 import type { LodgeDashboard as LodgeData, RoomMovement } from '@/lib/dashboard'
 import { Hero, KpiTile, SectionCard, EmptyState, formatDay } from '@/components/dashboard-shared'
+import { SignoffCard } from '@/components/signoff-card'
 import { cn } from '@/lib/utils'
 import { titleCase } from '@/lib/text'
 
 /**
- * Lodge Manager home: today's arrivals & departures, live occupancy per property, events whose
- * promised rooms aren't fully allocated (FR-4.5), and any 35+ allocation awaiting the Authority.
+ * Lodge Manager home: today's arrivals & departures, live occupancy for their lodge, the
+ * events waiting on their rooms sign-off, and any 35+ booking awaiting the Authority.
  */
 export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullName: string } }) {
-  const { arrivals, departures, occupancy, awaitingAllocation, pendingRoomApprovals } = data
+  const { arrivals, departures, occupancy, awaitingSignoff, pendingRoomApprovals } = data
   const totalRooms = occupancy.reduce((s, u) => s + u.total, 0)
   const occupied = occupancy.reduce((s, u) => s + u.occupied, 0)
-  const toAllocate = awaitingAllocation.reduce((s, e) => s + e.shortfall, 0)
+  // Guests, not rows: one line can be twelve rooms arriving together.
+  const arrivingRooms = arrivals.reduce((s, r) => s + r.count, 0)
+  const departingRooms = departures.reduce((s, r) => s + r.count, 0)
   const movement = arrivals.length + departures.length
 
   return (
@@ -25,7 +28,7 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
             <div>
               <h1 className="text-xl font-semibold sm:text-2xl">No arrivals or departures today</h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                {occupied} of {totalRooms} rooms occupied across all properties.
+                {occupied} of {totalRooms} rooms occupied.
               </p>
             </div>
           </div>
@@ -43,10 +46,10 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
       </Hero>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiTile icon={<LogIn className="size-5" aria-hidden />} value={arrivals.length} label="Check-ins today" tone={arrivals.length ? 'emerald' : 'slate'} />
-        <KpiTile icon={<LogOut className="size-5" aria-hidden />} value={departures.length} label="Check-outs today" tone={departures.length ? 'amber' : 'slate'} />
+        <KpiTile icon={<LogIn className="size-5" aria-hidden />} value={arrivingRooms} label="Rooms checking in" tone={arrivingRooms ? 'emerald' : 'slate'} />
+        <KpiTile icon={<LogOut className="size-5" aria-hidden />} value={departingRooms} label="Rooms checking out" tone={departingRooms ? 'amber' : 'slate'} />
         <KpiTile href="/rooms/calendar" icon={<DoorOpen className="size-5" aria-hidden />} value={`${occupied}/${totalRooms}`} label="Rooms occupied" tone="blue" />
-        <KpiTile href="/rooms/calendar" icon={<ClipboardList className="size-5" aria-hidden />} value={toAllocate} label="Rooms to allocate" tone={toAllocate ? 'amber' : 'emerald'} />
+        <KpiTile icon={<CheckCircle2 className="size-5" aria-hidden />} value={awaitingSignoff.length} label="Awaiting your sign-off" tone={awaitingSignoff.length ? 'amber' : 'emerald'} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -84,34 +87,7 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
             )}
           </SectionCard>
 
-          <SectionCard
-            icon={<ClipboardList className="size-4 text-muted-foreground" aria-hidden />}
-            title="Rooms to allocate"
-            note="promised, not yet assigned"
-          >
-            {awaitingAllocation.length === 0 ? (
-              <EmptyState text="Every event's promised rooms are allocated." />
-            ) : (
-              <ul className="space-y-2 text-sm">
-                {awaitingAllocation.map((e) => (
-                  <li key={e.eventId}>
-                    <Link href={`/bookings/${e.eventId}`} className="flex items-center justify-between gap-2 rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
-                      <span className="min-w-0">
-                        <span className="line-clamp-1 font-medium">{titleCase(e.guestName)}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {e.code}{e.firstDate ? ` · ${formatDay(e.firstDate)}` : ''}
-                        </span>
-                      </span>
-                      <span className="shrink-0 text-right">
-                        <span className="block font-semibold tabular-nums text-amber-700 dark:text-amber-300">{e.shortfall} to go</span>
-                        <span className="text-xs tabular-nums text-muted-foreground">{e.allocated}/{e.promised} allocated</span>
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SectionCard>
+          <SignoffCard rows={awaitingSignoff} designation="lodge_manager" />
         </div>
 
         <div className="space-y-6">
@@ -158,10 +134,13 @@ function MovementList({ label, empty, rows, dateLabel }: { label: string; empty:
       ) : (
         <ul className="space-y-1.5 text-sm">
           {rows.map((r) => (
-            <li key={r.allocId} className="flex items-center justify-between gap-2">
+            <li key={r.reqId} className="flex items-center justify-between gap-2">
               <span className="min-w-0">
                 <span className="line-clamp-1 font-medium">{titleCase(r.guestName)}</span>
-                <span className="text-xs text-muted-foreground">{r.unitName} · Room {r.roomNo}</span>
+                {/* Category and count, not a room number — reception assigns those on the day. */}
+                <span className="text-xs text-muted-foreground">
+                  {r.unitName} · {r.count} × {r.roomType.replace(/_/g, ' ')}
+                </span>
               </span>
               <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{dateLabel} {formatDay(r.otherDate)}</span>
             </li>

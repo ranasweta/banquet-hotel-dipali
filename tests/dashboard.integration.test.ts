@@ -4,7 +4,8 @@
  *   - Booking: today (confirmed-and-beyond, never enquiries/tomorrow), next-7-days, open
  *     enquiries, approvals (exceptions + change requests), 30-day balances;
  *   - Banquet: agenda carries menu state, menuGaps flags functions with no/draft menu;
- *   - Lodge: today's arrivals, live occupancy, promised-but-unallocated, 35+ approvals;
+ *   - Lodge: today's arrivals/departures and occupancy from the bulk booking, lodge scoping,
+ *     the events awaiting the rooms sign-off, 35+ approvals;
  *   - Maintenance: In Progress / Completed events with running totals;
  *   - getDashboardForRole dispatches each role to the right board.
  */
@@ -13,6 +14,7 @@ import { eq, sql } from 'drizzle-orm'
 
 const { getBookingDashboard, getBanquetDashboard, getLodgeDashboard, getMaintenanceDashboard, getDashboardForRole } =
   await import('@/lib/dashboard')
+const lock = await import('@/lib/lock')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -23,6 +25,7 @@ const d = hasDb ? describe : describe.skip
 if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping dashboard tests\n')
 
 const bm = { id: '' }
+const lodge = { id: '' }
 const ASOF = '2027-03-15'
 
 async function userId(role: string): Promise<string> {
@@ -42,9 +45,9 @@ async function tierId(name: string): Promise<string> {
   const [t] = await db.select({ id: schema.menuTiers.id }).from(schema.menuTiers).where(eq(schema.menuTiers.name, name)).limit(1)
   return t!.id
 }
-async function anyRoomId(): Promise<string> {
-  const [r] = (await db.execute(sql`SELECT id FROM rooms WHERE is_active LIMIT 1`)) as unknown as { id: string }[]
-  return r!.id
+async function unitId(name: string): Promise<string> {
+  const [u] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = ${name}`)) as unknown as { id: string }[]
+  return u!.id
 }
 async function makeEvent(status: string, proposalPaise = 0): Promise<string> {
   const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
@@ -93,6 +96,7 @@ beforeAll(async () => {
     await setup.end()
   }
   bm.id = await userId('booking_manager')
+  lodge.id = await userId('lodge_manager')
 }, 90_000)
 
 async function cleanup() {
@@ -200,33 +204,76 @@ d('getBanquetDashboard', () => {
   })
 })
 
+/**
+ * The board reads `room_requirements`, which IS the booking since rooms went bulk (rule 9).
+ * It used to read `room_allocations`, a table nothing has written since — so every tile read
+ * zero however full the lodge was. These tests would have caught that only if they had been
+ * written against the booking rather than against the allocation, which is what they are now.
+ */
 d('getLodgeDashboard', () => {
-  it('reports arrivals, occupancy, unallocated promises, and 35+ approvals', async () => {
+  it('reports arrivals, departures and occupancy from the bulk booking', async () => {
+    const palace = await unitId('Palace')
     const stay = await makeEvent('confirmed')
-    const room = await anyRoomId()
-    // A stay that starts today and spans it: an arrival today, and occupied now.
-    await db.execute(sql`
-      INSERT INTO room_allocations (event_id, room_id, stay, rate_paise, allocated_by)
-      VALUES (${stay}, ${room}, daterange(${ASOF}::date, ${ASOF}::date + 2, '[)'), 500000, ${bm.id})
-    `)
-    // A confirmed event promising rooms it hasn't been allocated, plus a 35+ approval in flight.
-    const gap = await makeEvent('confirmed')
-    await db.insert(schema.roomRequirements).values({ eventId: gap, roomType: 'deluxe', count: 5, checkIn: ASOF, checkOut: '2027-03-20' })
+    // Arrives today for two nights: an arrival now, occupied now, no departure until +2.
+    await db.insert(schema.roomRequirements).values({
+      eventId: stay, unitId: palace, roomType: 'deluxe', count: 3, checkIn: ASOF, checkOut: '2027-03-20',
+    })
+
+    const l = await getLodgeDashboard(ASOF)
+
+    const arrival = l.arrivals.find((a) => a.eventId === stay)
+    expect(arrival).toBeDefined()
+    // The count is the booking's, not one row per room — reception picks the rooms.
+    expect(arrival!.count).toBe(3)
+    expect(arrival!.unitName).toBe('Palace')
+    expect(l.departures.some((a) => a.eventId === stay)).toBe(false)
+
+    const palaceRow = l.occupancy.find((u) => u.name === 'Palace')!
+    expect(palaceRow.occupied).toBeGreaterThanOrEqual(3)
+    expect(palaceRow.available).toBe(Math.max(0, palaceRow.total - palaceRow.occupied))
+  })
+
+  it('is scoped to one lodge, and 35+ approvals still surface', async () => {
+    const palace = await unitId('Palace')
+    const regency = await unitId('Regency')
+    const here = await makeEvent('confirmed')
+    const elsewhere = await makeEvent('confirmed')
+    await db.insert(schema.roomRequirements).values([
+      { eventId: here, unitId: palace, roomType: 'deluxe', count: 2, checkIn: ASOF, checkOut: '2027-03-20' },
+      { eventId: elsewhere, unitId: regency, roomType: 'deluxe', count: 2, checkIn: ASOF, checkOut: '2027-03-20' },
+    ])
     await db.insert(schema.exceptions).values({
-      eventId: gap,
+      eventId: here,
       kind: 'room_allocation_35plus',
       payload: { requestedCount: 35, existingCount: 0 },
       raisedBy: bm.id,
     })
 
-    const l = await getLodgeDashboard(ASOF)
+    const scoped = await getLodgeDashboard(ASOF, palace)
+    expect(scoped.arrivals.some((a) => a.eventId === here)).toBe(true)
+    expect(scoped.arrivals.some((a) => a.eventId === elsewhere)).toBe(false)
+    expect(scoped.occupancy.every((u) => u.name === 'Palace')).toBe(true)
+    expect(scoped.pendingRoomApprovals.some((x) => x.eventId === here)).toBe(true)
+  })
 
-    expect(l.arrivals.some((a) => a.eventId === stay)).toBe(true)
-    expect(l.departures.some((a) => a.eventId === stay)).toBe(false) // check-out is +2, not today
-    expect(l.occupancy.reduce((s, u) => s + u.occupied, 0)).toBeGreaterThanOrEqual(1)
-    expect(l.occupancy.every((u) => u.available === u.total - u.occupied)).toBe(true)
-    expect(l.awaitingAllocation.find((g) => g.eventId === gap)?.shortfall).toBe(5)
-    expect(l.pendingRoomApprovals.some((x) => x.eventId === gap)).toBe(true)
+  it('lists the events waiting on the rooms sign-off, and drops them once signed', async () => {
+    const palace = await unitId('Palace')
+    const done = await makeEvent('completed')
+    await db.insert(schema.roomRequirements).values({
+      eventId: done, unitId: palace, roomType: 'deluxe', count: 1, checkIn: '2027-03-01', checkOut: '2027-03-02',
+    })
+    // A completed event with NO rooms: the checklist waives its lodge line, so it must not
+    // appear here either.
+    const noRooms = await makeEvent('completed')
+
+    const before = await getLodgeDashboard(ASOF, palace)
+    expect(before.awaitingSignoff.some((r) => r.eventId === done)).toBe(true)
+    expect(before.awaitingSignoff.some((r) => r.eventId === noRooms)).toBe(false)
+
+    await lock.signoff({ id: lodge.id, roleName: 'lodge_manager' }, done, 'lodge_manager')
+
+    const after = await getLodgeDashboard(ASOF, palace)
+    expect(after.awaitingSignoff.some((r) => r.eventId === done)).toBe(false)
   })
 })
 

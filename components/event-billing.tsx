@@ -43,6 +43,7 @@ type Ledger = {
   roomsPaise: number
   roomsTaxPaise: number
   discountPaise: number
+  maintenancePaise: number
   payablePaise: number
   shownGstPaise: number
   displayTotalPaise: number
@@ -86,6 +87,7 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
       <p className="-mt-3 text-xs text-muted-foreground">
         Venue, food &amp; add-ons {formatPaise(ledger.proposalTotalPaise)}
         {ledger.roomsPaise > 0 && <> · rooms {formatPaise(ledger.roomsPaise)} + 5% {formatPaise(ledger.roomsTaxPaise)}</>}
+        {ledger.maintenancePaise > 0 && <> · maintenance {formatPaise(ledger.maintenancePaise)}</>}
         {' · '}GST 18% {formatPaise(ledger.shownGstPaise)} is shown on the proposal and not
         collected, so the printed total reads {formatPaise(ledger.displayTotalPaise)}.
       </p>

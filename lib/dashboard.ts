@@ -214,6 +214,7 @@ export type BanquetDashboard = {
   upcoming: AgendaFunctionWithMenu[]
   changeRequests: PendingChangeRequest[]
   menuGaps: MenuGap[]
+  awaitingSignoff: SignoffRow[]
 }
 
 const agendaWithMenu = (dateCond: ReturnType<typeof sql>) => sql`
@@ -229,8 +230,12 @@ function coerceAgendaMenu(a: AgendaFunctionWithMenu): AgendaFunctionWithMenu {
 
 /** The Banquet Manager board: the floor/kitchen view — day agendas with menu state, change
  *  requests they decide (FR-1.9), and functions whose menu still isn't locked. */
-export async function getBanquetDashboard(asOf: string = todayLocal()): Promise<BanquetDashboard> {
-  const [today, upcoming, changeRequests, menuGaps] = await Promise.all([
+export async function getBanquetDashboard(
+  asOf: string = todayLocal(),
+  scopeManagerId?: string | null,
+): Promise<BanquetDashboard> {
+  const scope = scopeManagerId ?? null
+  const [today, upcoming, changeRequests, menuGaps, awaitingSignoff] = await Promise.all([
     db.execute(agendaWithMenu(sql`se.event_date = ${asOf}::date`)) as unknown as Promise<AgendaFunctionWithMenu[]>,
     db.execute(
       agendaWithMenu(sql`se.event_date > ${asOf}::date AND se.event_date <= ${asOf}::date + 7`),
@@ -248,32 +253,65 @@ export async function getBanquetDashboard(asOf: string = todayLocal()): Promise<
       ORDER BY se.event_date, se.start_time
       LIMIT 20
     `) as unknown as Promise<MenuGap[]>,
+    // The properties predicate matches lib/daysheet.ts: a function belongs to a manager
+    // through its venue OR, when the function took a bundle, through the bundle's members.
+    db.execute(
+      awaitingSignoffQuery(
+        'banquet_manager',
+        sql`(${scope}::uuid IS NULL OR EXISTS (
+               SELECT 1 FROM sub_events se
+                WHERE se.event_id = e.id
+                  AND (EXISTS (SELECT 1 FROM venues sv JOIN properties sp ON sp.id = sv.property_id
+                                WHERE sv.id = se.venue_id AND sp.banquet_manager_id = ${scope}::uuid)
+                    OR EXISTS (SELECT 1 FROM venue_bundle_members vbm
+                                 JOIN venues sv ON sv.id = vbm.venue_id
+                                 JOIN properties sp ON sp.id = sv.property_id
+                                WHERE vbm.bundle_id = se.bundle_id AND sp.banquet_manager_id = ${scope}::uuid))))`,
+      ),
+    ) as unknown as Promise<SignoffRow[]>,
   ])
-  return { asOf, today: today.map(coerceAgendaMenu), upcoming: upcoming.map(coerceAgendaMenu), changeRequests, menuGaps }
+  return {
+    asOf,
+    today: today.map(coerceAgendaMenu),
+    upcoming: upcoming.map(coerceAgendaMenu),
+    changeRequests,
+    menuGaps,
+    awaitingSignoff,
+  }
 }
 
 // ── Lodge Manager ────────────────────────────────────────────────────────────
 
+/**
+ * A booking checking in or out today.
+ *
+ * Read from `room_requirements`, which IS the booking since rooms went bulk (client, 21 Jul
+ * 2026; CLAUDE.md rule 9). It used to read `room_allocations` — a table nothing has written
+ * since, so every tile on this board read zero for weeks while the lodge was full.
+ *
+ * There is no room number to show, and that is not a gap: a booking reserves a lodge, a
+ * category and a count, and reception picks the actual rooms on the day.
+ */
 export type RoomMovement = {
-  allocId: string
+  reqId: string
   eventId: string
   code: string
   guestName: string
-  roomNo: string
   unitName: string
+  roomType: string
+  count: number
   otherDate: string // arrivals: check-out; departures: check-in
 }
 
 export type Occupancy = { unitId: string; name: string; total: number; occupied: number; available: number }
 
-export type AllocationGap = {
+/** An event waiting on this role's lock sign-off — the checklist line only they can clear. */
+export type SignoffRow = {
   eventId: string
   code: string
   guestName: string
-  firstDate: string | null
-  promised: number
-  allocated: number
-  shortfall: number
+  lastDate: string | null
+  status: string
 }
 
 export type LodgeDashboard = {
@@ -281,73 +319,119 @@ export type LodgeDashboard = {
   arrivals: RoomMovement[]
   departures: RoomMovement[]
   occupancy: Occupancy[]
-  awaitingAllocation: AllocationGap[]
+  awaitingSignoff: SignoffRow[]
   pendingRoomApprovals: ExceptionRow[]
 }
 
 const movementSelect = sql`
-  a.id AS "allocId", a.event_id AS "eventId", e.code, e.guest_name AS "guestName",
-  r.room_no AS "roomNo", u.name AS "unitName"`
+  rr.id AS "reqId", rr.event_id AS "eventId", e.code, e.guest_name AS "guestName",
+  u.name AS "unitName", rr.room_type AS "roomType", rr.count`
 const movementFrom = sql`
-  FROM room_allocations a
-  JOIN rooms r ON r.id = a.room_id
-  JOIN lodging_units u ON u.id = r.unit_id
-  JOIN events e ON e.id = a.event_id AND e.status <> 'cancelled'`
+  FROM room_requirements rr
+  JOIN lodging_units u ON u.id = rr.unit_id
+  JOIN events e ON e.id = rr.event_id AND e.status IN ('confirmed','in_progress','completed','locked','billed','closed')`
 
-/** The Lodge Manager board: today's arrivals/departures, live occupancy per property, events
- *  whose promised rooms aren't fully allocated yet (FR-4.5), and 35+ approvals in flight. */
-export async function getLodgeDashboard(asOf: string = todayLocal()): Promise<LodgeDashboard> {
-  const [arrivals, departures, occupancy, awaitingAllocation, exceptions] = await Promise.all([
+/**
+ * Events sitting in a state where a sign-off can be recorded, that this designation has not
+ * signed. `lock_signoffs` is per event and per designation, and `lockChecklist` treats the
+ * banquet line — and the lodge line on any booking with rooms — as blocking, so an event with
+ * one outstanding can never be locked, invoiced or billed.
+ *
+ * Scoped to what the reader is responsible for, so the Palace manager is not asked to sign for
+ * Regency. An event spanning several properties appears for each manager involved and the
+ * first signature satisfies it, which matches the service: the sign-off belongs to the ROLE,
+ * not to one person (`lib/lock.ts` checks `actor.roleName === designation`).
+ */
+function awaitingSignoffQuery(
+  designation: 'banquet_manager' | 'lodge_manager',
+  scope: ReturnType<typeof sql>,
+) {
+  return sql`
+    SELECT e.id AS "eventId", e.code, e.guest_name AS "guestName", e.status::text AS status,
+           (SELECT max(se.event_date)::text FROM sub_events se WHERE se.event_id = e.id) AS "lastDate"
+    FROM events e
+    WHERE e.status IN ('in_progress','completed')
+      AND NOT EXISTS (
+        SELECT 1 FROM lock_signoffs ls
+         WHERE ls.event_id = e.id AND ls.designation = ${designation}::signoff_role)
+      AND ${scope}
+    ORDER BY 5 DESC NULLS LAST, e.code
+    LIMIT 20
+  `
+}
+
+/**
+ * The Lodge Manager board: today's arrivals/departures, live occupancy per lodge, the events
+ * waiting on their rooms sign-off, and 35+ approvals in flight.
+ *
+ * Scoped to the manager's own lodge (mig 0013). A null scope means every lodge, which is what
+ * the Auditor gets; a Lodge Manager with no lodge set sees an empty board rather than an
+ * error, because the home page is the wrong place to throw a configuration mistake.
+ *
+ * "Rooms to allocate" is gone with the table behind it. Rooms are booked in bulk and there is
+ * no allocation step left to be behind on (rule 9) — the tile counted a shortfall against
+ * `room_allocations`, so it read the entire promised count as outstanding, for ever.
+ */
+export async function getLodgeDashboard(
+  asOf: string = todayLocal(),
+  scopeUnitId?: string | null,
+): Promise<LodgeDashboard> {
+  const unitScope = scopeUnitId ?? null
+  const [arrivals, departures, occupancy, awaitingSignoff, exceptions] = await Promise.all([
     db.execute(sql`
-      SELECT ${movementSelect}, upper(a.stay)::text AS "otherDate"
+      SELECT ${movementSelect}, rr.check_out::text AS "otherDate"
       ${movementFrom}
-      WHERE lower(a.stay) = ${asOf}::date
-      ORDER BY u.name, r.room_no
+      WHERE rr.check_in = ${asOf}::date
+        AND (${unitScope}::uuid IS NULL OR rr.unit_id = ${unitScope}::uuid)
+      ORDER BY u.name, rr.room_type
     `) as unknown as Promise<RoomMovement[]>,
     db.execute(sql`
-      SELECT ${movementSelect}, lower(a.stay)::text AS "otherDate"
+      SELECT ${movementSelect}, rr.check_in::text AS "otherDate"
       ${movementFrom}
-      WHERE upper(a.stay) = ${asOf}::date
-      ORDER BY u.name, r.room_no
+      WHERE rr.check_out = ${asOf}::date
+        AND (${unitScope}::uuid IS NULL OR rr.unit_id = ${unitScope}::uuid)
+      ORDER BY u.name, rr.room_type
     `) as unknown as Promise<RoomMovement[]>,
+    // Occupied is the SUM OF COUNTS held across today, not a count of assigned rooms — the
+    // same arithmetic the lodging calendar uses, so the two boards cannot disagree.
     db.execute(sql`
       SELECT u.id AS "unitId", u.name,
-             count(r.id)::int AS total,
-             count(a.id)::int AS occupied
+             (SELECT count(*)::int FROM rooms r WHERE r.unit_id = u.id AND r.is_active) AS total,
+             COALESCE((
+               SELECT sum(rr.count)::int
+               FROM room_requirements rr
+               JOIN events e ON e.id = rr.event_id
+              WHERE rr.unit_id = u.id
+                AND e.status IN ('confirmed','in_progress','completed','locked','billed','closed')
+                AND ${asOf}::date >= rr.check_in AND ${asOf}::date < rr.check_out
+             ), 0) AS occupied
       FROM lodging_units u
-      LEFT JOIN rooms r ON r.unit_id = u.id AND r.is_active
-      LEFT JOIN room_allocations a ON a.room_id = r.id AND a.stay @> ${asOf}::date
-      GROUP BY u.id, u.name
+      WHERE (${unitScope}::uuid IS NULL OR u.id = ${unitScope}::uuid)
       ORDER BY u.name
     `) as unknown as Promise<{ unitId: string; name: string; total: number; occupied: number }[]>,
-    db.execute(sql`
-      WITH req AS (SELECT event_id, sum(count)::int AS promised FROM room_requirements GROUP BY event_id),
-           alloc AS (SELECT event_id, count(*)::int AS allocated FROM room_allocations GROUP BY event_id)
-      SELECT e.id AS "eventId", e.code, e.guest_name AS "guestName", e.first_date::text AS "firstDate",
-             COALESCE(req.promised, 0) AS promised, COALESCE(alloc.allocated, 0) AS allocated
-      FROM events e
-      LEFT JOIN req ON req.event_id = e.id
-      LEFT JOIN alloc ON alloc.event_id = e.id
-      WHERE e.status IN ('confirmed','in_progress','completed')
-        AND COALESCE(req.promised, 0) > COALESCE(alloc.allocated, 0)
-      ORDER BY e.first_date NULLS LAST, e.code
-    `) as unknown as Promise<Omit<AllocationGap, 'shortfall'>[]>,
+    db.execute(
+      awaitingSignoffQuery(
+        'lodge_manager',
+        // Only bookings that actually took rooms: the checklist waives the lodge line when
+        // there are none (`!hasRooms || lodge` in lib/lock.ts).
+        sql`EXISTS (SELECT 1 FROM room_requirements rr WHERE rr.event_id = e.id
+                     AND (${unitScope}::uuid IS NULL OR rr.unit_id = ${unitScope}::uuid))`,
+      ),
+    ) as unknown as Promise<SignoffRow[]>,
     listExceptions({ status: 'pending' }),
   ])
   return {
     asOf,
-    arrivals,
-    departures,
+    arrivals: arrivals.map((r) => ({ ...r, count: Number(r.count) })),
+    departures: departures.map((r) => ({ ...r, count: Number(r.count) })),
     occupancy: occupancy.map((o) => {
       const total = Number(o.total)
       const occupied = Number(o.occupied)
-      return { unitId: o.unitId, name: o.name, total, occupied, available: total - occupied }
+      // Clamped: the inventory cap makes over-booking impossible, but a lodge whose rooms were
+      // deactivated after a booking was taken would otherwise show negative rooms free.
+      return { unitId: o.unitId, name: o.name, total, occupied, available: Math.max(0, total - occupied) }
     }),
-    awaitingAllocation: awaitingAllocation.map((g) => {
-      const promised = Number(g.promised)
-      const allocated = Number(g.allocated)
-      return { ...g, promised, allocated, shortfall: promised - allocated }
-    }),
+    awaitingSignoff,
     pendingRoomApprovals: exceptions.filter((x) => x.kind === 'room_allocation_35plus'),
   }
 }
@@ -579,12 +663,18 @@ export type RoleDashboard =
  * only reached by a role that doesn't exist yet: all seven are matched explicitly, deliberately,
  * so a new role can never silently inherit a board full of data it cannot act on.
  */
-export async function getDashboardForRole(roleName: string, asOf: string = todayLocal()): Promise<RoleDashboard> {
+export async function getDashboardForRole(
+  roleName: string,
+  asOf: string = todayLocal(),
+  // Who is reading, for the two boards that are scoped to a unit. Optional so a caller that
+  // only wants the shape — the dispatch tests — need not build a user.
+  reader?: { id: string; lodgingUnitId: string | null },
+): Promise<RoleDashboard> {
   switch (roleName) {
     case 'banquet_manager':
-      return { kind: 'banquet', ...(await getBanquetDashboard(asOf)) }
+      return { kind: 'banquet', ...(await getBanquetDashboard(asOf, reader?.id ?? null)) }
     case 'lodge_manager':
-      return { kind: 'lodge', ...(await getLodgeDashboard(asOf)) }
+      return { kind: 'lodge', ...(await getLodgeDashboard(asOf, reader?.lodgingUnitId ?? null)) }
     case 'maintenance':
       return { kind: 'maintenance', ...(await getMaintenanceDashboard(asOf)) }
     case 'chef':

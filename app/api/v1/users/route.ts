@@ -5,26 +5,59 @@ import { z } from 'zod'
 import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
+import { applyUserScope } from '@/lib/user-scope'
 import { badRequest, conflict, ok, route } from '@/lib/api'
 
-/** GET /users — all users with their role. Never returns password hashes. */
+/**
+ * GET /users — all users with their role and the unit they answer for. Never returns
+ * password hashes.
+ *
+ * The lodges and properties come back with the users because the screen that assigns them
+ * lives here: fetching them from /booking-options instead would make the Users page depend
+ * on a `bookings` permission it has no business holding.
+ */
 export const GET = route(async () => {
   await requirePermission('roles_users', 'view')
-  const users = await db
-    .select({
-      id: schema.users.id,
-      fullName: schema.users.fullName,
-      mobile: schema.users.mobile,
-      email: schema.users.email,
-      isActive: schema.users.isActive,
-      roleId: schema.users.roleId,
-      roleName: schema.roles.name,
-      createdAt: schema.users.createdAt,
-    })
-    .from(schema.users)
-    .innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId))
-    .orderBy(asc(schema.users.fullName))
-  return ok({ users })
+  const [users, lodgingUnits, properties] = await Promise.all([
+    db
+      .select({
+        id: schema.users.id,
+        fullName: schema.users.fullName,
+        mobile: schema.users.mobile,
+        email: schema.users.email,
+        isActive: schema.users.isActive,
+        roleId: schema.users.roleId,
+        roleName: schema.roles.name,
+        lodgingUnitId: schema.users.lodgingUnitId,
+        createdAt: schema.users.createdAt,
+      })
+      .from(schema.users)
+      .innerJoin(schema.roles, eq(schema.roles.id, schema.users.roleId))
+      .orderBy(asc(schema.users.fullName)),
+    db
+      .select({ id: schema.lodgingUnits.id, name: schema.lodgingUnits.name })
+      .from(schema.lodgingUnits)
+      .orderBy(asc(schema.lodgingUnits.name)),
+    db
+      .select({
+        id: schema.properties.id,
+        name: schema.properties.name,
+        banquetManagerId: schema.properties.banquetManagerId,
+      })
+      .from(schema.properties)
+      .orderBy(asc(schema.properties.name)),
+  ])
+
+  const owned = new Map<string, string[]>()
+  for (const p of properties) {
+    if (p.banquetManagerId) owned.set(p.banquetManagerId, [...(owned.get(p.banquetManagerId) ?? []), p.id])
+  }
+
+  return ok({
+    users: users.map((u) => ({ ...u, propertyIds: owned.get(u.id) ?? [] })),
+    lodgingUnits,
+    properties,
+  })
 })
 
 const createSchema = z.object({
@@ -33,6 +66,10 @@ const createSchema = z.object({
   email: z.email().max(200).optional().or(z.literal('')).transform((v) => v || undefined),
   roleId: z.uuid(),
   password: z.string().min(8).max(200),
+  // The unit the new user answers for. Which one applies is decided by their role — see
+  // lib/user-scope.ts; anything sent for a role that cannot use it is released, not kept.
+  lodgingUnitId: z.uuid().nullish(),
+  propertyIds: z.array(z.uuid()).optional(),
 })
 
 /** POST /users — create a user. */
@@ -42,7 +79,7 @@ export const POST = route(async (req: NextRequest) => {
 
   const created = await db.transaction(async (tx) => {
     const [role] = await tx
-      .select({ id: schema.roles.id })
+      .select({ id: schema.roles.id, name: schema.roles.name })
       .from(schema.roles)
       .where(eq(schema.roles.id, input.roleId))
       .limit(1)
@@ -80,6 +117,11 @@ export const POST = route(async (req: NextRequest) => {
       action: 'insert',
       field: 'full_name',
       newValue: input.fullName,
+    })
+
+    await applyUserScope(tx, actor, row!.id, role.name, {
+      lodgingUnitId: input.lodgingUnitId ?? null,
+      propertyIds: input.propertyIds ?? [],
     })
     return row!
   })
