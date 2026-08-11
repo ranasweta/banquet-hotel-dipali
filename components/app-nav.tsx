@@ -9,6 +9,7 @@ import {
   BadgeCheck,
   BarChart3,
   BedDouble,
+  BookOpen,
   CalendarDays,
   ChefHat,
   FileText,
@@ -53,6 +54,8 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   { href: '/admin/menus', label: 'Menu master', module: 'menu_master', icon: UtensilsCrossed },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users', icon: ShieldCheck },
   { href: '/admin/users', label: 'Users', module: 'roles_users', icon: Users },
+  // No module: how to work your own screens is not something a role can be denied.
+  { href: '/manual', label: 'User manual', icon: BookOpen },
 ]
 
 const STORAGE_KEY = 'dipali:nav-collapsed'
