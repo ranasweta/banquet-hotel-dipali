@@ -7,8 +7,6 @@ import { proposalDocument, type ProposalDocument } from '@/lib/proposal'
 import { summarizeException, settleException, DECIDER_ROLES, type DecideAction } from '@/lib/approvals'
 import { settleChangeRequest } from '@/lib/change-requests'
 import { applyGmProposalEdits, type GmProposalEdits } from '@/lib/gm-authority'
-import { pushToUsers, raisersOf } from '@/lib/push'
-import { plural } from '@/lib/text'
 
 /**
  * Approval BUNDLES (client's lead, 1 Aug 2026).
@@ -311,9 +309,8 @@ export async function decideBundle(
   )
   if (!decisions.length && !hasEdits) throw conflict('Nothing to decide and nothing to change.')
 
-  let result: DecideBundleResult
   try {
-    result = await db.transaction(async (tx) => {
+    return await db.transaction(async (tx) => {
       let changes: string[] = []
       let invoiceReissued = false
       let invoiceNo: string | null = null
@@ -393,25 +390,6 @@ export async function decideBundle(
     }
     throw err
   }
-
-  // After the commit. The raiser is usually a Booking Manager mid-conversation with the guest
-  // — whether the GM said yes is the single thing they are waiting on, so it is worth a
-  // banner rather than the next poll of the bell. One push per decision, not per ask: five
-  // separate banners for one proposal is a wall nobody reads.
-  if (result.settled.length > 0) {
-    const raisers = await raisersOf(result.settled.map((s) => s.id))
-    const approved = result.settled.filter((s) => s.status.startsWith('approved')).length
-    await pushToUsers(raisers, {
-      title: 'The GM has decided',
-      body:
-        approved === result.settled.length
-          ? `${plural(result.settled.length, 'request')} approved`
-          : `${approved} of ${result.settled.length} approved — open the booking to see which`,
-      href: `/bookings/${eventId}`,
-      tag: `bundle-${eventId}`,
-    })
-  }
-  return result
 }
 
 /** True when the GM's own menu edit has already answered this exception. */

@@ -876,24 +876,3 @@ export const chefRequests = pgTable("chef_requests", {
 		}),
 	check("chef_requests_status_chk", sql`status = ANY (ARRAY['pending'::text, 'priced'::text, 'declined'::text])`),
 ]);
-
-// Web push endpoints, one row per device (migration 0027). Keyed by the browser's endpoint
-// URL, which is globally unique, so re-subscribing on a device re-points the existing row.
-export const pushSubscriptions = pgTable("push_subscriptions", {
-	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
-	userId: uuid("user_id").notNull(),
-	endpoint: text().notNull(),
-	p256Dh: text("p256dh").notNull(),
-	auth: text().notNull(),
-	userAgent: text("user_agent"),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	lastSeen: timestamp("last_seen", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table) => [
-	index("push_subscriptions_user").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
-	foreignKey({
-			columns: [table.userId],
-			foreignColumns: [users.id],
-			name: "push_subscriptions_user_id_fkey"
-		}).onDelete("cascade"),
-	unique("push_subscriptions_endpoint_key").on(table.endpoint),
-]);

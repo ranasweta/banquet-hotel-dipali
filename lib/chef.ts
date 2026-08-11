@@ -4,8 +4,6 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
 import { recomputeProposalTotal } from '@/lib/pricing'
-import { formatPaise } from '@/lib/money'
-import { pushToUsers, usersInRoles } from '@/lib/push'
 
 /**
  * Chef delicacy requests (client, 19 Jul 2026).
@@ -64,7 +62,7 @@ export async function requestDelicacy(
   if (!text) throw badRequest('Describe what the guest is asking for')
   if (text.length > 300) throw badRequest('Keep the request under 300 characters')
 
-  const created = await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const ctx = await loadSub(tx, subEventId)
     if (LOCKED_STATES.has(ctx.status)) throw conflict('This event is locked — its menus can no longer change.')
 
@@ -83,16 +81,6 @@ export async function requestDelicacy(
     })
     return { id: row!.id }
   })
-
-  // AFTER the commit, and never inside it: a push that fails must not roll back the request
-  // it was announcing. `pushToUsers` swallows its own errors for the same reason.
-  await pushToUsers(await usersInRoles([...PRICER_ROLES]), {
-    title: 'New chef request',
-    body: text,
-    href: '/chef',
-    tag: `delicacy-${created.id}`,
-  })
-  return created
 }
 
 /**
@@ -114,7 +102,7 @@ export async function priceDelicacy(
     }
   }
 
-  const decided = await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
     const [req] = await tx
       .select()
       .from(schema.chefRequests)
@@ -153,27 +141,8 @@ export async function priceDelicacy(
       oldValue: 'pending',
       newValue: declining ? 'declined' : String(input.chargePaise),
     })
-    return {
-      id: requestId,
-      status: declining ? 'declined' : 'priced',
-      requestedBy: req.requestedBy,
-      description: req.description,
-      eventId: ctx.eventId,
-    }
+    return { id: requestId, status: declining ? 'declined' : 'priced' }
   })
-
-  // Back to whoever asked. They are usually mid-proposal with the guest in front of them, so
-  // the answer is worth a banner rather than waiting for the next poll of the bell.
-  await pushToUsers([decided.requestedBy], {
-    title: decided.status === 'priced' ? 'Chef priced your request' : 'Chef declined your request',
-    body:
-      decided.status === 'priced'
-        ? `${decided.description} — ${formatPaise(input.chargePaise!)}/plate`
-        : decided.description,
-    href: `/bookings/${decided.eventId}`,
-    tag: `delicacy-${decided.id}`,
-  })
-  return { id: decided.id, status: decided.status }
 }
 
 /** Total per-plate addition from priced delicacies on a function. */

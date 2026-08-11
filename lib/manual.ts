@@ -387,35 +387,7 @@ const BANQUET_MANAGER: RoleGuide = {
   ],
 }
 
-/**
- * The same for everyone, so it is written once and appended to each guide rather than copied
- * into three — three copies is three chances for one of them to go stale.
- */
-const ON_YOUR_PHONE: ManualSection = {
-  heading: 'On your phone',
-  steps: [
-    {
-      title: 'Install it',
-      body: 'Open the site in Chrome (Android) or Safari (iPhone) and choose “Add to Home Screen”. You get an icon like any other app, and it opens full-screen with no browser bar.',
-      note: 'It is the same system, not a copy — whatever is deployed is what you see, so there is no app to update and no chance of your phone showing a different answer from the counter.',
-    },
-    {
-      title: 'Turn on notifications',
-      body: 'Press “Notify me on this phone” at the bottom of your dashboard, and allow it when the phone asks. You will be told when something in your own queue changes — the GM deciding your request, the Chef pricing a delicacy.',
-      note: 'It is per device, so do it on each phone you use. If you say No when the phone asks, it will not ask again — you would have to allow notifications for the site in your browser settings.',
-    },
-    {
-      title: 'It does not work offline',
-      body: 'Everything you see is read live, so a lawn with no signal shows nothing rather than yesterday’s copy.',
-      note: 'That is deliberate. A cached menu that has since changed, or a room count that is no longer free, is worse than an honest blank screen.',
-    },
-  ],
-}
-
-export const MANUAL: RoleGuide[] = [BOOKING_MANAGER, LODGE_MANAGER, BANQUET_MANAGER].map((g) => ({
-  ...g,
-  sections: [...g.sections, ON_YOUR_PHONE],
-}))
+export const MANUAL: RoleGuide[] = [BOOKING_MANAGER, LODGE_MANAGER, BANQUET_MANAGER]
 
 /** The guide for a role, or null when that role has no manual yet. */
 export function guideFor(roleName: string): RoleGuide | null {

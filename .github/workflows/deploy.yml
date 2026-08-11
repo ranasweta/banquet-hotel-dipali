@@ -4,8 +4,6 @@
 #   GCP_SA_KEY       service account JSON key, roles:
 #                    artifactregistry.writer, run.admin, iam.serviceAccountUser
 #   DATABASE_URL, SESSION_SECRET, STORAGE_KEY, CRON_SECRET
-#   VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY  push notifications for the installed app; without
-#                    them the app still installs and push is inert (npx web-push generate-vapid-keys)
 #
 # Migrations are NOT run here — `pnpm migrate` still runs from a workstation and must
 # finish BEFORE this workflow deploys, or the new code queries columns that do not exist
@@ -54,8 +52,6 @@ jobs:
           SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
           STORAGE_KEY: ${{ secrets.STORAGE_KEY }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
-          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
         run: |
           gcloud run deploy "$SERVICE" \
             --image="$IMAGE:$GITHUB_SHA" \
@@ -64,4 +60,4 @@ jobs:
             --cpu=1 --memory=1Gi \
             --min-instances=1 --max-instances=1 \
             --allow-unauthenticated \
-            --set-env-vars="^##^DATABASE_URL=${DATABASE_URL}##SESSION_SECRET=${SESSION_SECRET}##STORAGE_KEY=${STORAGE_KEY}##CRON_SECRET=${CRON_SECRET}##VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY}##VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY}##DB_POOL_MAX=10"
+            --set-env-vars="^##^DATABASE_URL=${DATABASE_URL}##SESSION_SECRET=${SESSION_SECRET}##STORAGE_KEY=${STORAGE_KEY}##CRON_SECRET=${CRON_SECRET}##DB_POOL_MAX=10"
