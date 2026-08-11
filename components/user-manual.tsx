@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Image from 'next/image'
 import { MANUAL, type RoleGuide } from '@/lib/manual'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -57,6 +58,20 @@ export function UserManual({ roleName }: { roleName: string }) {
                     >
                       {step.note}
                     </p>
+                  ) : null}
+                  {/* The screen itself. Unoptimised on purpose — these are already-sized PNGs
+                      of the app, and routing them through the image optimiser costs a
+                      transform per screenshot for no gain. `h-auto` keeps the aspect ratio
+                      once `w-full` has scaled it down on a narrow window. */}
+                  {step.image ? (
+                    <Image
+                      src={step.image.src}
+                      alt={step.image.alt}
+                      width={step.image.width}
+                      height={step.image.height}
+                      unoptimized
+                      className="mt-2 h-auto w-full max-w-2xl rounded-lg border shadow-sm"
+                    />
                   ) : null}
                 </li>
               ))}
