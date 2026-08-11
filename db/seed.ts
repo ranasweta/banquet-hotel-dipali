@@ -16,6 +16,7 @@
  *        pnpm seed --reset --force  (wipe even if events exist — destroys them)
  *        pnpm seed --test           (uses TEST_DATABASE_URL)
  */
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import bcrypt from 'bcryptjs'
 import { createClient, type Sql, type Tx } from './client'
@@ -60,6 +61,19 @@ async function reset(sql: Tx, force: boolean, log: (m: string) => void) {
   log(`  - masters truncated`)
 }
 
+/** Reads db/user-passwords.local.json if it exists. Never logs a password. */
+function loadUserPasswords(log: (m: string) => void): Map<string, string> {
+  const file = resolve(import.meta.dirname, 'user-passwords.local.json')
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as Record<string, string>
+    const map = new Map(Object.entries(parsed))
+    log(`  - per-user passwords: ${map.size} from user-passwords.local.json`)
+    return map
+  } catch {
+    return new Map()
+  }
+}
+
 export async function seed(
   sql: Sql,
   opts: { reset?: boolean; force?: boolean; password?: string } = {},
@@ -73,7 +87,17 @@ export async function seed(
   if (!process.env.SEED_PASSWORD && !opts.password) {
     log('  ! SEED_PASSWORD not set — seeding users with the default dev password')
   }
-  const passwordHash = await bcrypt.hash(password, 10)
+
+  // Real per-user passwords, if the operator has put them somewhere this repo will never
+  // commit: db/user-passwords.local.json, `{ "<login_id>": "<password>" }`, gitignored.
+  // A staff password written into masters.ts would be in git for ever, readable by anyone
+  // who clones the repo — so it is not the fallback, and its absence is not an error.
+  // Anyone the file does not name gets SEED_PASSWORD, exactly as before.
+  const perUser = loadUserPasswords(log)
+  const hashFor = new Map<string, string>()
+  for (const u of USERS) {
+    hashFor.set(u.loginId, await bcrypt.hash(perUser.get(u.loginId) ?? password, 10))
+  }
 
   const counts: SeedCounts = {}
 
@@ -296,15 +320,19 @@ export async function seed(
       INSERT INTO users ${tx(
         USERS.map((u) => ({
           full_name: u.fullName,
+          login_id: u.loginId,
           mobile: u.mobile,
           email: u.email ?? null,
-          password_hash: passwordHash,
+          password_hash: hashFor.get(u.loginId)!,
           role_id: roleId.get(u.role)!,
         })),
-        'full_name', 'mobile', 'email', 'password_hash', 'role_id',
+        'full_name', 'login_id', 'mobile', 'email', 'password_hash', 'role_id',
       )}
-      ON CONFLICT (mobile) DO UPDATE SET
+      -- Inferred against the functional index users_login_id_lower_key (migration 0027);
+      -- a bare (login_id) matches no constraint, since uniqueness is on lower(login_id).
+      ON CONFLICT ((lower(login_id))) DO UPDATE SET
         full_name = EXCLUDED.full_name,
+        mobile = EXCLUDED.mobile,
         email = EXCLUDED.email,
         role_id = EXCLUDED.role_id`
     counts.users = USERS.length

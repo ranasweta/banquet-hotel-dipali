@@ -28,7 +28,10 @@ import {
 type User = {
   id: string
   fullName: string
-  mobile: string
+  /** What they type to sign in (mig 0027). Unique case-insensitively. */
+  loginId: string
+  /** Contact information only since 0027 — may be absent. */
+  mobile: string | null
   email: string | null
   isActive: boolean
   roleId: string
@@ -44,6 +47,7 @@ type Property = { id: string; name: string; banquetManagerId: string | null }
 
 const blankForm = {
   fullName: '',
+  loginId: '',
   mobile: '',
   email: '',
   roleId: '',
@@ -156,11 +160,21 @@ export function UsersAdmin() {
                 required
               />
             </Field>
-            <Field label="Mobile">
+            <Field label="ID (this is their login)">
+              <Input
+                value={form.loginId}
+                onChange={(e) => setForm({ ...form, loginId: e.target.value })}
+                placeholder="e.g. booking1"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                required
+              />
+            </Field>
+            <Field label="Mobile (optional)">
               <Input
                 value={form.mobile}
                 onChange={(e) => setForm({ ...form, mobile: e.target.value })}
-                required
               />
             </Field>
             <Field label="Email (optional)">
@@ -222,6 +236,7 @@ export function UsersAdmin() {
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
+              <TableHead>ID</TableHead>
               <TableHead>Mobile</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Role</TableHead>
@@ -233,7 +248,7 @@ export function UsersAdmin() {
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-muted-foreground">
+                <TableCell colSpan={8} className="text-muted-foreground">
                   Loading…
                 </TableCell>
               </TableRow>
@@ -242,7 +257,8 @@ export function UsersAdmin() {
                 <Fragment key={u.id}>
                 <TableRow className={u.isActive ? '' : 'opacity-60'}>
                   <TableCell className="font-medium">{u.fullName}</TableCell>
-                  <TableCell>{u.mobile}</TableCell>
+                  <TableCell className="font-mono text-sm">{u.loginId}</TableCell>
+                  <TableCell>{u.mobile ?? '—'}</TableCell>
                   <TableCell>{u.email ?? '—'}</TableCell>
                   <TableCell>{formatName(u.roleName)}</TableCell>
                   <TableCell
@@ -311,7 +327,7 @@ export function UsersAdmin() {
                 </TableRow>
                 {editingId === u.id ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="bg-muted/40">
+                    <TableCell colSpan={8} className="bg-muted/40">
                       <EditUser
                         user={u}
                         roles={roles}
@@ -445,7 +461,8 @@ function EditUser({
 }) {
   const [draft, setDraft] = useState({
     fullName: user.fullName,
-    mobile: user.mobile,
+    loginId: user.loginId,
+    mobile: user.mobile ?? '',
     email: user.email ?? '',
     roleId: user.roleId,
     password: '',
@@ -476,11 +493,20 @@ function EditUser({
           required
         />
       </Field>
-      <Field label="Mobile (this is their login)">
+      <Field label="ID (this is their login)">
+        <Input
+          value={draft.loginId}
+          onChange={(e) => setDraft({ ...draft, loginId: e.target.value })}
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          required
+        />
+      </Field>
+      <Field label="Mobile (optional)">
         <Input
           value={draft.mobile}
           onChange={(e) => setDraft({ ...draft, mobile: e.target.value })}
-          required
         />
       </Field>
       <Field label="Email (optional)">

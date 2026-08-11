@@ -132,6 +132,7 @@ d('creating a scoped user', () => {
   it('refuses a Lodge Manager with no lodge', async () => {
     const res = await addUser({
       fullName: 'Lodge Nobody',
+      loginId: 'test001',
       mobile: '9111000001',
       roleId: roleIds.lodge_manager,
       password: 'password123',
@@ -145,6 +146,7 @@ d('creating a scoped user', () => {
     const unitId = await unitNamed('Palace')
     const res = await addUser({
       fullName: 'Lodge Palace Two',
+      loginId: 'test002',
       mobile: '9111000002',
       roleId: roleIds.lodge_manager,
       password: 'password123',
@@ -168,6 +170,7 @@ d('creating a scoped user', () => {
 
     const res = await addUser({
       fullName: 'Banquet Two Halls',
+      loginId: 'test003',
       mobile: '9111000003',
       roleId: roleIds.banquet_manager,
       password: 'password123',
@@ -182,6 +185,7 @@ d('creating a scoped user', () => {
     // Residency is lodging only — its manager owns no venues, and that is allowed.
     const none = await addUser({
       fullName: 'Banquet No Halls',
+      loginId: 'test004',
       mobile: '9111000004',
       roleId: roleIds.banquet_manager,
       password: 'password123',
@@ -199,6 +203,7 @@ d('a property moves rather than being shared', () => {
 
     const res = await addUser({
       fullName: 'Banquet Successor',
+      loginId: 'test005',
       mobile: '9111000005',
       roleId: roleIds.banquet_manager,
       password: 'password123',
@@ -225,6 +230,7 @@ d('changing a role releases the scope it can no longer use', () => {
     const unitId = await unitNamed('Regency')
     const res = await addUser({
       fullName: 'Lodge Then Booking',
+      loginId: 'test006',
       mobile: '9111000006',
       roleId: roleIds.lodge_manager,
       password: 'password123',
@@ -248,6 +254,7 @@ d('changing a role releases the scope it can no longer use', () => {
     const grand = await propertyNamed('Dipali Grand')
     const res = await addUser({
       fullName: 'Banquet Then Lodge',
+      loginId: 'test007',
       mobile: '9111000007',
       roleId: roleIds.banquet_manager,
       password: 'password123',
@@ -267,9 +274,10 @@ d('changing a role releases the scope it can no longer use', () => {
 })
 
 d('editing a user', () => {
-  it('changes the mobile they sign in with, and refuses a duplicate', async () => {
+  it('changes the ID they sign in with, and refuses a duplicate', async () => {
     const res = await addUser({
-      fullName: 'Mobile Mover',
+      fullName: 'Login Mover',
+      loginId: 'test008',
       mobile: '9111000008',
       roleId: roleIds.booking_manager,
       password: 'password123',
@@ -277,11 +285,17 @@ d('editing a user', () => {
     const { user } = await res.json()
     created.push(user.id)
 
-    const okRes = await editUser(user.id, { mobile: '9111000099' })
+    const okRes = await editUser(user.id, { loginId: 'test008.renamed' })
     expect(okRes.status).toBe(200)
 
-    const clash = await editUser(user.id, { mobile: '9000000001' }) // the seeded Auditor
+    const clash = await editUser(user.id, { loginId: 'admin' }) // the seeded Auditor
     expect(clash.status).toBe(409)
+
+    // Uniqueness is case-insensitive (migration 0027), so this is the same clash in
+    // different clothes — the check must lower() both sides or the database rejects it
+    // after the API has already said yes.
+    const cased = await editUser(user.id, { loginId: 'ADMIN' })
+    expect(cased.status).toBe(409)
   })
 
   it('returns the lodge and properties alongside the users', async () => {
@@ -297,6 +311,7 @@ d('deleting a user', () => {
   it('removes an account that has never recorded anything', async () => {
     const res = await addUser({
       fullName: 'Typed In Wrong',
+      loginId: 'test009',
       mobile: '9111000009',
       roleId: roleIds.booking_manager,
       password: 'password123',

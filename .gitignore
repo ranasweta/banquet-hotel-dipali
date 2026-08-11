@@ -55,3 +55,6 @@ key.json
 
 # Claude Code: share the skills, keep each machine's own permission allowlist local
 .claude/settings.local.json
+
+# Real staff passwords for the seed — never commit.
+db/user-passwords.local.json

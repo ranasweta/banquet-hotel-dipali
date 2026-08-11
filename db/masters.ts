@@ -318,28 +318,30 @@ export function permissionRows(): { role: RoleName; module: ModuleCode; action: 
  * admin, the event lock and billing (PRD §2.1), so the system is unusable without one,
  * yet no Auditor appears in the provisioning list. Flagged in SEED_ASSUMPTIONS.md.
  */
-export type UserSeed = { fullName: string; mobile: string; email?: string; role: RoleName }
+// `loginId` is what the person types to sign in (migration 0027); `mobile` is contact
+// information only, and no longer identifies anyone.
+export type UserSeed = { fullName: string; loginId: string; mobile: string; email?: string; role: RoleName }
 
 export const USERS: UserSeed[] = [
-  { fullName: 'Auditor / Admin', mobile: '9000000001', email: 'schemekart@gmail.com', role: 'auditor' },
-  { fullName: 'Higher Authority 1', mobile: '9000000002', role: 'higher_authority' },
-  { fullName: 'Higher Authority 2', mobile: '9000000003', role: 'higher_authority' },
-  { fullName: 'Lodge Manager — Palace', mobile: '9000000004', role: 'lodge_manager' },
-  { fullName: 'Lodge Manager — Regency', mobile: '9000000005', role: 'lodge_manager' },
-  { fullName: 'Lodge Manager — Residency', mobile: '9000000006', role: 'lodge_manager' },
-  { fullName: 'Booking Manager 1', mobile: '9000000007', role: 'booking_manager' },
-  { fullName: 'Booking Manager 2', mobile: '9000000008', role: 'booking_manager' },
-  { fullName: 'Booking Manager 3', mobile: '9000000009', role: 'booking_manager' },
-  { fullName: 'Booking Manager 4', mobile: '9000000010', role: 'booking_manager' },
-  { fullName: 'Booking Manager 5', mobile: '9000000011', role: 'booking_manager' },
+  { fullName: 'Auditor / Admin', loginId: 'IAUD5533', mobile: '9000000001', email: 'schemekart@gmail.com', role: 'auditor' },
+  { fullName: 'Higher Authority 1', loginId: 'HIGHAUTH01', mobile: '9000000002', role: 'higher_authority' },
+  { fullName: 'Higher Authority 2', loginId: 'HIGHAUTH02', mobile: '9000000003', role: 'higher_authority' },
+  { fullName: 'Lodge Manager — Palace', loginId: 'BANQ.PALACE', mobile: '9000000004', role: 'lodge_manager' },
+  { fullName: 'Lodge Manager — Regency', loginId: 'BANQ.REGENCY', mobile: '9000000005', role: 'lodge_manager' },
+  { fullName: 'Lodge Manager — Residency', loginId: 'BANQ.RESIDENCY', mobile: '9000000006', role: 'lodge_manager' },
+  { fullName: 'Booking Manager 1', loginId: 'Banq.booking01', mobile: '9000000007', role: 'booking_manager' },
+  { fullName: 'Booking Manager 2', loginId: 'Banq.booking02', mobile: '9000000008', role: 'booking_manager' },
+  { fullName: 'Booking Manager 3', loginId: 'Banq.booking03', mobile: '9000000009', role: 'booking_manager' },
+  { fullName: 'Booking Manager 4', loginId: 'Banq.booking04', mobile: '9000000010', role: 'booking_manager' },
+  { fullName: 'Booking Manager 5', loginId: 'Banq.booking05', mobile: '9000000011', role: 'booking_manager' },
   // Named by lodge (client, 22 Jul 2026), the same way the Lodge Managers are. Three
   // managers, three lodges. The name is a label — the role is not yet scoped to a lodge;
   // functions live at venues across four properties (Dipali Grand has no matching lodge).
-  { fullName: 'Banquet Manager — Palace', mobile: '9000000012', role: 'banquet_manager' },
-  { fullName: 'Banquet Manager — Regency', mobile: '9000000013', role: 'banquet_manager' },
-  { fullName: 'Banquet Manager — Residency', mobile: '9000000014', role: 'banquet_manager' },
-  { fullName: 'Maintenance Lead', mobile: '9000000015', role: 'maintenance' },
-  { fullName: 'Head Chef', mobile: '9000000016', role: 'chef' },
+  { fullName: 'Banquet Manager — Palace', loginId: 'Banq.Ground01', mobile: '9000000012', role: 'banquet_manager' },
+  { fullName: 'Banquet Manager — Regency', loginId: 'Banq.Ground02', mobile: '9000000013', role: 'banquet_manager' },
+  { fullName: 'Banquet Manager — Residency', loginId: 'Banq.Ground03', mobile: '9000000014', role: 'banquet_manager' },
+  { fullName: 'Maintenance Lead', loginId: 'Banq.MaintM', mobile: '9000000015', role: 'maintenance' },
+  { fullName: 'Head Chef', loginId: 'Banq.Chef', mobile: '9000000016', role: 'chef' },
 ]
 
 export const SETTINGS: { key: string; value: string }[] = [

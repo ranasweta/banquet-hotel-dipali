@@ -5,6 +5,7 @@ import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 import { api } from '@/lib/http'
+import { InstallApp } from '@/components/install-app'
 
 /**
  * Staff sign-in. On lg+ the property sits on the left and the form on the right; on a phone
@@ -20,7 +21,7 @@ import { api } from '@/lib/http'
  */
 export default function LoginPage() {
   const router = useRouter()
-  const [mobile, setMobile] = useState('')
+  const [loginId, setLoginId] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -31,7 +32,7 @@ export default function LoginPage() {
     setError(null)
     setBusy(true)
     try {
-      await api('/auth/login', { method: 'POST', body: JSON.stringify({ mobile, password }) })
+      await api('/auth/login', { method: 'POST', body: JSON.stringify({ login_id: loginId, password }) })
       router.replace('/')
       router.refresh()
     } catch (err) {
@@ -115,12 +116,12 @@ export default function LoginPage() {
 
           <form onSubmit={onSubmit} className="mt-8 space-y-6">
             <Field
-              id="mobile"
-              label="Mobile number"
-              value={mobile}
-              onChange={setMobile}
-              placeholder="e.g. 9000000001"
-              type="tel"
+              id="login-id"
+              label="ID"
+              value={loginId}
+              onChange={setLoginId}
+              placeholder="e.g. booking1"
+              type="text"
               autoComplete="username"
               autoFocus
             />
@@ -160,6 +161,9 @@ export default function LoginPage() {
               {busy ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
+
+          {/* Only ever renders for someone not already in the installed app. */}
+          <InstallApp />
         </div>
       </div>
     </main>

@@ -45,7 +45,7 @@ if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping auth integr
 
 const SEED_PW = 'test-only'
 let bookingUserId: string
-let bookingMobile: string
+let bookingLoginId: string
 let bookingRoleId: string
 let auditorId: string
 
@@ -87,7 +87,7 @@ beforeAll(async () => {
   const [booking] = await db
     .select({
       id: schema.users.id,
-      mobile: schema.users.mobile,
+      loginId: schema.users.loginId,
       roleId: schema.users.roleId,
     })
     .from(schema.users)
@@ -95,7 +95,7 @@ beforeAll(async () => {
     .where(eq(schema.roles.name, 'booking_manager'))
     .limit(1)
   bookingUserId = booking!.id
-  bookingMobile = booking!.mobile
+  bookingLoginId = booking!.loginId
   bookingRoleId = booking!.roleId
 
   const [auditor] = await db
@@ -125,7 +125,7 @@ d('authentication', () => {
   it('rejects login with a wrong password (401), same message as unknown user', async () => {
     const res = await loginPOST(
       jsonReq('http://localhost/api/v1/auth/login', 'POST', {
-        mobile: bookingMobile,
+        login_id: bookingLoginId,
         password: 'wrong-password',
       }),
     )
@@ -137,7 +137,7 @@ d('authentication', () => {
   it('logs a valid user in and returns their live permission matrix', async () => {
     const res = await loginPOST(
       jsonReq('http://localhost/api/v1/auth/login', 'POST', {
-        mobile: bookingMobile,
+        login_id: bookingLoginId,
         password: SEED_PW,
       }),
     )
@@ -148,6 +148,18 @@ d('authentication', () => {
     expect(body.permissions).toEqual(
       expect.arrayContaining([{ module: 'bookings', action: 'create_edit' }]),
     )
+  })
+
+  // Uniqueness is on lower(login_id) (migration 0027), so the lookup must lower() both
+  // sides. If it ever goes back to an exact match, a user typed in with any capital letter
+  // becomes unreachable — and the failure looks like a wrong password, not a bug.
+  it('accepts the ID in any case', async () => {
+    for (const typed of [bookingLoginId.toUpperCase(), bookingLoginId.toLowerCase()]) {
+      const res = await loginPOST(
+        jsonReq('http://localhost/api/v1/auth/login', 'POST', { login_id: typed, password: SEED_PW }),
+      )
+      expect(res.status, `signing in as "${typed}"`).toBe(200)
+    }
   })
 })
 

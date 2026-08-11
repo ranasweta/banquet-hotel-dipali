@@ -11,7 +11,10 @@ export type PermAction = 'view' | 'create_edit' | 'delete'
 export type CurrentUser = {
   id: string
   fullName: string
-  mobile: string
+  /** What they type to sign in (mig 0027). */
+  loginId: string
+  /** Contact information only since 0027 — may be absent. */
+  mobile: string | null
   email: string | null
   roleId: string
   roleName: string
@@ -32,6 +35,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     .select({
       id: schema.users.id,
       fullName: schema.users.fullName,
+      loginId: schema.users.loginId,
       mobile: schema.users.mobile,
       email: schema.users.email,
       roleId: schema.users.roleId,
