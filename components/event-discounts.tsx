@@ -24,11 +24,13 @@ import { cn } from '@/lib/utils'
  *
  * A discount is **an amount of money** off a head — Venue / Menu / Rooms, or Overall for the
  * whole bill (client's lead, 4 Aug 2026, replacing the percentage input). What is typed is what
- * the guest gets; the percentage survives only as the cap's arithmetic, which is why the box
- * below states the headroom in rupees rather than making anyone work it out. The COMBINED
- * effective discount stays ≤ 10% of the total bill (venue + food + rooms, no tax of either
- * kind) and applies immediately; crossing the cap holds it behind one `discount_over_cap`
- * request until the Higher Authority approves it (BR-D2).
+ * the guest gets; the percentage survives only as the cap's arithmetic. The COMBINED effective
+ * discount stays ≤ 10% of the total bill (venue + food + rooms, no tax of either kind) and
+ * applies immediately; crossing the cap holds it behind one `discount_over_cap` request until
+ * the Higher Authority approves it (BR-D2).
+ *
+ * The cap is never stated on this panel (client, 11 Aug 2026) — see the note beside the list.
+ * It is enforced regardless; the only thing that changed is who gets told about it, and when.
  */
 
 type DiscountRow = {
@@ -138,25 +140,14 @@ export function EventDiscounts({ eventId, editable, onChanged }: { eventId: stri
   return (
     <div>
       <h3 className="mb-2 text-sm font-medium">Discounts</h3>
-      {/* Headroom in rupees, because a discount is typed in rupees. "₹42,000 left" is a figure
-          you can act on; "10%" is one you have to work out against a bill you are still editing. */}
-      {cap && !uncapped && (
-        <p className="mb-2 text-xs text-muted-foreground">
-          Given so far <span className="tabular-nums text-foreground">{formatPaise(cap.usedPaise)}</span> of{' '}
-          <span className="tabular-nums text-foreground">{formatPaise(cap.capPaise)}</span> ({cap.capPct}% of{' '}
-          {formatPaise(cap.capBasePaise)}) —{' '}
-          <span className={cn('tabular-nums font-medium', cap.headroomPaise > 0 ? 'text-foreground' : 'text-amber-600')}>
-            {formatPaise(cap.headroomPaise)} left
-          </span>{' '}
-          before GM approval is needed.
-        </p>
-      )}
+      {/* The cap is NOT stated here (client, 11 Aug 2026). This panel sits on the Payment
+          review, which is read with the guest at the counter — a standing headroom figure told
+          them what could still be asked for, and "over that needs GM approval" told them there
+          was a bigger discount to push for. The cap is unchanged and still enforced server-side;
+          it is simply not announced until the manager types an amount that crosses it, which is
+          the one moment the warning is for them rather than an invitation to the guest. */}
       {discs.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {uncapped
-            ? 'None. Your discounts take effect at once — the cap does not apply to you.'
-            : `None. The combined discount stays ≤ ${cap?.capPct ?? 10}% of the total bill (over that needs GM approval).`}
-        </p>
+        <p className="text-sm text-muted-foreground">None.</p>
       ) : (
         <ul className="mb-2 space-y-1 text-sm">
           {discs.map((x) => (

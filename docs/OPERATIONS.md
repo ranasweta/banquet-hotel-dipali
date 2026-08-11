@@ -47,6 +47,115 @@ applied in order by `pnpm migrate`. Pre-launch the team folded changes into `000
 **post-launch, never edit `0001` — add a new numbered migration** so production upgrades forward
 without a rebuild.
 
+## Moving the database to Singapore (cutover runbook)
+
+Cloud Run is in `asia-southeast1` and the database was in `aws-us-east-1` — roughly 230 ms per
+query, before the database does any work. Neon cannot change a project's region, so the move is
+a new project plus a dump and restore.
+
+| | Project | Region |
+|---|---|---|
+| From | `curly-violet-63131529` ("Banquet") | `aws-us-east-1` |
+| To | `hidden-resonance-76799876` ("Banquet SG") | `aws-ap-southeast-1` |
+
+Both PG 16, both with a `neondb` database owned by `neondb_owner`, so only the host changes.
+
+**Before you start:** PostgreSQL **16** client tools (`pg_dump` must be ≥ the server's major
+version). No local install? `docker run --rm -v "$PWD:/w" -w /w postgres:16 pg_dump …`.
+
+### 1. Take the connection strings
+
+```bash
+ORG=org-fragrant-brook-41215212
+npx neonctl branches list --project-id curly-violet-63131529 --org-id $ORG   # confirm the branch name
+npx neonctl connection-string <branch> --project-id curly-violet-63131529 --database-name neondb --org-id $ORG
+npx neonctl connection-string main    --project-id hidden-resonance-76799876 --database-name neondb --org-id $ORG
+```
+
+These contain live credentials. Keep them out of chat, tickets and commits.
+
+### 2. Stop writes
+
+Take the app down for the window — scale Cloud Run to zero, or put up a maintenance page.
+**Do not dump a live database here.** A booking taken between the dump starting and the cutover
+finishing exists only in the old database and is lost, and in this system a booking is money.
+
+### 3. Dump and restore
+
+```bash
+pg_dump "$OLD_URL" --format=custom --no-owner --no-privileges --file=banquet.dump
+pg_restore --dbname="$NEW_URL" --no-owner --no-privileges --single-transaction banquet.dump
+```
+
+`--single-transaction` is not optional. A partial restore is the dangerous outcome: it can leave
+the schema looking complete while missing a constraint, and the missing constraint is the thing
+that prevents double-booking.
+
+### 4. Verify BEFORE repointing anything
+
+```sql
+-- 1. The two clash-proofing constraints. If this returns fewer than two rows, STOP —
+--    the database will silently accept two weddings in one hall.
+SELECT conname, conrelid::regclass FROM pg_constraint WHERE contype = 'x';
+
+-- 2. Event codes must not go backwards, or you reissue a code a guest already has.
+SELECT last_value FROM event_code_seq;
+
+-- 3. The append-only audit guard.
+SELECT tgname FROM pg_trigger WHERE tgrelid = 'audit_log'::regclass AND NOT tgisinternal;
+
+-- 4. Migrations, and a row count to compare against the old database.
+SELECT count(*) FROM schema_migrations;
+SELECT 'events' t, count(*) FROM events
+UNION ALL SELECT 'payments', count(*) FROM payments
+UNION ALL SELECT 'audit_log', count(*) FROM audit_log
+UNION ALL SELECT 'guest_documents', count(*) FROM guest_documents;
+```
+
+Run 2 and 4 against **both** databases and compare. Equal counts and an equal `last_value` are
+the only evidence the restore was complete.
+
+### 5. Repoint, in this order
+
+1. `.env.local` — so a local run cannot keep writing to the old database.
+2. Vercel project env (Production **and** Preview).
+3. GitHub Actions secret `DATABASE_URL` — the Cloud Run deploy reads it, and its
+   `--set-env-vars` replaces the whole environment, so a stale value here silently survives.
+4. Redeploy, bring traffic back.
+
+### 6. Smoke test
+
+Sign in, open the calendar, open a booking's Payment review, and view a KYC document. Then make
+one throwaway enquiry and delete it — a read-only check does not prove writes work.
+
+### 7. Keep the old project
+
+Do not delete `curly-violet-63131529` for at least a week. It is the rollback: repoint
+`DATABASE_URL` back and redeploy. Once deleted, anything written after the cutover is the only
+copy, and there is no way back.
+
+### The test database has already moved (11 Aug 2026)
+
+`dipali_test` now lives on the Singapore project — it held nothing worth preserving, so it was
+created fresh and migrated rather than dumped. All 26 migrations applied, and the verification
+above passes on it: both exclusion constraints present, `audit_no_update` on `audit_log`,
+`event_code_seq` at its start value.
+
+Measured from a laptop in India, median of twelve queries after warm-up:
+
+| | Median | Min | Max |
+|---|---|---|---|
+| `us-east-1` (Virginia) | 296 ms | 230 | 312 |
+| `ap-southeast-1` (Singapore) | **101 ms** | 89 | 117 |
+
+`tests/user-admin.integration.test.ts` — same ten tests, same code — went from **132.7 s to
+60.5 s**. That is why the suite was tripping the 45 s per-test timeout.
+
+**Production will gain far more than this 2.9×.** These numbers are India → database. The
+production path is Cloud Run → database, and once both sit in Singapore that is a same-region
+hop of a few milliseconds rather than 101 ms. The figures above are the floor of the
+improvement, not the ceiling.
+
 ## The daily job (`POST /cron/run`)
 
 Generates wedding payment reminders and surfaces stale enquiries (M7). Schedule it once a day

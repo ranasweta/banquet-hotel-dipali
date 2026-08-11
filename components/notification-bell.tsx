@@ -93,7 +93,7 @@ export function NotificationBell() {
 
   useEffect(() => {
     let active = true
-    api<{ notifications: Notification[] }>('/notifications')
+    loadNotifications()
       .then((r) => { if (active) { setItems(r.notifications); setFailed(false) } })
       .catch(() => { if (active) setFailed(true) })
     return () => { active = false }
@@ -121,6 +121,9 @@ export function NotificationBell() {
     // next page load with no explanation for why they returned.
     const previous = items
     setItems((prev) => prev.filter((n) => !ids.includes(n.id)))
+    // The shared copy is now out of date — the next read must go to the server, or navigating
+    // within the window would bring the dismissed row back for no reason the user can see.
+    clearNotificationCache()
     try {
       await api('/notifications/read', { method: 'POST', body: JSON.stringify({ ids }) })
     } catch {

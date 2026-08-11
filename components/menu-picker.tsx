@@ -163,8 +163,12 @@ export function MenuPicker({
     loadIncreases().catch(() => setIncreases(null))
   }, [loadIncreases])
 
-  const load = useCallback(async () => {
-    const data = await api<MenuResponse>(`/sub-events/${subEventId}/menu`)
+  /**
+   * Takes the server's snapshot as authoritative. Split out of `load` because a save now
+   * carries the same snapshot back in its own response — one round trip instead of a write
+   * followed by a read, which is the whole point.
+   */
+  const adopt = useCallback((data: MenuResponse) => {
     setResp(data)
     if (data.menu) {
       setTierId(data.menu.tierId)
@@ -178,8 +182,13 @@ export function MenuPicker({
       setNotes(nextNotes)
       setDirty(false)
     }
+  }, [])
+
+  const load = useCallback(async () => {
+    const data = await api<MenuResponse>(`/sub-events/${subEventId}/menu`)
+    adopt(data)
     return data
-  }, [subEventId])
+  }, [subEventId, adopt])
 
   useEffect(() => {
     // Async fetch seeds state after the await; the rule can't see past the promise.
@@ -294,17 +303,22 @@ export function MenuPicker({
           if (c.pickCount == null) continue // all-included: server fills the full list
           selections[c.name] = [...(snapSelected[c.name] ?? [])]
         }
-        await api(`/sub-events/${subEventId}/menu`, {
-          method: 'PUT',
-          body: JSON.stringify({ tier_id: tier.id, selections, notes: snapNotes }),
-        })
+        const saved = await api<{ snapshot: MenuResponse; increases: IncreaseSummary }>(
+          `/sub-events/${subEventId}/menu`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ tier_id: tier.id, selections, notes: snapNotes }),
+          },
+        )
 
         // Edited while that was in flight — go round again rather than overwrite them.
         if (revisionRef.current !== rev || pendingRef.current) continue
 
-        // Settled: the server's snapshot is now authoritative. Both reads in parallel —
-        // sequentially they doubled the wait after every single click.
-        await Promise.all([load(), loadIncreases()])
+        // Settled. The save already carried the new state back, so there is nothing to fetch:
+        // this used to be two more round trips after every click. `adopt` applies the
+        // server's snapshot exactly as `load()` did.
+        adopt(saved.snapshot)
+        setIncreases(saved.increases)
         setSavedAt(new Date())
         onChanged?.()
         break
@@ -326,11 +340,36 @@ export function MenuPicker({
    */
   useEffect(() => {
     if (!dirty || !editable || !tier) return
-    // `revision` is in the deps so each click restarts the 700ms window instead of firing
-    // one save from the first click of a burst.
-    const t = setTimeout(() => { void save() }, 700)
+    // `revision` is in the deps so each click restarts the window instead of firing one save
+    // from the first click of a burst.
+    //
+    // Two seconds rather than the original 0.7. A manager picking dishes for a guest works in
+    // runs — five or six ticks in a conversation, then a pause — and the shorter window cut
+    // those runs into several saves apiece. Two seconds swallows a run whole and still lands
+    // well inside the pause before the next one. It is only safe because of the flush below:
+    // widening the window widens what an unmount would otherwise throw away.
+    const t = setTimeout(() => { void save() }, 2000)
     return () => clearTimeout(t)
   }, [dirty, revision, editable, tier, save])
+
+  /**
+   * Flush on the way out. The debounce above cancels its own timer when the picker unmounts —
+   * closing the function, moving to the next step, leaving the wizard — so without this the
+   * last couple of seconds of picking would be silently dropped, and the longer the window the
+   * more there is to lose. Refs, so the effect can stay mount-only and still see current state.
+   */
+  const dirtyRef = useRef(dirty)
+  const saveRef = useRef(save)
+  useEffect(() => { dirtyRef.current = dirty }, [dirty])
+  useEffect(() => { saveRef.current = save }, [save])
+  useEffect(
+    () => () => {
+      // Not awaited: unmount cannot wait. The request outlives the component for any
+      // navigation inside the app, which is every case this covers.
+      if (dirtyRef.current) void saveRef.current()
+    },
+    [],
+  )
 
   /**
    * The other kind of increase: instead of one more pick from the printed list, the guest
@@ -368,8 +407,9 @@ export function MenuPicker({
         `/sub-events/${subEventId}/menu/increase`,
         { method: 'POST', body: JSON.stringify({ category }) },
       )
-      await load()
-      await loadIncreases()
+      // In parallel: they are independent, and sequentially they double the wait after
+      // every press — the same reason `save` reads them together.
+      await Promise.all([load(), loadIncreases()])
       toast.success(
         res.freeRemaining > 0
           ? `${category} unlocked — ${res.freeRemaining} free extra${res.freeRemaining === 1 ? '' : 's'} left on this function`
@@ -390,8 +430,9 @@ export function MenuPicker({
         `/sub-events/${subEventId}/menu/increase/submit`,
         { method: 'POST' },
       )
-      await load()
-      await loadIncreases()
+      // In parallel: they are independent, and sequentially they double the wait after
+      // every press — the same reason `save` reads them together.
+      await Promise.all([load(), loadIncreases()])
       toast.success(
         res.submitted > 0
           ? `${res.submitted} extra dish${res.submitted === 1 ? '' : 'es'} sent to the GM`
