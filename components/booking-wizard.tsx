@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Loader2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
+import { BOOKABLE_EVENT_TYPES, eventTypeLabel } from '@/lib/event-types'
 import { formatPaise, rupeesToPaise } from '@/lib/money'
 import { formatTimeRange, todayISO } from '@/lib/time'
 import { TimePicker12 } from '@/components/ui/time-picker-12'
@@ -365,10 +366,13 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
   // The proposal only distinguishes Wedding from everything else ("Others" → the `other`
   // type): Wedding drives the 3-contact rule and the silent food surcharge. The event's
   // name never affects price.
-  const proposalTypes = (['wedding', 'other'] as const)
-    .map((code) => options.eventTypes.find((t) => t.code === code))
+  // The pair lives in lib/event-types.ts so the venue master prices exactly the two a booking
+  // can be made as, rather than all six rows the table happens to carry.
+  const proposalTypes = BOOKABLE_EVENT_TYPES.map((code) =>
+    options.eventTypes.find((t) => t.code === code),
+  )
     .filter((t): t is EventType => Boolean(t))
-    .map((t) => ({ value: t.code, label: t.code === 'other' ? 'Others' : t.displayName }))
+    .map((t) => ({ value: t.code, label: eventTypeLabel(t.code, t.displayName) }))
 
   const datesOk = Boolean(fromDate && toDate && toDate >= fromDate)
   const foodTotalPaise = subEvents.reduce((sum, s) => sum + (menuBySub[s.id]?.perPlatePaise ?? 0) * s.pax, 0)

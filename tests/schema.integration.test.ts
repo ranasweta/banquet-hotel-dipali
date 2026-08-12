@@ -138,15 +138,19 @@ d('seed', () => {
     // 3 properties: the Residency property retired with Upper Hall (19 Jul 2026) — Residency
     // exists as a LODGING unit, not a venue property.
     expect(await count('properties')).toBe(3)
-    // 11 venues: Upper Hall and Utsav Hall are not carried — the 2026 proposal prices
-    // neither, and a venue with no price is not offered at all.
-    expect(await count('venues')).toBe(11)
+    // 13 venues: Upper Hall and Utsav Hall are still not carried — the 2026 proposal prices
+    // neither — but Ashoka Hall and Pool Side Hall joined on 12 Aug 2026 when the client
+    // priced them (SEED_ASSUMPTIONS §F26).
+    expect(await count('venues')).toBe(13)
     expect(await count('venue_bundles')).toBe(4)
+    // Six rows, of which a booking can only ever be made as two — Wedding and Others. The
+    // other four are unreachable from the wizard and are kept only because old rows and rate
+    // cards reference them (lib/event-types.ts).
     expect(await count('event_types')).toBe(6)
     expect(await count('menu_tiers')).toBe(8)
-    // 11 modules: `lodging_calendar` split out of `rooms` (20 Jul 2026) so it can be
-    // granted on its own.
-    expect(await count('modules')).toBe(11)
+    // 12 modules: `lodging_calendar` split out of `rooms` (20 Jul 2026), and `venue_master`
+    // arrived 12 Aug 2026 so the Auditor can keep venues, bundles and rates himself.
+    expect(await count('modules')).toBe(12)
     expect(await count('roles')).toBe(7) // + chef, who alone prices a delicacy request
     expect(await count('lodging_units')).toBe(3)
   })
@@ -219,13 +223,25 @@ d('seed', () => {
       JOIN venue_bundles b ON b.id = rc.bundle_id
       WHERE b.name = 'Imperial + Kohinoor' AND rc.event_type = 'wedding'`
     expect(bundle!.rate_paise).toBe(15_100_000)
-    // The bundle-only venues carry no rate of their own, for any event type. That is the
-    // gap BR-R1 guards: a missing rate stays an explicit gate, never a silent zero.
-    for (const v of ['Diamond Hall', 'Golden Hall', 'Gulmohar Lawn', 'Middle Lawn']) {
-      for (const et of ['wedding', 'birthday']) {
-        expect(await rate(v, et), `${v} / ${et}`).toBeNull()
-      }
+    // Gulmohar and Middle are still sold only as their bundle and carry no rate of their own.
+    // That is the gap BR-R1 guards: a missing rate stays an explicit gate, never a silent zero.
+    // Diamond and Golden LEFT this group on 12 Aug 2026, when the client priced them apart.
+    for (const et of ['wedding', 'birthday']) {
+      expect(await rate('Gulmohar Lawn', et), `Gulmohar Lawn / ${et}`).toBeNull()
+      expect(await rate('Middle Lawn', et), `Middle Lawn / ${et}`).toBeNull()
     }
+    expect(await rate('Diamond Hall', 'wedding')).toBe(2_500_000)
+    expect(await rate('Golden Hall', 'wedding')).toBe(2_500_000)
+
+    // A DELIBERATE zero is the other half of that rule and is not a gap: an "Other" booking
+    // pays no standalone hall charge (client, 12 Aug 2026), while its bundle still does.
+    expect(await rate('Kohinoor', 'other')).toBe(0)
+    expect(await rate('Imperial', 'other')).toBe(0)
+    const [bundleOther] = await sql<{ rate_paise: number }[]>`
+      SELECT rc.rate_paise FROM venue_rate_cards rc
+      JOIN venue_bundles b ON b.id = rc.bundle_id
+      WHERE b.name = 'Imperial + Kohinoor' AND rc.event_type = 'other'`
+    expect(bundleOther!.rate_paise).toBe(15_100_000)
   })
 
   it('snapshots the Rs. 50 wedding surcharge onto every tier price (BR-M5)', async () => {
