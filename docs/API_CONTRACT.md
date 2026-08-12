@@ -52,7 +52,8 @@ races return 409 with a human-readable message.
 - `GET /calendar/day-sheet/:date` — consolidated ops/kitchen order (printable)
 - `GET /calendar/horizon?from=&days=` — the operations board (client, 21 Jul 2026). Every
   function over a window with venue, timing, pax, the full menu including per-dish
-  preferences and priced chef delicacies, and add-ons. **No money in the payload at all** —
+  preferences, the chef delicacies (`{ description, pending }` — `pending` where the Chef has
+  not priced it yet; declined asks are dropped), and add-ons. **No money in the payload at all** —
   omitted at the query, not hidden in the UI, because it is served to roles with no billing
   grant. 15 days by default (the Banquet Manager's board), capped at 31; the Chef reads the
   same shape with `days=1`. Returns `{ from, to, days[] }`, each day flagged `isToday`.

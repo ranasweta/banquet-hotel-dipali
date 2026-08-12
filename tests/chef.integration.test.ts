@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 
 const chef = await import('@/lib/chef')
+const daysheet = await import('@/lib/daysheet')
 const menus = await import('@/lib/menus')
 const invoice = await import('@/lib/invoice')
 const pricing = await import('@/lib/pricing')
@@ -157,5 +158,32 @@ d('chef delicacy', () => {
     const billedFood = lines.filter((l) => l.section === 'food').reduce((s, l) => s + l.amountPaise, 0)
     const { foodPaise, addonPaise } = await pricing.foodAndAddonTotal(eventId)
     expect(billedFood).toBe(foodPaise + addonPaise)
+  })
+
+  /**
+   * The kitchen's own list, on both screens that carry it. A priced delicacy is part of what
+   * goes out; one still with the Chef is not agreed, and the floor has to tell the two apart
+   * before it plans around the dish. A declined ask is on neither — nobody cooks it.
+   */
+  it('reaches the board and the day sheet, with an unpriced ask marked pending', async () => {
+    const { eventId, subId } = await makeSub()
+    // Operations sees confirmed bookings and beyond; an enquiry never reaches the kitchen.
+    await db.update(schema.events).set({ status: 'confirmed' }).where(eq(schema.events.id, eventId))
+    await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: {} })
+
+    const priced = await chef.requestDelicacy(bm, subId, 'Live sushi counter')
+    await chef.priceDelicacy(theChef, priced.id, { chargePaise: 12_000 })
+    await chef.requestDelicacy(bm, subId, 'Teppanyaki, still being thought about')
+    const declined = await chef.requestDelicacy(bm, subId, 'Live oysters')
+    await chef.priceDelicacy(theChef, declined.id, { decline: true, remark: 'no supplier' })
+
+    const board = await daysheet.getOperationsHorizon('2026-09-01', 1, '2026-09-01')
+    const fn = board.days[0]!.functions.find((f) => f.subEventId === subId)!
+    expect(fn.chefDishes).toHaveLength(2) // the declined ask is not one of them
+    expect(fn.chefDishes).toContainEqual({ description: 'Live sushi counter', pending: false })
+    expect(fn.chefDishes).toContainEqual({ description: 'Teppanyaki, still being thought about', pending: true })
+
+    const sheet = await daysheet.getDaySheet('2026-09-01')
+    expect(sheet.functions.find((f) => f.subEventId === subId)!.chefDishes).toEqual(fn.chefDishes)
   })
 })

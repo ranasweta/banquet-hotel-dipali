@@ -15,8 +15,8 @@ const querySchema = z.object({
 
 /**
  * GET /calendar/horizon?from=&days= — the operations board: every function over a window,
- * with venue, timing, pax, the full menu with preferences, priced chef delicacies and
- * add-ons. No money anywhere in the payload.
+ * with venue, timing, pax, the full menu with preferences, the chef delicacies — priced ones
+ * and those still with the Chef, flagged — and add-ons. No money anywhere in the payload.
  *
  * Fifteen days by default (client, 21 Jul 2026: "the banquet manager should see next 15
  * days event in dashboard with today's event highlighted"). The Chef reads the same shape
