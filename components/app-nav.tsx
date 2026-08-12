@@ -54,6 +54,7 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   { href: '/reports', label: 'Reports', module: 'audit', icon: BarChart3 },
   { href: '/admin/menus', label: 'Menu master', module: 'menu_master', icon: UtensilsCrossed },
   { href: '/admin/venues', label: 'Venue master', module: 'venue_master', icon: Building2 },
+  { href: '/admin/lodges', label: 'Lodge master', module: 'lodge_master', icon: BedDouble },
   { href: '/admin/roles', label: 'Roles & permissions', module: 'roles_users', icon: ShieldCheck },
   { href: '/admin/users', label: 'Users', module: 'roles_users', icon: Users },
   // No module: how to work your own screens is not something a role can be denied.
