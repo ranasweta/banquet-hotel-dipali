@@ -235,7 +235,14 @@ menus, or rate cards — and add to it rather than silently inventing.**
 
 Two rules it establishes that reach beyond the seed:
 - **A missing rate card is a gate, never a zero.** If a venue + event type has no rate,
-  block confirm and demand an Authority-approved manual rate (BR-R1). Never price at 0.
+  block confirm and demand an Authority-approved manual rate (BR-R1). Never price at 0 to
+  mean "unpriced". **A DELIBERATE zero is a different fact and is allowed** (client, 12 Aug
+  2026): an `other` booking pays no standalone hall charge, stored as a 0 rate card, and
+  confirmation proceeds normally. Bundles keep their rate — only standalone halls go free,
+  and only for `other`. The rule is data, not a branch: the Auditor owns it in the **venue
+  master** (`venue_master`, migration 0029 — venues, bundles and every per-event-type rate,
+  dated). A new venue is created with NO rate rather than a zero, and a bundle's membership
+  freezes once it is booked because it decides which halls that booking holds.
 - **`pick_count = NULL` means every item is included** (breads, salad bar,
   accompaniments, breakfast, high tea). Read-only in the picker, always counts complete,
   never free-increase eligible.

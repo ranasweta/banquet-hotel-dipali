@@ -1177,6 +1177,57 @@ is right; the board is simply no longer showing that tail. If staff report being
 refusal on a morning that looked free, this is why, and the answer is a hint on the day panel
 rather than bringing the tail back.
 
+### F26. The venue master, and the hall an "Other" booking is not charged for
+Client, 12 Aug 2026. Two instructions in one message; the second is expressed entirely as data
+the first lets the Auditor edit.
+
+**An "Other" booking pays no standalone hall charge.** It is charged for the dining and the
+extras but not for the room it sits in — *"if they select bundle then thats okay we take that
+money but if specially a hall is taken for a event then it will be 0"*. So every standalone
+venue is written at **zero** for `event_type = 'other'`, and every bundle keeps its rate.
+Scoped to that one event type on the client's explicit confirmation: engagement, mahila
+sangeet, birthday and corporate go on paying exactly what they paid before.
+
+**Zero is not the same fact as absent, and the schema already held both.** A missing rate card
+is a gate that blocks confirmation until the Authority approves a manual rate (BR-R1) and takes
+the venue off the standalone picker entirely; a zero says "decided, and free" and lets the
+booking proceed. `venue_rate_cards.rate_paise` already allowed `0` (CHECK `>= 0`) and
+`priceProposal` already returned `null` only for a missing row, so this needed **no branch in
+the pricing code at all** — just rows. That is deliberate: the rule has to be something the
+Auditor can change without anybody editing TypeScript.
+
+**The venue master** (`venue_master`, migration 0029) is where he changes it — venues, the
+bundles made out of them, and every per-event-type rate, dated. Granted Auditor `full`,
+Higher Authority `edit`, nobody else. Two guards worth knowing:
+
+- **A new venue is created with no rate at all**, never with a zero. Creating one at zero would
+  put a free hall on the board that nobody chose to give away; an unpriced one is invisible
+  until it is priced, which is the safe direction.
+- **A bundle's membership is frozen once it is booked.** It decides which halls those bookings
+  hold (FR-2.3), so changing it would silently move what has already been sold. Rename freely;
+  to re-shape, make a new bundle.
+
+**Prices given, and one supersession.** Signature 200,000 · Crystal 151,000 · Imperial 75,000 ·
+Kohinoor 55,000 · **Saffron 35,000** · Ashoka Hall 25,000 · Diamond Hall 25,000 · Golden Hall
+25,000 · Pool Side Hall 5,000.
+
+Saffron is the first time a client instruction has **overridden the hotel's own 2026 proposal**
+on a price: that PDF prints 55,000, and the client confirmed 35,000 when asked directly. The
+source ranking in CLAUDE.md (PDFs > PRD > placeholders) assumed the PDFs were the latest word
+from the hotel; a direct instruction from the client today plainly outranks a document from
+earlier in the year. Recorded rather than silently applied, because anyone reconciling the app
+against that PDF will find the difference and should find this note first.
+
+Diamond and Golden are now sold apart as well as together, so they leave the bundle-only group
+(§C, `listVenueAvailability`) — no code change was needed, because "has a rate card" was
+already the test and they now have one. Their bundle keeps its own 25,000, so the pair costs
+what one hall costs; that is what the client's list says and it was confirmed when asked.
+
+**Ashoka Hall and Pool Side Hall are new**, both under Palace (client-confirmed). They appear
+in no PDF and no PRD table, so their capacities are invented outright and flagged as such in
+`db/masters.ts`. Capacities gate nothing (rule 13), so the invention costs nothing but should
+be corrected when the hotel says what they actually seat.
+
 ---
 
 ## E. Still needed from the client

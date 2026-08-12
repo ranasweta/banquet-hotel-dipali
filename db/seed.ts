@@ -30,6 +30,7 @@ import {
   PALACE_ROOMS,
   PROPERTIES,
   RATE_CARDS,
+  FREE_STANDALONE_EVENT_TYPE,
   RATE_EFFECTIVE_FROM,
   RESIDENCY_ROOMS,
   ROLES,
@@ -186,7 +187,10 @@ export async function seed(
         venue_id: r.venue ? venueId.get(r.venue)! : null,
         bundle_id: r.bundle ? bundleId.get(r.bundle)! : null,
         event_type: et.code,
-        rate_paise: r.ratePaise,
+        // An "Other" booking pays for the dining, not for the hall — but a BUNDLE is still
+        // charged in full (client, 12 Aug 2026). Written as a zero rather than left out:
+        // a missing card is a gate (BR-R1), and "free" is not the same fact as "unpriced".
+        rate_paise: r.venue && et.code === FREE_STANDALONE_EVENT_TYPE ? 0 : r.ratePaise,
         effective_from: RATE_EFFECTIVE_FROM,
       })),
     )

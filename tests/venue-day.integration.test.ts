@@ -17,6 +17,7 @@ import { sql } from 'drizzle-orm'
 const pricing = await import('@/lib/pricing')
 const proposal = await import('@/lib/proposal')
 const invoice = await import('@/lib/invoice')
+const availability = await import('@/lib/availability')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -149,6 +150,71 @@ d('one hall, one day, one charge', () => {
     // Brunch is earlier in the day, so it carries the charge and the night is covered.
     expect(priced.rates.get(brunch)).toBe(rateA)
     expect(priced.coveredBy.get(night)).toBe(brunch)
+  }, 120_000)
+})
+
+d('an "Other" booking pays for the dining, not for the hall', () => {
+  /** Same shape as makeEvent, but the event type is the caller's. */
+  async function eventOfType(type: string): Promise<string> {
+    const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
+    const [ev] = await db
+      .insert(schema.events)
+      .values({ code, guestName: 'Other Test', eventType: type, createdBy: bmId })
+      .returning({ id: schema.events.id })
+    return ev!.id
+  }
+
+  it('charges nothing for a standalone hall', async () => {
+    const eventId = await eventOfType('other')
+    await addFunction(eventId, 'Party', '2027-09-01', '18:00', '23:00', hallA)
+
+    const priced = await pricing.priceProposal('other', await pricing.loadSubEventsForPricing(eventId))
+    expect(priced.totalPaise).toBe(0)
+    // Zero is a DECISION, not the missing-rate gate — confirm must not be blocked by it.
+    expect(priced.missing).toHaveLength(0)
+  }, 120_000)
+
+  it('still charges for a bundle', async () => {
+    const [bundle] = (await db.execute(sql`
+      SELECT b.id, rc.rate_paise AS rate
+      FROM venue_bundles b
+      JOIN venue_rate_cards rc ON rc.bundle_id = b.id AND rc.event_type = 'other'
+      ORDER BY b.name LIMIT 1
+    `)) as unknown as { id: string; rate: number }[]
+
+    const eventId = await eventOfType('other')
+    const [se] = await db
+      .insert(schema.subEvents)
+      .values({
+        eventId, name: 'Party', eventDate: '2027-09-01', startTime: '18:00', endTime: '23:00',
+        bundleId: bundle!.id, pax: 100,
+      })
+      .returning({ id: schema.subEvents.id })
+    expect(se).toBeTruthy()
+
+    const priced = await pricing.priceProposal('other', await pricing.loadSubEventsForPricing(eventId))
+    // "if they select bundle then thats okay we take that money" — the catch in the rule.
+    expect(priced.totalPaise).toBe(Number(bundle!.rate))
+    expect(priced.totalPaise).toBeGreaterThan(0)
+  }, 120_000)
+
+  it('leaves every other event type paying full price', async () => {
+    // The client scoped this to "Other" alone: engagement, mahila sangeet, birthday and
+    // corporate go on paying exactly what they paid before.
+    for (const type of ['engagement', 'mahila_sangeet', 'birthday', 'corporate']) {
+      const eventId = await eventOfType(type)
+      await addFunction(eventId, 'Function', '2027-09-01', '18:00', '23:00', hallA)
+      const priced = await pricing.priceProposal(type, await pricing.loadSubEventsForPricing(eventId))
+      expect(priced.totalPaise, `${type} should still pay the hall`).toBe(rateA)
+    }
+  }, 120_000)
+
+  it('keeps a free hall on offer — free is a price, not a missing rate', async () => {
+    const avail = await availability.listVenueAvailability('2027-09-01', '18:00', '23:00')
+    expect(avail.venues.map((v) => v.name)).toContain('Ashoka Hall')
+    expect(avail.venues.map((v) => v.name)).toContain('Diamond Hall')
+    // Still bundle-only: no standalone rate card was ever written for these two.
+    expect(avail.venues.map((v) => v.name)).not.toContain('Gulmohar Lawn')
   }, 120_000)
 })
 
