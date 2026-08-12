@@ -4,6 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { assertPaise } from '@/lib/money'
+import { BOOKABLE_EVENT_TYPES, eventTypeLabel } from '@/lib/event-types'
 
 /**
  * The venue master (client, 12 Aug 2026) — "we will give whole centre point to set whatever he
@@ -95,8 +96,13 @@ async function currentRates(): Promise<Map<string, MasterRate[]>> {
 export async function getVenueCatalog(): Promise<VenueCatalog> {
   const [properties, eventTypes, venues, bundles, members, rates] = await Promise.all([
     db.execute(sql`SELECT id, name FROM properties ORDER BY name`) as unknown as Promise<{ id: string; name: string }[]>,
+    // The two a booking can actually be made as — Wedding and Others. The table holds six,
+    // but the other four are unreachable from the wizard, and a price nobody can select is
+    // four extra columns to read past on every venue.
     db.execute(sql`
-      SELECT code, display_name AS "displayName" FROM event_types ORDER BY is_wedding DESC, display_name
+      SELECT code, display_name AS "displayName" FROM event_types
+       WHERE code IN (${sql.join(BOOKABLE_EVENT_TYPES.map((c) => sql`${c}`), sql`, `)})
+       ORDER BY is_wedding DESC, display_name
     `) as unknown as Promise<{ code: string; displayName: string }[]>,
     db.execute(sql`
       SELECT v.id, v.name, v.kind, v.is_active AS "isActive", p.name AS "propertyName",
@@ -124,7 +130,8 @@ export async function getVenueCatalog(): Promise<VenueCatalog> {
 
   return {
     properties,
-    eventTypes,
+    // "Others", not "Other" — the word the hotel uses and the word the wizard's dropdown shows.
+    eventTypes: eventTypes.map((t) => ({ ...t, displayName: eventTypeLabel(t.code, t.displayName) })),
     venues: venues.map((v) => ({ ...v, rates: rates.get(v.id) ?? [] })),
     bundles: bundles.map((b) => ({
       ...b,
@@ -136,9 +143,18 @@ export async function getVenueCatalog(): Promise<VenueCatalog> {
 
 // ── Venues ───────────────────────────────────────────────────────────────────
 
+/**
+ * Adds a hall or a lawn.
+ *
+ * NO CAPACITY IS ASKED FOR (client, 13 Aug 2026: "why are u taking seats?"). It gates nothing
+ * — rule 13 removed the last capacity check — and it is displayed nowhere, so the form was
+ * collecting two numbers that do nothing. The columns stay NULL rather than defaulting to some
+ * invented range: "nobody wrote it down" is the truth, and 1–100 would be seed data invented
+ * through the back door. The seeded venues keep the real figures they came with.
+ */
 export async function createVenue(
   actor: Actor,
-  input: { propertyId: string; name: string; kind: string; capacityMin: number; capacityMax: number },
+  input: { propertyId: string; name: string; kind: string },
 ): Promise<{ id: string }> {
   const name = input.name.trim()
   if (!name) throw badRequest('A venue needs a name.')
@@ -148,13 +164,7 @@ export async function createVenue(
     try {
       const [v] = await tx
         .insert(schema.venues)
-        .values({
-          propertyId: input.propertyId,
-          name,
-          kind: input.kind,
-          capacityMin: input.capacityMin,
-          capacityMax: input.capacityMax,
-        })
+        .values({ propertyId: input.propertyId, name, kind: input.kind })
         .returning({ id: schema.venues.id })
       await audit(tx, actor, {
         entity: 'venues', entityId: v!.id, action: 'insert', field: 'name', newValue: name,
@@ -172,7 +182,7 @@ export async function createVenue(
 export async function updateVenue(
   actor: Actor,
   venueId: string,
-  patch: { name?: string; kind?: string; capacityMin?: number; capacityMax?: number; isActive?: boolean },
+  patch: { name?: string; kind?: string; isActive?: boolean },
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const [v] = await tx.select().from(schema.venues).where(eq(schema.venues.id, venueId)).limit(1)
@@ -180,11 +190,11 @@ export async function updateVenue(
 
     const name = patch.name?.trim() ?? v.name
     if (!name) throw badRequest('A venue needs a name.')
+    // Capacity is not editable here for the same reason it is not asked for on creation: it
+    // gates nothing and is shown nowhere. The seeded figures are left exactly as they are.
     const next = {
       name,
       kind: patch.kind ?? v.kind,
-      capacityMin: patch.capacityMin ?? v.capacityMin,
-      capacityMax: patch.capacityMax ?? v.capacityMax,
       isActive: patch.isActive ?? v.isActive,
     }
     try {

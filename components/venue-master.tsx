@@ -254,13 +254,15 @@ function RateRow({
         )}
       </div>
 
-      <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+      {/* Two rates, not six: a booking can only be made as Wedding or Others (lib/event-types).
+          Side by side rather than in a grid — with two of them a grid is just empty space. */}
+      <div className="flex flex-wrap gap-x-8 gap-y-1">
         {eventTypes.map((et) => {
           const rate = inForce(rates, et.code)
           const isEditing = editing === et.code
           return (
             <div key={et.code} className="flex items-center gap-2 text-sm">
-              <span className="w-32 shrink-0 truncate text-muted-foreground">{et.displayName}</span>
+              <span className="w-24 shrink-0 truncate text-muted-foreground">{et.displayName}</span>
               {isEditing ? (
                 <>
                   <Input
@@ -352,21 +354,24 @@ function RateRow({
   )
 }
 
+/**
+ * Property, name, hall-or-lawn. That is the whole of a venue.
+ *
+ * No capacity: it gates nothing (rule 13) and is shown nowhere, so asking for it collected two
+ * numbers that did nothing — and a default of 1–100 would have invented seed data through the
+ * back door (client, 13 Aug 2026: "why are u taking seats?").
+ */
 function NewVenueForm({
   properties, busy, onCancel, onSubmit,
 }: {
   properties: { id: string; name: string }[]
   busy: boolean
   onCancel: () => void
-  onSubmit: (body: {
-    property_id: string; name: string; kind: string; capacity_min: number; capacity_max: number
-  }) => void | Promise<void>
+  onSubmit: (body: { property_id: string; name: string; kind: string }) => void | Promise<void>
 }) {
   const [propertyId, setPropertyId] = useState(properties[0]?.id ?? '')
   const [name, setName] = useState('')
   const [kind, setKind] = useState('hall')
-  const [min, setMin] = useState('1')
-  const [max, setMax] = useState('100')
 
   return (
     <div className="flex flex-wrap items-end gap-2 rounded-md border bg-muted/40 p-3">
@@ -382,7 +387,7 @@ function NewVenueForm({
       </label>
       <label className="text-sm">
         <span className="block text-xs text-muted-foreground">Name</span>
-        <Input value={name} onChange={(e) => setName(e.target.value)} className="h-9 w-48" />
+        <Input value={name} onChange={(e) => setName(e.target.value)} className="h-9 w-56" />
       </label>
       <label className="text-sm">
         <span className="block text-xs text-muted-foreground">Kind</span>
@@ -395,26 +400,10 @@ function NewVenueForm({
           <option value="lawn">lawn</option>
         </select>
       </label>
-      <label className="text-sm">
-        <span className="block text-xs text-muted-foreground">Seats from</span>
-        <Input inputMode="numeric" value={min} onChange={(e) => setMin(e.target.value)} className="h-9 w-20" />
-      </label>
-      <label className="text-sm">
-        <span className="block text-xs text-muted-foreground">to</span>
-        <Input inputMode="numeric" value={max} onChange={(e) => setMax(e.target.value)} className="h-9 w-20" />
-      </label>
       <Button
         size="sm"
-        disabled={busy || !name.trim() || !propertyId || !(Number(max) >= Number(min))}
-        onClick={() =>
-          onSubmit({
-            property_id: propertyId,
-            name: name.trim(),
-            kind,
-            capacity_min: Number(min),
-            capacity_max: Number(max),
-          })
-        }
+        disabled={busy || !name.trim() || !propertyId}
+        onClick={() => onSubmit({ property_id: propertyId, name: name.trim(), kind })}
       >
         Add
       </Button>

@@ -97,8 +97,10 @@ export const venues = pgTable("venues", {
 	propertyId: uuid("property_id").notNull(),
 	name: text().notNull(),
 	kind: text().notNull(),
-	capacityMin: integer("capacity_min").notNull(),
-	capacityMax: integer("capacity_max").notNull(),
+	// Optional since migration 0030: descriptive only, and NULL means nobody recorded it —
+	// which is not the same claim as zero.
+	capacityMin: integer("capacity_min"),
+	capacityMax: integer("capacity_max"),
 	isActive: boolean("is_active").default(true).notNull(),
 }, (table) => [
 	foreignKey({

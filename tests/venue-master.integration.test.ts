@@ -56,12 +56,12 @@ afterEach(async () => { if (hasDb) await cleanup() })
 afterAll(async () => { if (hasDb) await cleanup() })
 
 async function makeVenue(name: string): Promise<string> {
+  // No capacity: it gates nothing and is shown nowhere, so the form stopped asking for it
+  // (client, 13 Aug 2026). A new venue records none rather than an invented range.
   const { id } = await master.createVenue(auditor, {
     propertyId: palaceId,
     name: `${PREFIX} ${name}`,
     kind: 'hall',
-    capacityMin: 10,
-    capacityMax: 100,
   })
   return id
 }
@@ -186,6 +186,36 @@ d('bundles', () => {
     await master.updateBundle(auditor, bundleId, { name: `${PREFIX} Renamed` })
 
     await db.delete(schema.events)
+  }, 120_000)
+})
+
+d('a venue records no capacity unless it came with one', () => {
+  it('creates a venue with NULL capacity rather than an invented range', async () => {
+    const venueId = await makeVenue('NoSeats')
+    const [row] = (await db.execute(sql`
+      SELECT capacity_min AS "min", capacity_max AS "max" FROM venues WHERE id = ${venueId}
+    `)) as unknown as { min: number | null; max: number | null }[]
+    // NULL, not 0 — "nobody wrote it down" is a different claim from "seats nobody".
+    expect(row!.min).toBeNull()
+    expect(row!.max).toBeNull()
+  }, 120_000)
+
+  it('leaves the seeded figures alone — they are real', async () => {
+    const [row] = (await db.execute(sql`
+      SELECT capacity_min AS "min", capacity_max AS "max" FROM venues WHERE name = 'Kohinoor'
+    `)) as unknown as { min: number; max: number }[]
+    expect(row!.min).toBe(150) // from the hotel's own proposal
+    expect(row!.max).toBe(250)
+  }, 120_000)
+})
+
+d('only the two bookable event types are offered', () => {
+  it('prices Wedding and Others, and nothing a booking cannot be made as', async () => {
+    const cat = await master.getVenueCatalog()
+    // The table carries six rows; the wizard has only ever offered two, so a price for the
+    // other four is four columns the Auditor reads past on every venue.
+    expect(cat.eventTypes.map((t) => t.code)).toEqual(['wedding', 'other'])
+    expect(cat.eventTypes.map((t) => t.displayName)).toEqual(['Wedding', 'Others'])
   }, 120_000)
 })
 
