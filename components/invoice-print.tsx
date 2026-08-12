@@ -890,6 +890,20 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
               </tr>
             ),
           )}
+          {/* The bar, brand by brand. The BREAK-OUT under an "Alcohol" heading is on the menu
+              sheet (client, 12 Aug 2026); here the bottles are ordinary charge lines, because
+              a sub-total the guest cannot trace back to lines is a sub-total they will query. */}
+          {fn.bar.map((b) => (
+            <tr key={`bar-${b.brandName}`}>
+              <td>
+                <span className="it-name">Alcohol — {b.brandName}</span>
+                <span className="it-desc">Per bottle.</span>
+              </td>
+              <td className="c calc">{b.bottles}</td>
+              <td className="n calc">{formatPaise(b.ratePaise)}</td>
+              <td className="n amt">{formatPaise(b.amountPaise)}</td>
+            </tr>
+          ))}
           <tr className="sub">
             <td colSpan={3} className="lbl">
               {titleCase(fn.name)} sub-total
@@ -963,6 +977,27 @@ function MenuPages({ doc }: { doc: ProposalDocument }) {
                         </ul>
                       </div>
                     ))}
+
+                  {/* Alcohol, broken out under its own heading (client, 12 Aug 2026) — here on
+                      the menu sheet and nowhere else, since this is what the guest reads to
+                      see what is being served. It carries the BOTTLE COUNT, unlike a dish: a
+                      segment lists what is on offer, but "how many bottles" is the whole of
+                      what was agreed, and a guest who reads only the menu should see it.
+                      Prices stay on the charges card, where every other rate lives. */}
+                  {fn.bar.length > 0 && (
+                    <div className="seg">
+                      <div className="seg-h">
+                        <span className="seg-n">Alcohol</span>
+                      </div>
+                      <ul className="dishes">
+                        {fn.bar.map((b) => (
+                          <li key={b.brandName}>
+                            {b.brandName} ({b.bottles} bottle{b.bottles === 1 ? '' : 's'})
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
                 <div className="menu-note">
                   The menu as agreed at the date of issue. Any change is settled with the Banquet

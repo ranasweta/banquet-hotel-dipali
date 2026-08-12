@@ -418,6 +418,49 @@ d('swap from the pooled master menu', () => {
       menus.saveSubEventMenu(actor, sub, { tierId: silver, selections: { Dessert: ['Definitely Not A Dessert'] } }),
     ).rejects.toThrow(/not on any/i)
   })
+
+  it('pools across a sub-heading the card renames higher up', async () => {
+    // Silver prints "Salad"; Platinum up prints "Salad Bar". Same course, so Swap has to
+    // offer the whole of it — otherwise a Crown salad cannot go on a Silver plate even
+    // though both cards are the same hotel's.
+    const sub = await makeSubEvent()
+    const silver = await tierId('Silver')
+
+    const [outsider] = (await db.execute(sql`
+      SELECT i.name FROM menu_items i
+      JOIN menu_categories c ON c.id = i.category_id
+      WHERE i.is_active AND c.name = 'Salad Bar'
+        AND i.name NOT IN (
+          SELECT i2.name FROM menu_items i2
+          JOIN menu_categories c2 ON c2.id = i2.category_id
+          WHERE c2.name = 'Salad' AND i2.is_active
+        )
+      LIMIT 1
+    `)) as unknown as { name: string }[]
+    expect(outsider, 'expected a Salad Bar dish absent from every Salad list').toBeTruthy()
+
+    // Offered under the name Silver prints, which is the one its picker asks for…
+    const pools = await menus.getMasterMenuPools()
+    const salad = pools.find((p) => p.categoryName === 'Salad')!.items
+    expect(salad).toContain(outsider!.name)
+    // …and both spellings key the same pool, so neither side is the privileged one. (Only
+    // Salad, pick-3, ever consults it: Salad Bar is all-included from Platinum up and its
+    // picker is read-only.)
+    expect(new Set(pools.find((p) => p.categoryName === 'Salad Bar')!.items)).toEqual(new Set(salad))
+
+    // And it saves, rather than being offered and then refused.
+    await menus.saveSubEventMenu(actor, sub, { tierId: silver, selections: { Salad: [outsider!.name] } })
+    const saved = await menus.getSubEventMenu(sub)
+    expect(saved.menu!.categories.find((c) => c.categoryName === 'Salad')!.selected).toContain(outsider!.name)
+  })
+
+  it('leaves an unaliased sub-heading pooling only its own name', async () => {
+    // The merge is the three renamed courses, not "everything is one list".
+    const pools = await menus.getMasterMenuPools()
+    const soup = pools.find((p) => p.categoryName === 'Soup')!.items
+    const dessert = pools.find((p) => p.categoryName === 'Dessert')!.items
+    expect(soup.some((s) => dessert.includes(s))).toBe(false)
+  })
 })
 
 d('per-item preference notes', () => {

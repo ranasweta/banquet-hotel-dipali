@@ -196,6 +196,38 @@ d('proposal document — structure', () => {
     expect(reception!.subtotalPaise).toBe(16_000_000)
   })
 
+  it('carries the bar onto the document, in the sub-total and in the shown GST', async () => {
+    const { eventId } = await buildProposal()
+    const before = await proposal.proposalDocument(eventId)
+    const sangeet = before.functions[0]!
+    expect(sangeet.bar).toEqual([]) // nothing ordered yet
+
+    const bar = await import('@/lib/bar')
+    const auditor = { id: bm.id, roleName: 'auditor' }
+    const { id: brandId } = await bar.createBrand(auditor, {
+      name: 'Proposal Whisky',
+      pricePerBottlePaise: 150_000,
+    })
+    await bar.setBarLine({ id: bm.id, roleName: 'booking_manager' }, sangeet.id, { brandId, bottles: 4 })
+
+    const doc = await proposal.proposalDocument(eventId)
+    const after = doc.functions[0]!
+    expect(after.bar).toEqual([
+      { brandName: 'Proposal Whisky', bottles: 4, ratePaise: 150_000, amountPaise: 600_000 },
+    ])
+    // Printing the bottles and leaving their money out would hand the guest a document whose
+    // own figures do not add up.
+    expect(after.subtotalPaise).toBe(sangeet.subtotalPaise + 600_000)
+    // 18% shown on the bar like everything but rooms, and collected from nobody.
+    expect(doc.totals.shownGstPaise).toBe(before.totals.shownGstPaise + 108_000)
+    // …and it IS money: the amount payable moves by the bottles, not by the bottles plus tax.
+    expect(doc.totals.totalPaise).toBe(before.totals.totalPaise + 600_000)
+    expect(doc.totals.displayTotalPaise).toBe(before.totals.displayTotalPaise + 708_000)
+
+    await db.execute(sql`DELETE FROM sub_event_bar_items`)
+    await db.execute(sql`DELETE FROM bar_brands`)
+  })
+
   it('snapshots the menu segment by segment, flagging the picks beyond base as extras', async () => {
     const { eventId } = await buildProposal()
     const doc = await proposal.proposalDocument(eventId)

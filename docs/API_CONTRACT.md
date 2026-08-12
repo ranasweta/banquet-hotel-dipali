@@ -81,6 +81,38 @@ races return 409 with a human-readable message.
 - `POST /menu/master/items` | `PUT /menu/master/items/:id` { name?, is_active? } — dishes are
   RETIRED via `is_active`, not deleted: snapshots copy by name so a delete would not corrupt
   a booked menu, but it would erase the dish from every tier's pooled Swap list with no undo.
+  POST **cascades up the tier ladder** (Silver → Gold → Platinum → Diamond → Crown, 12 Aug
+  2026): the dish is added to the matching segment of every tier above, once each, and the
+  response says where it went — `{ id, cascadedTo: string[], skippedTiers: string[] }`.
+  Segments match by name plus `SEGMENT_ALIASES`, which carries the three the card relabels as
+  it climbs — Salad/Salad Bar, Veg Appetizer/Veg Starters, Raita/Raita Bar — so every seeded
+  segment reaches Crown and `skippedTiers` is empty in practice. A tier appears there only
+  when it carries no counterpart segment at all; the caller must show it. Tiers off the
+  ladder — Breakfast Gold, High Tea Silver, anything newly created — neither cascade nor
+  receive, and both arrays come back empty.
+
+### The bar (12 Aug 2026)
+- `GET /menu/master/bar-brands` | `POST` { name, price_per_bottle_paise } — the priced brand
+  list, retired brands included. Names are unique on `lower(name)`: one brand, one price, one
+  row in the dropdown. **`menu_master`**, like the rest of this section.
+- `PUT /menu/master/bar-brands/:id` { name?, price_per_bottle_paise?, is_active? } — rename,
+  re-price, retire or restore. Brands are RETIRED, never deleted (`ON DELETE RESTRICT`): bottles
+  already quoted reference them, and they read their own snapshot.
+  `GET /menu/master/bar-brands/:id` returns `{ orderedOn }` — what a re-price would *not* move.
+- `GET /sub-events/:id/bar` — `{ lines, brands }`: the bottles on this function plus the brands
+  still orderable, together, because the Alcohol panel needs both the moment it opens
+  (**menus:view**).
+- `PUT /sub-events/:id/bar` { brand_id, bottles } — order bottles for this function
+  (**menus:create_edit**). **Idempotent per brand**: sending it again REPLACES the count rather
+  than adding a second line, and re-snapshots the price. Returns the same shape as GET.
+- `DELETE /bar-lines/:id` — take a brand off a function (**menus:create_edit**).
+
+A bar line carries the brand's name and rate as snapshots, so re-pricing the catalogue never
+re-prices a quoted booking. The money reaches `proposal_total_paise` through
+`recomputeProposalTotal` — so it is inside the payable, the advance base and the discount-cap
+base without those modules knowing the bar exists — and prints as a `food`-section line, i.e.
+18% shown and collected from nobody (rule 11). See SEED_ASSUMPTIONS §F24 for the two questions
+that leaves for the hotel's CA.
 
 ## Menus (module: menus)
 - `GET  /menu/catalog` — every tier → categories → items, for the dish picker (menus:view;

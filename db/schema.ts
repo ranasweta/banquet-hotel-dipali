@@ -364,6 +364,42 @@ export const subEventAddons = pgTable("sub_event_addons", {
 	check("sub_event_addons_qty_check", sql`qty > 0`),
 ]);
 
+export const barBrands = pgTable("bar_brands", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	pricePerBottlePaise: bigint("price_per_bottle_paise", { mode: "number" }).notNull(),
+	isActive: boolean("is_active").default(true).notNull(),
+}, (table) => [
+	uniqueIndex("bar_brands_name_key").using("btree", sql`lower(name)`),
+	check("bar_brands_price_per_bottle_paise_check", sql`price_per_bottle_paise > 0`),
+]);
+
+export const subEventBarItems = pgTable("sub_event_bar_items", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	subEventId: uuid("sub_event_id").notNull(),
+	brandId: uuid("brand_id").notNull(),
+	brandName: text("brand_name").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	ratePaise: bigint("rate_paise", { mode: "number" }).notNull(),
+	bottles: integer().notNull(),
+}, (table) => [
+	index("sub_event_bar_items_sub_event").using("btree", table.subEventId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.subEventId],
+			foreignColumns: [subEvents.id],
+			name: "sub_event_bar_items_sub_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.brandId],
+			foreignColumns: [barBrands.id],
+			name: "sub_event_bar_items_brand_id_fkey"
+		}).onDelete("restrict"),
+	unique("sub_event_bar_items_sub_event_id_brand_id_key").on(table.subEventId, table.brandId),
+	check("sub_event_bar_items_rate_paise_check", sql`rate_paise > 0`),
+	check("sub_event_bar_items_bottles_check", sql`bottles > 0`),
+]);
+
 export const exceptions = pgTable("exceptions", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	eventId: uuid("event_id").notNull(),

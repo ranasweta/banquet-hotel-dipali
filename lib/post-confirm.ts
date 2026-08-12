@@ -46,7 +46,7 @@ export async function recomputeProposal(tx: Tx, eventId: string, eventType: stri
   const subs = await loadSubEventsForPricing(eventId, tx)
   const pricing = await priceProposal(eventType, subs, tx)
   const extras = await foodAndAddonTotal(eventId, tx)
-  const total = pricing.totalPaise + extras.foodPaise + extras.addonPaise
+  const total = pricing.totalPaise + extras.foodPaise + extras.addonPaise + extras.barPaise
   const dates = subs.map((s) => s.eventDate).sort()
   await tx
     .update(schema.events)

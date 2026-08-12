@@ -18,6 +18,11 @@ const ALIASES: Record<string, string> = {
   aampanna: 'aampana', // "Aam Panna" / "Aam Pana"
   roohafza: 'rooafza',
   ruhafza: 'rooafza',
+  // Plurals, spotted 12 Aug 2026 as the only pairs left showing twice in one Swap list.
+  // Listed one by one rather than stripping a trailing "s" wholesale, per the note above:
+  // "Papad" and "Papads" would fold safely, but so would dishes that merely rhyme.
+  vegspringrolls: 'vegspringroll',
+  hakkanoddles: 'hakkanoddle',
 }
 
 export function menuItemKey(name: string): string {
