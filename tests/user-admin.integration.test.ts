@@ -288,13 +288,17 @@ d('editing a user', () => {
     const okRes = await editUser(user.id, { loginId: 'test008.renamed' })
     expect(okRes.status).toBe(200)
 
-    const clash = await editUser(user.id, { loginId: 'admin' }) // the seeded Auditor
+    // The seeded Auditor's ID, from db/masters.ts. It used to say 'admin', which belongs to
+    // nobody — migration 0027 gave every seeded user an ID from the client's own sheet — so
+    // the rename was not a clash at all and the 409 this test exists to prove was never once
+    // reached. A duplicate check has to be aimed at a real duplicate.
+    const clash = await editUser(user.id, { loginId: 'IAUD5533' })
     expect(clash.status).toBe(409)
 
     // Uniqueness is case-insensitive (migration 0027), so this is the same clash in
     // different clothes — the check must lower() both sides or the database rejects it
     // after the API has already said yes.
-    const cased = await editUser(user.id, { loginId: 'ADMIN' })
+    const cased = await editUser(user.id, { loginId: 'iaud5533' })
     expect(cased.status).toBe(409)
   })
 
