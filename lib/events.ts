@@ -130,7 +130,12 @@ export async function cancelEvent(
 
 // ── Date-driven advancement ──────────────────────────────────────────────────
 
-export type AdvanceResult = { started: string[]; finished: string[] }
+export type AdvanceResult = {
+  started: string[]
+  finished: string[]
+  /** Events whose move threw, with the reason. Empty on a clean run. */
+  failed: { eventId: string; error: string }[]
+}
 
 /**
  * Moves events through the two statuses the calendar owns rather than a person:
@@ -163,31 +168,45 @@ export async function advanceEventStatuses(actor: Actor, asOf: string): Promise<
 
   const started: string[] = []
   const finished: string[] = []
+  const failed: AdvanceResult['failed'] = []
 
   for (const ev of due) {
-    // One transaction per event: a bad row must not strand the rest of the day's run.
-    if (ev.status === 'confirmed' && ev.firstDate <= asOf) {
-      await db.transaction(async (tx) => {
-        await transitionEvent(tx, ev.id, 'in_progress', actor)
-      })
-      started.push(ev.id)
-      // An event whose dates have all passed finishes in the same pass, so a run that
-      // missed a few days catches up rather than advancing one step per day.
-      if (ev.lastDate < asOf) {
+    // One transaction per event, and one CATCH per event. Without the catch the first booking
+    // that refuses to move rejected this whole function, and because the daily job advances
+    // before it does anything else, that single row also stopped the reminder and stale-enquiry
+    // passes — every day, until someone noticed. Nothing else moves a status (rule 8), so the
+    // symptom was the whole hotel quietly failing to reach Completed, and with it nothing that
+    // could be locked, invoiced or billed. One bad booking is now one bad booking: it is
+    // reported by id in the run's result and the rest of the day's work still happens.
+    try {
+      if (ev.status === 'confirmed' && ev.firstDate <= asOf) {
+        await db.transaction(async (tx) => {
+          await transitionEvent(tx, ev.id, 'in_progress', actor)
+        })
+        started.push(ev.id)
+        // An event whose dates have all passed finishes in the same pass, so a run that
+        // missed a few days catches up rather than advancing one step per day.
+        if (ev.lastDate < asOf) {
+          await db.transaction(async (tx) => {
+            await transitionEvent(tx, ev.id, 'completed', actor)
+          })
+          finished.push(ev.id)
+        }
+      } else if (ev.status === 'in_progress' && ev.lastDate < asOf) {
         await db.transaction(async (tx) => {
           await transitionEvent(tx, ev.id, 'completed', actor)
         })
         finished.push(ev.id)
       }
-    } else if (ev.status === 'in_progress' && ev.lastDate < asOf) {
-      await db.transaction(async (tx) => {
-        await transitionEvent(tx, ev.id, 'completed', actor)
-      })
-      finished.push(ev.id)
+    } catch (err) {
+      // Logged as well as returned: the scheduler's caller is a cron job whose response
+      // nobody reads, so the server log is where this is actually found.
+      console.error(`advanceEventStatuses: ${ev.id} did not move`, err)
+      failed.push({ eventId: ev.id, error: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  return { started, finished }
+  return { started, finished, failed }
 }
 
 /** Assembles the full event detail the wizard and detail screen need. */

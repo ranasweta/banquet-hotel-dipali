@@ -130,6 +130,12 @@ d('day sheet (FR-2.4)', () => {
     expect(fn.menu?.tierName).toBe('Silver')
     const soup = fn.menu?.categories.find((c) => c.name === 'Soup')
     expect(soup?.items).toContain('Hot & Sour Soup')
+
+    // Not one rupee in the payload. The route is gated on `calendar:view`, which the Banquet
+    // Manager and the Chef hold and which grants nothing in billing, so money is dropped at
+    // the query — the same rule the operations board is held to.
+    expect(JSON.stringify(sheet)).not.toMatch(/[Pp]aise|perPlate/)
+
     // A different date shows nothing of this event.
     expect((await daysheet.getDaySheet('2026-10-06')).functions.some((f) => f.subEventId === subId)).toBe(false)
   })

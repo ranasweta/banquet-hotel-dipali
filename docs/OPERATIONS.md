@@ -13,7 +13,7 @@ Required environment variables (see `.env.example`; never commit `.env.local`):
 | `SESSION_SECRET` | iron-session cookie encryption key (≥ 32 chars) |
 | `STORAGE_KEY` | base64 of 32 bytes — AES-256-GCM key for encrypted document storage |
 | `SEED_PASSWORD` | initial password for seeded users (rotate after first login) |
-| `CRON_SECRET` | optional; header secret so a scheduler can call `POST /cron/run` |
+| `CRON_SECRET` | **required in any deployed environment**; header secret so the scheduler can call `POST /cron/run`. Unset, every scheduler call is refused with 403 and no event ever advances to In Progress or Completed — nothing can then be locked, invoiced or billed. Optional only on a laptop, where the Auditor can run the job by hand. |
 | `DB_POOL_MAX` | optional; postgres.js pool size (default 5) |
 
 ## Database backups (NFR-4)
