@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeftRight, Check, ChefHat, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react'
+import { ArrowLeftRight, Check, ChefHat, ChevronDown, ChevronRight, Loader2, Plus, Sparkles, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, rupeesToPaise } from '@/lib/money'
@@ -793,6 +793,205 @@ export function MenuPicker({
           onChanged?.()
         }}
       />
+
+      <BarEditor subEventId={subEventId} editable={editable} onChanged={onChanged} />
+    </div>
+  )
+}
+
+type BarLine = { id: string; brandId: string; brandName: string; ratePaise: number; bottles: number; totalPaise: number }
+type BarBrand = { id: string; name: string; pricePerBottlePaise: number }
+
+/**
+ * The bar for one function (client, 12 Aug 2026): a brand off the Auditor's priced list and a
+ * number of bottles. Nothing is typed twice — the price comes from the catalogue, so it cannot
+ * be remembered wrong here, and the line reaches the bill on its own.
+ *
+ * Collapsed until asked for, because most bookings take no alcohol and an empty panel on every
+ * function is noise. It opens by itself when the function already has bottles on it, so a
+ * closed panel always means an empty one.
+ */
+function BarEditor({
+  subEventId,
+  editable,
+  onChanged,
+}: {
+  subEventId: string
+  editable: boolean
+  onChanged?: () => void | Promise<void>
+}) {
+  const [open, setOpen] = useState(false)
+  const [lines, setLines] = useState<BarLine[]>([])
+  const [brands, setBrands] = useState<BarBrand[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [query, setQuery] = useState('')
+  const [brandId, setBrandId] = useState('')
+  const [bottles, setBottles] = useState('1')
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    const r = await api<{ lines: BarLine[]; brands: BarBrand[] }>(`/sub-events/${subEventId}/bar`)
+    setLines(r.lines)
+    setBrands(r.brands)
+    setLoaded(true)
+    // Bottles already on the function: show them rather than hide them behind a click.
+    if (r.lines.length > 0) setOpen(true)
+  }, [subEventId])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    load().catch(() => setLoaded(true))
+  }, [load])
+
+  async function run(fn: () => Promise<unknown>, done: string) {
+    setBusy(true)
+    try {
+      await fn()
+      await load()
+      await onChanged?.()
+      toast.success(done)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'That did not work')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const total = lines.reduce((s, l) => s + l.totalPaise, 0)
+  // Searched, not scrolled: the list is a liquor cabinet, not a menu segment.
+  const matches = brands
+    .filter((b) => !query.trim() || b.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .slice(0, 8)
+
+  if (!loaded) return null
+
+  return (
+    <div className="rounded-lg border border-dashed p-3">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 text-left text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+        Alcohol
+        {lines.length > 0 && (
+          <span className="ml-auto tabular-nums text-muted-foreground">
+            {lines.length} brand{lines.length === 1 ? '' : 's'} · {formatPaise(total)}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-3">
+          {lines.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              None on this function. Prices come from the bar list the Auditor keeps.
+            </p>
+          ) : (
+            <ul className="space-y-1">
+              {lines.map((l) => (
+                <li key={l.id} className="flex items-center justify-between gap-2 text-sm">
+                  <span>
+                    {l.brandName}{' '}
+                    <span className="text-muted-foreground">
+                      × {l.bottles} bottle{l.bottles === 1 ? '' : 's'} @ {formatPaise(l.ratePaise)}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-2 tabular-nums">
+                    {formatPaise(l.totalPaise)}
+                    {editable && (
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        disabled={busy}
+                        title={`Remove ${l.brandName}`}
+                        onClick={() => run(() => api(`/bar-lines/${l.id}`, { method: 'DELETE' }), `${l.brandName} removed`)}
+                      >
+                        <Trash2 className="size-3" />
+                      </Button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {editable && brands.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              The bar list is empty — the Auditor adds brands and their per-bottle price under Menu master.
+            </p>
+          )}
+
+          {editable && brands.length > 0 && (
+            <div className="space-y-2 rounded-md bg-muted/40 p-2">
+              <Input
+                placeholder="Search a brand…"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setBrandId('')
+                }}
+                className="h-9"
+              />
+              {query.trim() && !brandId && (
+                <ul className="max-h-40 overflow-y-auto rounded-md border bg-background">
+                  {matches.length === 0 ? (
+                    <li className="p-2 text-xs text-muted-foreground">No brand by that name.</li>
+                  ) : (
+                    matches.map((b) => (
+                      <li key={b.id}>
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-between gap-2 p-2 text-left text-sm hover:bg-muted"
+                          onClick={() => {
+                            setBrandId(b.id)
+                            setQuery(b.name)
+                          }}
+                        >
+                          <span className="truncate">{b.name}</span>
+                          <span className="tabular-nums text-muted-foreground">{formatPaise(b.pricePerBottlePaise)}</span>
+                        </button>
+                      </li>
+                    ))
+                  )}
+                </ul>
+              )}
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="w-24">
+                  <Input
+                    placeholder="Bottles"
+                    inputMode="numeric"
+                    value={bottles}
+                    onChange={(e) => setBottles(e.target.value)}
+                  />
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={busy || !brandId || !Number.isInteger(Number(bottles)) || Number(bottles) < 1}
+                  onClick={async () => {
+                    const name = brands.find((b) => b.id === brandId)?.name ?? 'Brand'
+                    await run(
+                      () =>
+                        api(`/sub-events/${subEventId}/bar`, {
+                          method: 'PUT',
+                          body: JSON.stringify({ brand_id: brandId, bottles: Number(bottles) }),
+                        }),
+                      // Ordering a brand already on the function replaces its count rather than
+                      // adding a second line, so the message says "set", not "added".
+                      `${name} set to ${bottles} bottle${Number(bottles) === 1 ? '' : 's'}`,
+                    )
+                    setBrandId('')
+                    setQuery('')
+                    setBottles('1')
+                  }}
+                >
+                  <Plus className="size-4" /> Add
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

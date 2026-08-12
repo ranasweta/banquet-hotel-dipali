@@ -43,6 +43,10 @@ const MASTER_TABLES = [
   'role_permissions', 'users', 'roles', 'modules',
   'venue_rate_cards', 'venue_bundle_members', 'venue_bundles', 'venues', 'properties',
   'menu_items', 'menu_categories', 'menu_tier_prices', 'menu_tiers',
+  // The bar has no seeded brands — the hotel's PDFs price no alcohol, and inventing a rate
+  // card for it would be exactly the silent invention SEED_ASSUMPTIONS exists to prevent.
+  // Listed so --reset clears anything the Auditor added by hand.
+  'bar_brands',
   'rooms', 'lodging_units', 'event_types', 'settings',
 ]
 

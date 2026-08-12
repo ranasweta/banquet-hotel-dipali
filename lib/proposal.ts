@@ -84,7 +84,16 @@ export type ProposalFunction = {
   menu: ProposalMenu | null
   foodAmountPaise: number
   addons: ProposalAddon[]
+  /** Bottles ordered for this function (12 Aug 2026). Printed as its own Alcohol section. */
+  bar: ProposalBarLine[]
   subtotalPaise: number
+}
+
+export type ProposalBarLine = {
+  brandName: string
+  bottles: number
+  ratePaise: number
+  amountPaise: number
 }
 
 export type ProposalRoomLine = {
@@ -239,6 +248,14 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     ORDER BY a.description
   `)) as unknown as Row[]
 
+  const barRows = (await db.execute(sql`
+    SELECT b.sub_event_id AS "subEventId", b.brand_name AS "brandName", b.bottles,
+           b.rate_paise AS "ratePaise"
+    FROM sub_event_bar_items b JOIN sub_events se ON se.id = b.sub_event_id
+    WHERE se.event_id = ${eventId}
+    ORDER BY b.brand_name
+  `)) as unknown as Row[]
+
   // Segment order comes from the master category's sort_order — the snapshot table keeps the
   // pick rules but not the running order, and "Welcome drink" must not sort after "Soup".
   const segRows = (await db.execute(sql`
@@ -304,9 +321,24 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
         }
       : null
 
+    const bar: ProposalBarLine[] = barRows
+      .filter((b) => b.subEventId === s.id)
+      .map((b) => ({
+        brandName: b.brandName as string,
+        bottles: num(b.bottles),
+        ratePaise: num(b.ratePaise),
+        amountPaise: num(b.bottles) * num(b.ratePaise),
+      }))
+
     const venueRatePaise = s.venueRatePaise == null ? null : num(s.venueRatePaise)
+    // The bar is in the subtotal because it is in `proposal_total_paise`. Printing the bottles
+    // and leaving their money out would put a document in the guest's hand whose own figures
+    // do not add up to the one they are asked to pay against.
     const subtotalPaise =
-      (venueRatePaise ?? 0) + foodAmountPaise + addons.reduce((n, a) => n + a.amountPaise, 0)
+      (venueRatePaise ?? 0) +
+      foodAmountPaise +
+      addons.reduce((n, a) => n + a.amountPaise, 0) +
+      bar.reduce((n, b) => n + b.amountPaise, 0)
 
     return {
       id: s.id as string,
@@ -325,6 +357,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       menu,
       foodAmountPaise,
       addons,
+      bar,
       subtotalPaise,
     }
   })
@@ -427,15 +460,18 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
 
   // The 18% shown on everything but rooms, rounded per line and summed — the same lines
   // lib/invoice.ts pushes (one per venue, one per function's food, one per add-on, one per
-  // extra), so the Draft and the Draft 2 print the same figure to the paisa. It is added to
-  // the printed Total and to nothing else: nobody pays it (client's lead, 4 Aug 2026).
+  // bar brand, one per extra), so the Draft and the Draft 2 print the same figure to the
+  // paisa. It is added to the printed Total and to nothing else: nobody pays it (client's
+  // lead, 4 Aug 2026). Rounding PER LINE, brand by brand, for that reason — a bar total taxed
+  // in one lump would drift a paisa from the bill and make the two documents disagree.
   const shownGstPaise =
     functions.reduce(
       (n, f) =>
         n +
         taxOf(f.venueRatePaise ?? 0, STANDARD_GST_BP) +
         taxOf(f.foodAmountPaise, STANDARD_GST_BP) +
-        f.addons.reduce((m, a) => m + taxOf(a.amountPaise, STANDARD_GST_BP), 0),
+        f.addons.reduce((m, a) => m + taxOf(a.amountPaise, STANDARD_GST_BP), 0) +
+        f.bar.reduce((m, b) => m + taxOf(b.amountPaise, STANDARD_GST_BP), 0),
       0,
     ) + extraRows.reduce((n, e) => n + taxOf(num(e.amountPaise), num(e.gstRateBp)), 0)
 

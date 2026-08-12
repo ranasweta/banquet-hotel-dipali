@@ -98,7 +98,7 @@ export async function priceProposal(
 export async function foodAndAddonTotal(
   eventId: string,
   e?: Exec,
-): Promise<{ foodPaise: number; addonPaise: number }> {
+): Promise<{ foodPaise: number; addonPaise: number; barPaise: number }> {
   const [food] = (await exec(e).execute(sql`
     SELECT COALESCE(sum(se.pax::bigint * (
              m.base_rate_paise + m.surcharge_paise
@@ -117,7 +117,18 @@ export async function foodAndAddonTotal(
     WHERE se.event_id = ${eventId}
   `)) as unknown as { total: number }[]
 
-  return { foodPaise: food!.total, addonPaise: addon!.total }
+  // The bar (12 Aug 2026): bottles × the rate SNAPSHOTTED on the line, never bar_brands, so
+  // re-pricing a brand tomorrow does not re-price a proposal quoted today. Kept as its own
+  // figure rather than folded into add-ons — the arithmetic is the same, but "add-ons" would
+  // stop meaning add-ons and every report reading it would quietly be wrong.
+  const [bar] = (await exec(e).execute(sql`
+    SELECT COALESCE(sum(b.bottles::bigint * b.rate_paise), 0)::bigint AS total
+    FROM sub_event_bar_items b
+    JOIN sub_events se ON se.id = b.sub_event_id
+    WHERE se.event_id = ${eventId}
+  `)) as unknown as { total: number }[]
+
+  return { foodPaise: food!.total, addonPaise: addon!.total, barPaise: bar!.total }
 }
 
 /**
@@ -179,8 +190,8 @@ export async function recomputeProposalTotal(
 ): Promise<number> {
   const subs = await loadSubEventsForPricing(eventId, exec2)
   const venue = await priceProposal(eventType, subs, exec2)
-  const { foodPaise, addonPaise } = await foodAndAddonTotal(eventId, exec2)
-  const total = venue.totalPaise + foodPaise + addonPaise
+  const { foodPaise, addonPaise, barPaise } = await foodAndAddonTotal(eventId, exec2)
+  const total = venue.totalPaise + foodPaise + addonPaise + barPaise
   await exec2
     .update(schema.events)
     .set({ proposalTotalPaise: total })

@@ -98,6 +98,10 @@ async function cleanup() {
   await db.delete(schema.events) // cascades to sub-events and their menu snapshots
   // sub_event_menus references menu_tiers without cascade, so tiers go after events.
   await db.execute(sql`DELETE FROM menu_tiers WHERE name LIKE ${PREFIX + '%'}`)
+  // The cascade tests write onto the SEEDED card (the ladder is Silver→Crown by name), so
+  // their dishes — and the one segment they add to Silver — go by name rather than by tier.
+  await db.execute(sql`DELETE FROM menu_items WHERE name LIKE 'Cascade %'`)
+  await db.execute(sql`DELETE FROM menu_categories WHERE name LIKE ${PREFIX + '%'}`)
 }
 afterEach(async () => { if (hasDb) await cleanup() })
 afterAll(async () => { if (hasDb) await cleanup() })
@@ -324,6 +328,141 @@ d('dishes', () => {
     await master.updateItem(auditor, alpha.id, { isActive: true })
     const restored = await menus.getTierCatalog()
     expect(restored.find((t) => t.id === tierId)!.categories.find((c) => c.id === categoryId)!.items).toHaveLength(4)
+  }, 120_000)
+
+  it('carries a dish up the tier ladder, and only upwards', async () => {
+    // The seeded card, not a ZZTest tier: the ladder is Silver→Crown by name.
+    const catalog = await master.getMasterCatalog()
+    const seg = (tier: string) => catalog.find((t) => t.name === tier)!.categories.find((c) => c.name === 'Dessert')!
+
+    const r = await master.createItem(auditor, seg('Platinum').id, 'Cascade Kulfi')
+    expect(r.cascadedTo).toEqual(['Diamond', 'Crown']) // ladder order
+    expect(r.skippedTiers).toEqual([])
+
+    const after = await master.getMasterCatalog()
+    const dessert = (tier: string) =>
+      after.find((t) => t.name === tier)!.categories.find((c) => c.name === 'Dessert')!.items.map((i) => i.name)
+    for (const tier of ['Platinum', 'Diamond', 'Crown']) expect(dessert(tier)).toContain('Cascade Kulfi')
+    // Cheaper cards are untouched — a Platinum dish is not a Silver one.
+    for (const tier of ['Silver', 'Gold']) expect(dessert(tier)).not.toContain('Cascade Kulfi')
+  }, 120_000)
+
+  it('refuses a dish the segment already carries under another spelling', async () => {
+    const { categoryId } = await makeTier('Spelling', 50_000)
+    await master.createItem(auditor, categoryId, 'Ice Cream')
+    // The UNIQUE index cannot see these two as one dish; menuItemKey can.
+    await expect(master.createItem(auditor, categoryId, 'Ice-Cream')).rejects.toMatchObject({ status: 409 })
+    // …and the message says which spelling is already there, or it reads as nonsense.
+    await expect(master.createItem(auditor, categoryId, 'Ice-Cream')).rejects.toThrow(/spelled "Ice Cream"/)
+  }, 120_000)
+
+  it('does not cascade a second spelling onto a card that already has the dish', async () => {
+    // The seeded card spells one dish several ways across tiers ("Jal Jeera" / "Jaljeera"),
+    // so a cascade comparing raw strings would print it twice on the upper card.
+    const catalog = await master.getMasterCatalog()
+    const dessert = (tier: string) => catalog.find((t) => t.name === tier)!.categories.find((c) => c.name === 'Dessert')!
+
+    await master.createItem(auditor, dessert('Crown').id, 'Cascade Ice-Cream')
+    const r = await master.createItem(auditor, dessert('Silver').id, 'Cascade Ice Cream')
+
+    expect(r.cascadedTo).toEqual(['Gold', 'Platinum', 'Diamond']) // Crown has it already
+    const [{ n }] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM menu_items i
+        JOIN menu_categories c ON c.id = i.category_id
+       WHERE c.name = 'Dessert' AND i.name LIKE 'Cascade Ice%'
+    `)) as unknown as { n: number }[]
+    expect(n).toBe(5) // one per tier — not six, with Crown printing both spellings
+  }, 120_000)
+
+  it('adds the dish once — a tier that already has it is left alone', async () => {
+    const catalog = await master.getMasterCatalog()
+    const soup = (tier: string) => catalog.find((t) => t.name === tier)!.categories.find((c) => c.name === 'Soup')!
+
+    // Crown gets it directly first, so the cascade from Silver meets a dish already there.
+    await master.createItem(auditor, soup('Crown').id, 'Cascade Shorba')
+    const r = await master.createItem(auditor, soup('Silver').id, 'Cascade Shorba')
+
+    expect(r.cascadedTo).toEqual(['Gold', 'Platinum', 'Diamond']) // Crown had it — not re-added
+    const [{ n }] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM menu_items i
+        JOIN menu_categories c ON c.id = i.category_id
+       WHERE i.name = 'Cascade Shorba' AND c.name = 'Soup'
+    `)) as unknown as { n: number }[]
+    expect(n).toBe(5) // one per tier, never two on the same card
+  }, 120_000)
+
+  // The hotel's card relabels three segments as it climbs. Aliasing carries the dish over
+  // each boundary and onto the tier's OWN segment, whatever that card calls it — without
+  // which a Silver salad would never reach Crown.
+  it.each([
+    ['Salad', 'Cascade Kachumber', ['Salad', 'Salad', 'Salad Bar', 'Salad Bar', 'Salad Bar']],
+    ['Veg Appetizer', 'Cascade Tikki', ['Veg Appetizer', 'Veg Appetizer', 'Veg Appetizer', 'Veg Starters', 'Veg Starters']],
+    ['Raita', 'Cascade Boondi', ['Raita', 'Raita', 'Raita', 'Raita', 'Raita Bar']],
+  ])('carries a dish across the %s rename, onto each card by its own name', async (segment, dish, landsOn) => {
+    const ladder = ['Silver', 'Gold', 'Platinum', 'Diamond', 'Crown']
+    const before = await master.getMasterCatalog()
+    const cat = before.find((t) => t.name === 'Silver')!.categories.find((c) => c.name === segment)!
+
+    const r = await master.createItem(auditor, cat.id, dish)
+    expect(r.cascadedTo).toEqual(['Gold', 'Platinum', 'Diamond', 'Crown'])
+    expect(r.skippedTiers).toEqual([])
+
+    // On every card, and in the segment that card actually prints.
+    const after = await master.getMasterCatalog()
+    for (const [i, tier] of ladder.entries()) {
+      const seg = after.find((t) => t.name === tier)!.categories.find((c) => c.name === landsOn[i])!
+      expect(seg.items.map((x) => x.name)).toContain(dish)
+    }
+    // …and not duplicated into the other half of the pair on a card carrying only one.
+    const [{ n }] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM menu_items WHERE name = ${dish}
+    `)) as unknown as { n: number }[]
+    expect(n).toBe(5)
+  }, 120_000)
+
+  it('names a tier it genuinely could not reach instead of skipping it silently', async () => {
+    // A segment with no counterpart anywhere above — the one case aliasing cannot rescue.
+    const silver = (await master.getMasterCatalog()).find((t) => t.name === 'Silver')!
+    const { id } = await master.createCategory(auditor, silver.id, {
+      name: `${PREFIX} Amuse Bouche`,
+      pickCount: 1,
+      freeIncreaseEligible: false,
+      sortOrder: 99,
+    })
+    const r = await master.createItem(auditor, id, 'Cascade Canape')
+    expect(r.cascadedTo).toEqual([])
+    expect(r.skippedTiers).toEqual(['Gold', 'Platinum', 'Diamond', 'Crown'])
+  }, 120_000)
+
+  it('leaves a tier that is off the ladder cascading nowhere', async () => {
+    // A meal-time card is a different card, not a richer one — and "Breakfast Gold" is above
+    // nothing. Same for any tier created later, which is why the ZZTest tiers above still pass.
+    const catalog = await master.getMasterCatalog()
+    const bf = catalog.find((t) => t.name === 'Breakfast Gold')!
+    const r = await master.createItem(auditor, bf.categories[0]!.id, 'Cascade Paratha')
+    expect(r).toMatchObject({ cascadedTo: [], skippedTiers: [] })
+
+    const crown = (await master.getMasterCatalog()).find((t) => t.name === 'Crown')!
+    expect(crown.categories.flatMap((c) => c.items.map((i) => i.name))).not.toContain('Cascade Paratha')
+  }, 120_000)
+
+  it('audits every card the dish landed on, not just the one it was typed into', async () => {
+    const catalog = await master.getMasterCatalog()
+    const cat = catalog.find((t) => t.name === 'Gold')!.categories.find((c) => c.name === 'Rice')!
+    await master.createItem(auditor, cat.id, 'Cascade Pulao')
+
+    const rows = (await db.execute(sql`
+      SELECT new_value AS "newValue" FROM audit_log
+       WHERE entity = 'menu_items' AND action = 'insert' AND new_value LIKE '%Cascade Pulao%'
+       ORDER BY seq
+    `)) as unknown as { newValue: string }[]
+    expect(rows).toHaveLength(4) // the one typed in, plus the three it was carried onto
+    expect(rows[0]!.newValue).toBe('Rice · Cascade Pulao')
+    expect(rows.slice(1).map((r) => r.newValue)).toEqual([
+      'Platinum · Rice · Cascade Pulao (cascaded from Gold)',
+      'Diamond · Rice · Cascade Pulao (cascaded from Gold)',
+      'Crown · Rice · Cascade Pulao (cascaded from Gold)',
+    ])
   }, 120_000)
 
   it('renames a dish', async () => {

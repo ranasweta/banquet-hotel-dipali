@@ -1109,6 +1109,39 @@ real notes on old bookings, and dropping it would delete them. `venues.capacity_
 survive as descriptive inventory (useful to a salesperson: "Kohinoor seats 150–250") and gate
 nothing. Both are dead weight to be removed only on the client's word.
 
+### F24. The bar — priced brands, ordered by the bottle
+Client, 12 Aug 2026. A booking may take alcohol: the Auditor keeps a list of brands and what one
+bottle costs (a **Bar** tab beside the menu tiers, same `menu_master` permission), and whoever
+builds the proposal picks a brand and a number of bottles **on the function that wants it** —
+the client's own choice of level, and the one the bill already groups by. Migration 0028.
+
+**No brands are seeded.** The hotel's PDFs price no alcohol, so every brand here would be
+invented, and a made-up liquor rate card is exactly what this document exists to prevent. The
+list starts empty and the Auditor fills it. Nothing breaks meanwhile: a function with no bar
+lines charges nothing, and the Alcohol panel says where the prices come from.
+
+**Two questions for the client / the hotel's CA, implemented as instructed and recorded rather
+than decided here:**
+
+1. **The 18% GST label.** Asked how alcohol should be taxed, the client chose "same as food" —
+   18%, printed on the Total and collected from nobody (§F8). The money is therefore right by
+   construction: a bar line enters no threshold, no balance and no discount cap beyond what
+   `proposal_total_paise` already carries, and nothing is collected. But alcohol for human
+   consumption sits **outside GST in India** — state excise applies instead, and it is normally
+   already inside the per-bottle price. So the *label* on a guest-facing document may be wrong
+   even where the arithmetic is not. Moving it is a section in `lib/tax.ts` plus one line in
+   `lib/invoice.ts`; nothing else reads it.
+2. **Whether the hotel is selling or serving.** A priced per-bottle list reads as a sale, which
+   needs the relevant licence. If what is actually happening is corkage or a permit-room service
+   charge on the guest's own liquor, the model is the same but the wording on the document is
+   not. Nobody has told us which; the code says "Bar: <brand>" and takes no position.
+
+**A price change never re-prices a quoted bottle.** `sub_event_bar_items` snapshots the brand's
+name and rate when the line is added (rule 4), so re-pricing the bar tomorrow moves nothing on a
+proposal made today — the same guarantee menus get, by the same means. That is also why the bar
+has one price and no effective-from date, unlike `menu_tier_prices`: the snapshot already does
+the work dating would, and a date nobody needs is a date somebody sets wrong.
+
 ---
 
 ## E. Still needed from the client

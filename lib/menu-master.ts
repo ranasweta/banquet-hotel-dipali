@@ -1,9 +1,11 @@
 import 'server-only'
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { assertPaise } from '@/lib/money'
+import { TIER_LADDER, segmentAliases } from '@/lib/menu-ladder'
+import { menuItemKey } from '@/lib/menu-name'
 
 /**
  * Menu master — the catalog itself, not any one event's copy of it (module `menu_master`).
@@ -331,26 +333,160 @@ export async function deleteCategory(actor: Actor, categoryId: string): Promise<
 
 // ── Items (the dishes) ───────────────────────────────────────────────────────
 
-export async function createItem(actor: Actor, categoryId: string, name: string): Promise<{ id: string }> {
+export type CreatedItem = {
+  id: string
+  /** Tiers above this one that the dish was copied onto, cheapest first. */
+  cascadedTo: string[]
+  /** Tiers above this one carrying no segment of this name or its aliases — left alone. */
+  skippedTiers: string[]
+}
+
+/**
+ * Adds a dish, and carries it up the ladder — a richer card contains the poorer ones, so a
+ * paneer put on Silver must appear on Gold through Crown too, without four more trips through
+ * the form (client, 12 Aug 2026). The ladder and the segment aliases live in
+ * `lib/menu-ladder.ts`, which the picker's Swap pool reads as well.
+ *
+ * Two things the caller must tell the user about, because both are silent otherwise:
+ *
+ *  - **Segments are matched by name, plus the aliases in `segmentAliases`.** Every segment
+ *    on the seeded card now reaches Crown, so `skippedTiers` should come back empty in
+ *    practice; a tier lands in it only when somebody has built a segment that genuinely has
+ *    no counterpart above. Still reported rather than swallowed — that is the one case where
+ *    a dish quietly fails to reach a card.
+ *  - **A dish already on a card is left exactly as it is** — added once, as asked — including
+ *    one that was RETIRED there. Retiring is a per-tier decision somebody made on purpose; a
+ *    cascade from below is not the place to undo it.
+ *
+ * "Already there" is judged by `menuItemKey`, not by string equality, and that is the whole
+ * point rather than a refinement. The hotel spells one dish several ways across its cards —
+ * "Ice Cream" / "Ice-Cream", "Jal Jeera" / "Jaljeera", "Pani Puri" / "Panipuri" — so a
+ * cascade comparing raw strings puts a second spelling of the same dish on 36 of the seeded
+ * card's segments, and the guest is offered it twice in one Swap list. The pooled menu
+ * already collapses those (`dedupeMenuNames`); the cascade has to agree with it or it
+ * manufactures exactly the duplicates that pooling exists to remove.
+ */
+export async function createItem(actor: Actor, categoryId: string, name: string): Promise<CreatedItem> {
   const clean = name.trim()
   if (!clean) throw badRequest('A dish needs a name.')
+  const key = menuItemKey(clean)
   return db.transaction(async (tx) => {
     const [cat] = await tx.select().from(schema.menuCategories).where(eq(schema.menuCategories.id, categoryId)).limit(1)
     if (!cat) throw notFound('Segment not found')
+    const [tier] = await tx.select().from(schema.menuTiers).where(eq(schema.menuTiers.id, cat.tierId)).limit(1)
+    if (!tier) throw notFound('Tier not found')
+
+    // The same dish under another spelling is still the same dish. The UNIQUE index cannot see
+    // that, so it is caught here — and named, because "already on the list" is baffling when
+    // the list visibly does not contain what you just typed.
+    const onSegment = await tx
+      .select({ name: schema.menuItems.name })
+      .from(schema.menuItems)
+      .where(eq(schema.menuItems.categoryId, categoryId))
+    const clash = onSegment.find((i) => menuItemKey(i.name) === key)
+    if (clash) {
+      throw conflict(
+        clash.name === clean
+          ? `"${clean}" is already on the ${cat.name} list.`
+          : `"${clean}" is already on the ${cat.name} list, spelled "${clash.name}".`,
+      )
+    }
+
+    let id: string
     try {
       const [i] = await tx
         .insert(schema.menuItems)
         .values({ categoryId, name: clean })
         .returning({ id: schema.menuItems.id })
-      await audit(tx, actor, {
-        entity: 'menu_items', entityId: i!.id, action: 'insert', field: 'name',
-        newValue: `${cat.name} · ${clean}`,
-      })
-      return { id: i!.id }
+      id = i!.id
     } catch (e) {
       if (isUnique(e)) throw conflict(`"${clean}" is already on the ${cat.name} list.`)
       throw e
     }
+    await audit(tx, actor, {
+      entity: 'menu_items', entityId: id, action: 'insert', field: 'name',
+      newValue: `${cat.name} · ${clean}`,
+    })
+
+    // -1 for a tier off the ladder — Breakfast Gold, High Tea Silver, anything newly created.
+    // Guarded before the slice, because slice(-1 + 1) is slice(0), which would cascade a high
+    // tea dish onto every banquet card. Crown, at the top, lands on the same early return.
+    const rung = (TIER_LADDER as readonly string[]).indexOf(tier.name)
+    const above: string[] = rung === -1 ? [] : TIER_LADDER.slice(rung + 1)
+    if (above.length === 0) return { id, cascadedTo: [], skippedTiers: [] }
+
+    // LEFT join: a tier carrying no segment of this name — nor any alias of it — still comes
+    // back, with a null category, so it can be reported as skipped instead of vanishing.
+    const targets = await tx
+      .select({
+        tierName: schema.menuTiers.name,
+        categoryId: schema.menuCategories.id,
+        categoryName: schema.menuCategories.name,
+      })
+      .from(schema.menuTiers)
+      .leftJoin(
+        schema.menuCategories,
+        and(
+          eq(schema.menuCategories.tierId, schema.menuTiers.id),
+          inArray(schema.menuCategories.name, segmentAliases(cat.name)),
+        ),
+      )
+      .where(inArray(schema.menuTiers.name, above))
+
+    // One target per tier: the dish belongs in ONE segment of a card, not two. The join can
+    // return two rows for a tier only if it carries both names of an alias pair; there the
+    // source tier's own spelling wins. (A tier with no match yields a single null row, never
+    // a null row alongside a real one, so that is the only tie there is to break.)
+    const byTier = new Map<string, (typeof targets)[number]>()
+    for (const t of targets) {
+      if (!byTier.has(t.tierName) || t.categoryName === cat.name) byTier.set(t.tierName, t)
+    }
+
+    // What those segments already carry, so a dish can be recognised under whatever spelling
+    // that card happens to use for it.
+    const targetCatIds = [...byTier.values()].map((t) => t.categoryId).filter((c): c is string => c !== null)
+    const alreadyOn = new Map<string, Set<string>>()
+    if (targetCatIds.length > 0) {
+      const rows = await tx
+        .select({ categoryId: schema.menuItems.categoryId, name: schema.menuItems.name })
+        .from(schema.menuItems)
+        .where(inArray(schema.menuItems.categoryId, targetCatIds))
+      for (const r of rows) {
+        const set = alreadyOn.get(r.categoryId) ?? new Set<string>()
+        set.add(menuItemKey(r.name))
+        alreadyOn.set(r.categoryId, set)
+      }
+    }
+
+    const cascadedTo: string[] = []
+    const skippedTiers: string[] = []
+    // Ladder order, so the message reads "Gold, Platinum, Crown" rather than however the
+    // planner happened to return them.
+    for (const t of [...byTier.values()].sort((a, b) => above.indexOf(a.tierName) - above.indexOf(b.tierName))) {
+      if (!t.categoryId) {
+        skippedTiers.push(t.tierName)
+        continue
+      }
+      // Already on that card, under this spelling or another — leave it be. This is what
+      // "added once" means, and it keeps a second "Ice-Cream" off a card printing "Ice Cream".
+      if (alreadyOn.get(t.categoryId)?.has(key)) continue
+      const [copy] = await tx
+        .insert(schema.menuItems)
+        .values({ categoryId: t.categoryId, name: clean })
+        // Belt and braces on the exact name: the key check above cannot see a concurrent
+        // insert, and the cascade must stay safe to re-run.
+        .onConflictDoNothing({ target: [schema.menuItems.categoryId, schema.menuItems.name] })
+        .returning({ id: schema.menuItems.id })
+      if (!copy) continue
+      cascadedTo.push(t.tierName)
+      await audit(tx, actor, {
+        entity: 'menu_items', entityId: copy.id, action: 'insert', field: 'name',
+        // The target's own segment name, not the source's — the audit should say the dish
+        // landed on Crown's "Raita Bar", which is where somebody would go looking for it.
+        newValue: `${t.tierName} · ${t.categoryName} · ${clean} (cascaded from ${tier.name})`,
+      })
+    }
+    return { id, cascadedTo, skippedTiers }
   })
 }
 

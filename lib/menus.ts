@@ -4,6 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { dedupeMenuNames } from '@/lib/menu-name'
+import { segmentAliases } from '@/lib/menu-ladder'
 import { recomputeProposalTotal } from '@/lib/pricing'
 
 /**
@@ -114,8 +115,25 @@ export async function getTierCatalog(): Promise<CatalogTier[]> {
 export type MenuPool = { categoryName: string; items: string[] }
 
 /**
+ * Every dish offered under `categoryName` or under any name the card uses for the same course
+ * — "Salad" on Silver is "Salad Bar" from Platinum up (see `lib/menu-ladder.ts`). Without the
+ * aliases those are two Swap lists, and a Crown salad cannot be swapped onto a Silver plate
+ * even though it is the same course on the same printed card.
+ *
+ * Re-sorted, because concatenating two already-sorted lists does not give a sorted one.
+ */
+function pooledFor(byCat: Map<string, string[]>, categoryName: string): string[] {
+  return segmentAliases(categoryName)
+    .flatMap((n) => byCat.get(n) ?? [])
+    .sort((a, b) => a.localeCompare(b))
+}
+
+/**
  * The pooled "master menu": every active item across every tier, grouped by sub-heading.
  * Drives Swap — picking from here spends one of that sub-heading's picks (see saveSubEventMenu).
+ *
+ * Keyed by every sub-heading in use, aliases included, so a caller can look up the name its
+ * own tier prints and still get the whole course.
  */
 export async function getMasterMenuPools(): Promise<MenuPool[]> {
   const rows = await db
@@ -133,15 +151,15 @@ export async function getMasterMenuPools(): Promise<MenuPool[]> {
   }
   // The same dish is spelled differently from tier to tier ("Aam Panna" / "Aam Pana
   // (Seasonal)"), which would otherwise show up as several entries in one Swap list.
-  return [...byCat.entries()].map(([categoryName, items]) => ({
+  return [...byCat.keys()].map((categoryName) => ({
     categoryName,
-    items: dedupeMenuNames(items),
+    items: dedupeMenuNames(pooledFor(byCat, categoryName)),
   }))
 }
 
 // ── Sub-event context + snapshot ─────────────────────────────────────────────
 
-type SubEventContext = {
+export type SubEventContext = {
   id: string
   name: string
   eventId: string
@@ -152,7 +170,8 @@ type SubEventContext = {
   eventDate: string
 }
 
-async function loadSubEventContext(exec: Tx | typeof db, subEventId: string): Promise<SubEventContext> {
+/** Exported for `lib/bar.ts`, which hangs bottles off a function exactly as add-ons hang off one. */
+export async function loadSubEventContext(exec: Tx | typeof db, subEventId: string): Promise<SubEventContext> {
   const [row] = (await exec.execute(sql`
     SELECT se.id, se.name, se.event_id AS "eventId", se.pax, se.event_date AS "eventDate",
            e.event_type AS "eventType", e.status, et.is_wedding AS "isWedding"
@@ -412,12 +431,15 @@ export async function saveSubEventMenu(
       .from(schema.menuItems)
       .innerJoin(schema.menuCategories, eq(schema.menuCategories.id, schema.menuItems.categoryId))
       .where(eq(schema.menuItems.isActive, true))
-    const pooledByCat = new Map<string, Set<string>>()
+    const pooledLists = new Map<string, string[]>()
     for (const it of pooledRows) {
-      const set = pooledByCat.get(it.categoryName) ?? new Set<string>()
-      set.add(it.itemName)
-      pooledByCat.set(it.categoryName, set)
+      pooledLists.set(it.categoryName, [...(pooledLists.get(it.categoryName) ?? []), it.itemName])
     }
+    // Alias-merged, exactly as getMasterMenuPools does it — validation has to accept every
+    // dish the picker was allowed to offer, or a legitimate Swap saves as "not on any list".
+    const pooledByCat = new Map<string, Set<string>>(
+      [...pooledLists.keys()].map((name) => [name, new Set(pooledFor(pooledLists, name))]),
+    )
 
     // Reject selections for categories that aren't in this tier (catches stale/typo input).
     for (const key of Object.keys(input.selections)) {

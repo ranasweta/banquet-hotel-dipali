@@ -148,6 +148,23 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   `)) as unknown as { name: string; description: string; qty: number; ratePaise: number }[]
   for (const a of addons) push('food', `Add-on: ${a.description}`, a.qty, Number(a.ratePaise), a.qty * Number(a.ratePaise), a.name)
 
+  // The bar (12 Aug 2026) — bottles under the function that ordered them, priced from the
+  // line's own snapshot so a re-priced brand never re-prices an issued document.
+  //
+  // Section `food`, which is the client's instruction: alcohol is taxed like everything but
+  // rooms — 18%, printed on the Total and collected from nobody (rule 11). See SEED_ASSUMPTIONS
+  // §F24: alcohol sits outside GST in India, so the LABEL may be wrong even though the money is
+  // right. Moving it is a one-line change here plus a section in lib/tax.ts.
+  const bar = (await exec.execute(sql`
+    SELECT se.name, b.brand_name AS "brandName", b.bottles, b.rate_paise AS "ratePaise"
+    FROM sub_event_bar_items b JOIN sub_events se ON se.id = b.sub_event_id
+    WHERE se.event_id = ${eventId}
+    ORDER BY se.event_date, se.start_time, b.brand_name
+  `)) as unknown as { name: string; brandName: string; bottles: number; ratePaise: number }[]
+  for (const b of bar) {
+    push('food', `Bar: ${b.brandName}`, b.bottles, Number(b.ratePaise), b.bottles * Number(b.ratePaise), b.name)
+  }
+
   // Rooms — count × nights × the lodge's rate for that category. Read from the bulk booking
   // on the proposal, NOT from room_allocations: rooms stopped being assigned room-by-room on
   // 21 Jul 2026 and nothing writes that table any more, so billing off it would have put
