@@ -83,6 +83,24 @@ export const VENUES: VenueSeed[] = [
     capacityPlaceholder: 'See Gulmohar Lawn — invented half of the combined 500-1,000.',
   },
   { name: 'Lotus Lawn', property: 'Dipali Grand', kind: 'lawn', capacityMin: 500, capacityMax: 1200 },
+  // Client, 12 Aug 2026, priced in the same message that opened the venue master. Neither is
+  // in the 2026 proposal or any PRD table, so both capacities are invented outright.
+  {
+    name: 'Ashoka Hall',
+    property: 'Palace',
+    kind: 'hall',
+    capacityMin: 1,
+    capacityMax: 75,
+    capacityPlaceholder: 'New venue (client, 12 Aug 2026). Capacity copied from Diamond Hall, which shares its price.',
+  },
+  {
+    name: 'Pool Side Hall',
+    property: 'Palace',
+    kind: 'hall',
+    capacityMin: 1,
+    capacityMax: 50,
+    capacityPlaceholder: 'New venue (client, 12 Aug 2026). Priced at 5,000 — the cheapest on the card — so the capacity is guessed small.',
+  },
 ]
 
 /** Booking a bundle blocks every member venue, and vice versa (FR-2.3). */
@@ -136,13 +154,40 @@ export const RATE_CARDS: RateSeed[] = [
   { venue: 'Imperial', ratePaise: rupeesToPaise(75_000) },
   { venue: 'Kohinoor', ratePaise: rupeesToPaise(55_000) },
   { bundle: 'Imperial + Kohinoor', ratePaise: rupeesToPaise(151_000) },
-  { venue: 'Saffron Hall & Lawn', ratePaise: rupeesToPaise(55_000) },
+  // 35,000, not the 55,000 the 2026 proposal prints — client, 12 Aug 2026, superseding the
+  // PDF (SEED_ASSUMPTIONS §F26).
+  { venue: 'Saffron Hall & Lawn', ratePaise: rupeesToPaise(35_000) },
 
   // --- Dipali Grand + Regency A-block (proposal p. 3) ---
   { venue: 'Lotus Lawn', ratePaise: rupeesToPaise(175_000) },
   { venue: 'Signature', ratePaise: rupeesToPaise(200_000) },
   { bundle: 'Lotus + Signature', ratePaise: rupeesToPaise(500_000) },
+
+  // --- Priced by the client on 12 Aug 2026, not in the 2026 proposal ---
+  // Diamond and Golden are now sold apart as well as together; the bundle keeps its own
+  // 25,000, so the pair costs what one hall costs.
+  { venue: 'Diamond Hall', ratePaise: rupeesToPaise(25_000) },
+  { venue: 'Golden Hall', ratePaise: rupeesToPaise(25_000) },
+  { venue: 'Ashoka Hall', ratePaise: rupeesToPaise(25_000) },
+  { venue: 'Pool Side Hall', ratePaise: rupeesToPaise(5_000) },
 ]
+
+/**
+ * The event type that pays no hall charge (client, 12 Aug 2026).
+ *
+ * An "Other" booking is charged for the dining and the extras but not for the room it sits in
+ * — UNLESS it takes a bundle, which is still charged in full. So a standalone venue is written
+ * at ZERO for this event type and a bundle keeps its rate.
+ *
+ * Zero, not absent: a MISSING rate card is a gate that blocks confirmation until the Authority
+ * approves a manual rate (BR-R1), and that is exactly what must not happen here. The zero says
+ * "decided, and free"; the gap says "nobody has priced this yet". They are different facts and
+ * the seed must not blur them.
+ *
+ * This lives as DATA rather than a branch in the pricing code, because the whole point of the
+ * venue master is that the Auditor can change it without anybody editing TypeScript.
+ */
+export const FREE_STANDALONE_EVENT_TYPE = 'other'
 
 // Client, 20 Jul 2026: the lodges are Regency, Palace and Residency — "Dipali Grand" is not
 // one of them. Residency returns here as a LODGING unit only; it is still not a property,
@@ -217,6 +262,9 @@ export const MODULES = [
   'calendar',
   'menus',
   'menu_master',
+  // The venue master (client, 12 Aug 2026): venues, bundles and what each costs per event
+  // type. Separate from `menu_master` so it can be granted on its own.
+  'venue_master',
   'rooms',
   // The lodging calendar is its own module so it can be granted independently of `rooms`
   // (client, 20 Jul 2026: it belongs to the Lodge Manager). Sharing `rooms` meant no
@@ -274,6 +322,7 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   // The Chef reads menus to price a delicacy request, but never edits a guest's menu.
   menus:       { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   menu_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
+  venue_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   rooms:       { booking_manager: 'view', banquet_manager: 'none', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
   // Lodge Managers only by default. The Auditor keeps `full` because that role IS the
   // permission utility — it grants and revokes for everyone, so locking it out of a module

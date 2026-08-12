@@ -114,6 +114,34 @@ base without those modules knowing the bar exists — and prints as a `food`-sec
 18% shown and collected from nobody (rule 11). See SEED_ASSUMPTIONS §F24 for the two questions
 that leaves for the hotel's CA.
 
+## Venue master (module: venue_master)
+Added 12 Aug 2026. Venues, the bundles made out of them, and what each costs per event type —
+everything the pricing code reads about a venue. Auditor `full`, Higher Authority `edit`.
+
+- `GET  /venue-master` — properties, event types, venues and bundles, each with the rates in
+  force today. A venue with an empty `rates` array is UNPRICED, which is not the same as free.
+- `POST /venue-master/venues` { property_id, name, kind, capacity_min, capacity_max } — a new
+  hall or lawn. **It carries no rate**, so it is not offered standalone until one is set;
+  creating it at zero would give a hall away by accident.
+- `PUT  /venue-master/venues/:id` { name?, kind?, capacity_min?, capacity_max?, is_active? }
+- `POST /venue-master/bundles` { name, venue_ids[] } — two venues minimum.
+- `PUT  /venue-master/bundles/:id` { name?, venue_ids? } — renaming is always allowed;
+  **replacing the membership is refused once the bundle is on a booking** (409), since it
+  decides which halls that booking holds (FR-2.3).
+- `PUT  /venue-master/rates` { venue_id | bundle_id, event_type, rate_paise, effective_from } —
+  **`rate_paise: 0` is valid and means free.** Setting the same date twice corrects in place;
+  a new date is a new row, so last March's price still explains last March's bill.
+- `DELETE /venue-master/rates` { venue_id | bundle_id, event_type } — removes the rate, turning
+  that venue + event type back into a **gate** (BR-R1). Requires **`venue_master:delete`**, not
+  `create_edit`: an unpriced venue vanishes from the picker and blocks confirmation, which is a
+  heavier act than pricing one at zero.
+
+**The two kinds of no-charge, because every caller has to keep them apart:** a rate of `0` is a
+decision and confirmation proceeds; a missing rate is unpriced and confirmation is blocked until
+the Authority approves a manual rate. An "Other" booking pays no standalone hall charge and that
+is stored as zeroes, not as gaps (SEED_ASSUMPTIONS §F26). Bundles keep their rate for every
+event type.
+
 ## Menus (module: menus)
 - `GET  /menu/catalog` — every tier → categories → items, for the dish picker (menus:view;
   reading tiers to build a booking is a `menus` concern, distinct from `menu_master` editing)

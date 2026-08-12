@@ -245,11 +245,15 @@ export async function listVenueAvailability(
   `)) as unknown as { venueId: string }[]
   const busy = new Set(busyRows.map((r) => r.venueId))
 
-  // Only venues that carry a price of their own are offered on their own. Diamond Hall,
-  // Golden Hall, Gulmohar Lawn and Middle Lawn are priced by the proposal solely as their
-  // bundle, so they stay bundle members (and keep their calendar occupancy) but never appear
-  // as a standalone choice — otherwise a booking manager picks one and dead-ends at confirm
-  // on the missing-rate gate (BR-R1). The bundles themselves are listed below and are priced.
+  // Only venues that carry a price of their own are offered on their own — otherwise a booking
+  // manager picks one and dead-ends at confirm on the missing-rate gate (BR-R1). Gulmohar Lawn
+  // and Middle Lawn are still priced solely as their bundle, so they stay bundle members (and
+  // keep their calendar occupancy) without appearing as a standalone choice. Diamond and Golden
+  // left that group on 12 Aug 2026 when the client priced them apart; they need no code change
+  // here, because "has a rate card" is the test and they now have one.
+  //
+  // A rate of ZERO still counts as priced. An "Other" booking pays no standalone hall charge
+  // (migration 0029), and that venue must go on being offered — free is a price, not a gap.
   const venues = (await db.execute(sql`
     SELECT v.id, v.name, v.kind, p.name AS "propertyName",
            v.capacity_min AS "capacityMin", v.capacity_max AS "capacityMax"
