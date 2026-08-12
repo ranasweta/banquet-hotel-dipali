@@ -96,33 +96,62 @@ export type PendingReminder = {
   milestonePct: number
 }
 
-/** Reminders due (remind_on ≤ asOf, not yet sent) for a role's audience. */
+/**
+ * Reminders due (remind_on ≤ asOf, not yet sent) for a role's audience — ONE per wedding.
+ *
+ * This runs inside `notificationsFor`, which the bell refires on every navigation, so its cost
+ * is paid on every page a Booking Manager or the Authority opens. Two bounds keep that cost
+ * flat rather than growing with the hotel's history:
+ *
+ * STILL LIVE. A reminder chases the 50% before the wedding happens. Once the event is
+ * completed, locked, billed or cancelled the row has no work left to do, but nothing marks it
+ * done — `sent_at` is written by nobody — so without the status filter every reminder ever
+ * generated stayed "due" for ever. A wedding held last year kept costing a full payment
+ * schedule on every page load, permanently, and the bell got slower every month it ran.
+ *
+ * ONE PER EVENT. The generator writes a row per DAY of the band — ten for the Booking Manager,
+ * twenty for the Authority — and they all say the same sentence, because they are the same
+ * fact repeated daily. Ten identical "collect ₹5,00,000" lines is a worse bell than one, and
+ * it was ten payment schedules to render. The newest due row wins, so dismissing today's nudge
+ * leaves tomorrow's to arrive on its own: a daily reminder, which is what the band is for.
+ *
+ * Priced against the live schedule rather than in the query: the milestone is a percentage of
+ * a bill that moves, and a wedding that has since paid up must not surface at all. Priced
+ * TOGETHER, not in a loop — each schedule is about four round trips, and awaiting them one
+ * after another made the bell cost that many trips times the number of weddings on a screen
+ * every user hits. The same reason `advanceShortfallByEvent` batches its discounts.
+ */
 export async function pendingReminders(roleName: string, asOf: string): Promise<PendingReminder[]> {
   if (roleName !== 'booking_manager' && roleName !== 'higher_authority') return []
   const rows = (await db.execute(sql`
-    SELECT r.id, r.event_id AS "eventId", e.code AS "eventCode", e.guest_name AS "guestName",
-           (SELECT min(se.event_date)::text FROM sub_events se WHERE se.event_id = e.id) AS "firstDate",
-           r.remind_on::text AS "remindOn"
-    FROM payment_reminders r JOIN events e ON e.id = r.event_id
-    WHERE r.audience = ${roleName} AND r.remind_on <= ${asOf}::date AND r.sent_at IS NULL
-    ORDER BY r.remind_on
+    SELECT * FROM (
+      SELECT DISTINCT ON (r.event_id)
+             r.id, r.event_id AS "eventId", e.code AS "eventCode", e.guest_name AS "guestName",
+             (SELECT min(se.event_date)::text FROM sub_events se WHERE se.event_id = e.id) AS "firstDate",
+             r.remind_on::text AS "remindOn"
+      FROM payment_reminders r JOIN events e ON e.id = r.event_id
+      WHERE r.audience = ${roleName}
+        AND r.remind_on <= ${asOf}::date
+        AND r.sent_at IS NULL
+        AND e.status IN ('confirmed','in_progress')
+      ORDER BY r.event_id, r.remind_on DESC
+    ) d
+    ORDER BY d."remindOn"
   `)) as unknown as Omit<PendingReminder, 'shortfallPaise' | 'milestonePaise' | 'milestonePct'>[]
 
-  // Priced one by one against the live schedule rather than in the query above: the milestone
-  // is a percentage of a bill that moves, and a reminder for a wedding that has since paid up
-  // must not surface at all. The list is only what is due today, so it stays short.
+  const schedules = await Promise.all(rows.map((r) => paymentSchedule(r.eventId, asOf)))
+
   const out: PendingReminder[] = []
-  for (const r of rows) {
-    const schedule = await paymentSchedule(r.eventId, asOf)
-    const m = schedule.milestones.find((x) => x.key === 'wedding_balance')
-    if (!m || m.shortfallPaise <= 0) continue
+  rows.forEach((r, i) => {
+    const m = schedules[i]!.milestones.find((x) => x.key === 'wedding_balance')
+    if (!m || m.shortfallPaise <= 0) return
     out.push({
       ...r,
       shortfallPaise: m.shortfallPaise,
       milestonePaise: m.requiredPaise,
       milestonePct: WEDDING_MILESTONE_PCT,
     })
-  }
+  })
   return out
 }
 

@@ -239,6 +239,31 @@ d('wedding reminders (BR-P2, time-travel)', () => {
     expect(row?.milestonePaise).toBe(5_000_000)
     expect(due.some((r) => r.eventId === half)).toBe(false)
   })
+
+  /**
+   * The bell reads this on every navigation, so its cost must not grow with the hotel's
+   * history. A wedding contributes ONE row however many days of its band have already fallen
+   * due — they all say the same sentence — and none at all once the event is over. Nothing
+   * writes `sent_at`, so without that second bound every reminder ever generated would be
+   * re-priced, for ever, on every page anyone opened.
+   */
+  it('gives one reminder per wedding, and none once the event has passed', async () => {
+    const e = await makeEvent({ eventType: 'wedding', proposalPaise: 10_000_000, firstDate: '2026-09-01' })
+    await payments.recordPayment(actor, e, { kind: 'part_payment', amountPaise: 1_000_000, mode: 'upi', receiptNo: receipt(), receivedOn: '2026-07-18' })
+    await reminders.generateWeddingReminders('2026-07-18')
+
+    // Six days of the BM band have fallen due by 2026-08-07 (D-30 is 2026-08-02).
+    const due = await reminders.pendingReminders('booking_manager', '2026-08-07')
+    const mine = due.filter((r) => r.eventId === e)
+    expect(mine).toHaveLength(1)
+    expect(mine[0]!.remindOn).toBe('2026-08-07') // the newest nudge, not the oldest
+
+    // Past chasing: the wedding has happened, so it leaves the feed rather than being
+    // re-priced on every page for the rest of the system's life.
+    await db.update(schema.events).set({ status: 'completed' }).where(eq(schema.events.id, e))
+    const after = await reminders.pendingReminders('booking_manager', '2026-08-07')
+    expect(after.some((r) => r.eventId === e)).toBe(false)
+  })
 })
 
 d('stale enquiries (FR-1.8)', () => {

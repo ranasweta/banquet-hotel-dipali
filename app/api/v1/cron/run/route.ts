@@ -1,4 +1,5 @@
 import type { NextRequest } from 'next/server'
+import { timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth'
 import { forbidden, ok, route } from '@/lib/api'
@@ -19,10 +20,27 @@ const bodySchema = z.object({ as_of: z.string().regex(ISO_DATE).optional() }).op
  */
 function isScheduler(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
-  if (!secret) return false
+  if (!secret) {
+    // Unset, every scheduler call 403s and NOTHING ever reaches Completed — so nothing can be
+    // locked, invoiced or billed. That failure is silent (the 403 goes to a cron job nobody
+    // watches) and looks nothing like its cause, so it is announced here instead.
+    console.error(
+      'CRON_SECRET is not set, so the daily job cannot be run by the scheduler. Until it is, ' +
+        'no event will advance to In Progress or Completed. See docs/OPERATIONS.md.',
+    )
+    return false
+  }
   const header = req.headers.get('x-cron-secret')
   const bearer = req.headers.get('authorization')
-  return header === secret || bearer === `Bearer ${secret}`
+  return matches(header, secret) || matches(bearer, `Bearer ${secret}`)
+}
+
+/** Constant-time compare, so the secret can't be recovered a character at a time. */
+function matches(given: string | null, expected: string): boolean {
+  if (!given) return false
+  const a = Buffer.from(given)
+  const b = Buffer.from(expected)
+  return a.length === b.length && timingSafeEqual(a, b)
 }
 
 /**
@@ -70,7 +88,13 @@ async function runDailyJob(runner: { id: string; roleName: string }, asOf: strin
   const stale = await listStaleEnquiries(asOf)
   return ok({
     asOf,
-    advanced: { started: advanced.started.length, completed: advanced.finished.length },
+    // `failed` carries the bookings that would not move, by id. A run that half-worked must
+    // say so — the job used to abort on the first bad row and report nothing at all.
+    advanced: {
+      started: advanced.started.length,
+      completed: advanced.finished.length,
+      failed: advanced.failed,
+    },
     reminders,
     staleEnquiries: stale.length,
   })
