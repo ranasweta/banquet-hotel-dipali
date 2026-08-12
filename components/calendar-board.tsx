@@ -48,8 +48,8 @@ type CalendarResponse = {
   bookings: Booking[]
 }
 
-// Status colour (FR-2.5). Never the only signal — each chip also carries a time and, for a
-// carryover tail, a "↳" glyph. The left rule is what reads at a glance in a dense grid.
+// Status colour (FR-2.5). Never the only signal — each chip also carries its times, and one
+// running past midnight is marked "⁺¹". The left rule is what reads at a glance in a dense grid.
 const STATUS_RULE: Record<string, string> = {
   confirmed: 'border-l-[var(--chart-2)]',
   in_progress: 'border-l-emerald-500',
@@ -58,13 +58,11 @@ const STATUS_RULE: Record<string, string> = {
   billed: 'border-l-primary',
   closed: 'border-l-muted-foreground',
 }
-const CARRYOVER_RULE = 'border-l-amber-500'
 /**
  * A booking whose 25% advance is not fully in. Its venues are genuinely held — this is not a
  * provisional pencil-in — but it is only partly paid for, and that is exactly what someone
- * pricing a competing enquiry needs to know (client's lead, 4 Aug 2026). Rose rather than
- * amber, which already means carryover, and never colour alone: the chip also carries the
- * words "Downpayment due".
+ * pricing a competing enquiry needs to know (client's lead, 4 Aug 2026). Rose, and never
+ * colour alone: the chip also carries the words "Downpayment due".
  */
 const SHORT_RULE = 'border-l-rose-500'
 
@@ -94,7 +92,7 @@ function longDate(date: string) {
   })
 }
 
-type Chip = { key: string; booking: Booking; label: string; carryover: boolean }
+type Chip = { key: string; booking: Booking; label: string; overnight: boolean }
 
 export function CalendarBoard() {
   const [data, setData] = useState<CalendarResponse | null>(null)
@@ -136,8 +134,20 @@ export function CalendarBoard() {
     return m
   }, [data])
 
-  // date -> chips. A cross-midnight booking shows on its start day and again, as a tail,
-  // on the following morning (BR-C1).
+  /**
+   * date -> chips. A booking shows on the day it STARTS and on no other (client, 12 Aug 2026).
+   *
+   * It used to trail a "↳ till 06:00" chip onto the following morning, which was honest about
+   * the occupancy and wrong about the let: hiring a hall takes it 9 AM to 8 AM the next day, so
+   * a function running 8 PM to 6 AM consumes ONE day of that hall and the morning it ends in
+   * belongs to the same let. Painting the next day as taken lost a sellable day on the board.
+   *
+   * The occupancy range is untouched and still crosses midnight, so the GiST exclusion refuses
+   * a clashing booking exactly as before (BR-C1). What changed is only what the board draws.
+   * The consequence to know: the morning after a late function looks free here while the
+   * availability check will still refuse an early slot in it — the data is right, the board is
+   * simply no longer showing that tail.
+   */
   const cells = useMemo(() => {
     const map = new Map<string, Chip[]>()
     const push = (date: string, chip: Chip) => {
@@ -147,8 +157,7 @@ export function CalendarBoard() {
     }
     for (const b of data?.bookings ?? []) {
       const s = dateOnly(b.starts)
-      const e = dateOnly(b.ends)
-      const crosses = e > s
+      const crosses = dateOnly(b.ends) > s
       // Key on sub-event AND venue: booking a bundle writes one row per member venue, so
       // one sub-event legitimately appears more than once on a day (FR-2.3). Keying on the
       // sub-event alone collides, and React may then drop one of the two — a booked venue
@@ -156,17 +165,13 @@ export function CalendarBoard() {
       push(s, {
         key: `${b.subEventId}-${b.venueId}-main`,
         booking: b,
-        label: crosses ? `${formatTime(timeOnly(b.starts))}→` : `${formatTime(timeOnly(b.starts))}–${formatTime(timeOnly(b.ends))}`,
-        carryover: false,
+        // The arrow still says it runs past midnight — the guest's night is not being hidden,
+        // only the next day's cell is left alone.
+        label: crosses
+          ? `${formatTime(timeOnly(b.starts))}→${formatTime(timeOnly(b.ends))}⁺¹`
+          : `${formatTime(timeOnly(b.starts))}–${formatTime(timeOnly(b.ends))}`,
+        overnight: crosses,
       })
-      if (crosses) {
-        push(e, {
-          key: `${b.subEventId}-${b.venueId}-tail`,
-          booking: b,
-          label: `↳ till ${formatTime(timeOnly(b.ends))}`,
-          carryover: true,
-        })
-      }
     }
     return map
   }, [data])
@@ -311,13 +316,13 @@ export function CalendarBoard() {
 }
 
 function BookingChip({ chip, venue }: { chip: Chip; venue: string }) {
-  const { booking, label, carryover } = chip
+  const { booking, label } = chip
   const short = booking.advanceShortfallPaise > 0
   return (
     <span
       className={cn(
         'truncate border-l-2 bg-muted/60 py-0.5 pl-1.5 text-[10px] leading-tight',
-        short ? SHORT_RULE : carryover ? CARRYOVER_RULE : (STATUS_RULE[booking.status] ?? STATUS_RULE.confirmed),
+        short ? SHORT_RULE : (STATUS_RULE[booking.status] ?? STATUS_RULE.confirmed),
       )}
       title={`${titleCase(booking.guestName)} — ${titleCase(booking.subEventName)} · ${venue} · ${label} (${booking.eventCode}, ${titleCase(booking.status)})${
         short ? ` · Downpayment due ${formatPaise(booking.advanceShortfallPaise)}` : ''
@@ -381,7 +386,7 @@ function DayPanel({
                 <span className="text-muted-foreground"> · {titleCase(c.booking.subEventName)}</span>
                 <div className="text-xs text-muted-foreground">
                   {venueName.get(c.booking.venueId)} · <span className="tabular-nums">{c.label}</span>
-                  {c.carryover && ' · runs past midnight'}
+                  {c.overnight && ' · runs past midnight, same day’s hire'}
                 </div>
                 {/* Everything the call needs, on the screen the question is asked from: how
                     short the booking is, and who to ring about it. The GM is the one who can

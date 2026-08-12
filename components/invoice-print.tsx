@@ -841,12 +841,37 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
                     full duration of the function.
                   </span>
                 )}
+                {/* The hall is hired for the DAY, so a later function in the same hall on the
+                    same date is not charged again (client, 12 Aug 2026). Said in words rather
+                    than left as a blank line: a guest who sees no venue charge against their
+                    reception assumes it was forgotten and rings to ask. */}
+                {fn.venueCoveredBy && (
+                  <span className="it-desc">
+                    Included in the day&rsquo;s hire, charged on {titleCase(fn.venueCoveredBy)}. The hall is
+                    taken for the whole day, whatever the number of functions.
+                  </span>
+                )}
               </td>
-              <td className="c calc">1 event</td>
+              <td className="c calc">{fn.venueCoveredBy ? '—' : '1 day'}</td>
               {/* BR-R1: no rate card is a gate, never a zero. "To be confirmed" rather than
-                  "on approval" — whose approval is our business, not the guest's. */}
-              <td className="n calc">{fn.venueRatePaise == null ? 'To be confirmed' : formatPaise(fn.venueRatePaise)}</td>
-              <td className="n amt">{fn.venueRatePaise == null ? '—' : formatPaise(fn.venueRatePaise)}</td>
+                  "on approval" — whose approval is our business, not the guest's. A COVERED
+                  function is a different thing and must not read as an unpriced one. */}
+              <td className="n calc">
+                {fn.venueCoveredBy ? (
+                  <span className="free">INCLUDED</span>
+                ) : fn.venueRatePaise == null ? (
+                  'To be confirmed'
+                ) : (
+                  formatPaise(fn.venueRatePaise)
+                )}
+              </td>
+              <td className="n amt">
+                {fn.venueCoveredBy
+                  ? formatPaise(0)
+                  : fn.venueRatePaise == null
+                    ? '—'
+                    : formatPaise(fn.venueRatePaise)}
+              </td>
             </tr>
           )}
           {fn.menu && (

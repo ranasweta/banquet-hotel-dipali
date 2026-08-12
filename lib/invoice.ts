@@ -89,20 +89,36 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   // snapshot is 0, so an enquiry Draft prices the venue live off the rate card instead, and
   // shows nothing only when no card exists yet (BR-R1). Post-confirm the snapshot always wins.
   const venues = (await exec.execute(sql`
-    SELECT se.name, COALESCE(v.name, b.name) AS "venueName",
-           COALESCE(NULLIF(se.venue_rate_paise, 0),
-             (SELECT rc.rate_paise FROM venue_rate_cards rc
-               WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
-                   OR (se.bundle_id IS NOT NULL AND rc.bundle_id = se.bundle_id))
-                 AND rc.event_type = e.event_type
-                 AND rc.effective_from <= se.event_date
-               ORDER BY rc.effective_from DESC LIMIT 1),
-             0)::bigint AS "ratePaise"
-    FROM sub_events se
-    JOIN events e ON e.id = se.event_id
-    LEFT JOIN venues v ON v.id = se.venue_id LEFT JOIN venue_bundles b ON b.id = se.bundle_id
-    WHERE se.event_id = ${eventId}
-    ORDER BY se.event_date, se.start_time
+    SELECT * FROM (
+      -- ONE LINE PER VENUE-DAY, not per function (client, 12 Aug 2026). Hiring a hall takes
+      -- it for the day — 9 AM to 8 AM the next morning — so three functions in it on one day
+      -- are one let. Billing per function charged the guest for the room three times.
+      --
+      -- DISTINCT ON picks the day's FIRST function, matching lib/pricing.ts, so the proposal
+      -- and the bill agree about which function carries the charge as well as what it costs.
+      --
+      -- Deliberately NOT relying on se.venue_rate_paise being zero for the covered functions:
+      -- confirm writes that snapshot from the same dedupe, but the COALESCE below reads a zero
+      -- as "not snapshotted" and falls back to the rate card — which would put the charge
+      -- straight back on every function it was just taken off.
+      SELECT DISTINCT ON (COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date)
+             se.name, se.event_date AS "eventDate", se.start_time AS "startTime",
+             COALESCE(v.name, b.name) AS "venueName",
+             COALESCE(NULLIF(se.venue_rate_paise, 0),
+               (SELECT rc.rate_paise FROM venue_rate_cards rc
+                 WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
+                     OR (se.bundle_id IS NOT NULL AND rc.bundle_id = se.bundle_id))
+                   AND rc.event_type = e.event_type
+                   AND rc.effective_from <= se.event_date
+                 ORDER BY rc.effective_from DESC LIMIT 1),
+               0)::bigint AS "ratePaise"
+      FROM sub_events se
+      JOIN events e ON e.id = se.event_id
+      LEFT JOIN venues v ON v.id = se.venue_id LEFT JOIN venue_bundles b ON b.id = se.bundle_id
+      WHERE se.event_id = ${eventId}
+      ORDER BY COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date, se.start_time
+    ) d
+    ORDER BY d."eventDate", d."startTime"
   `)) as unknown as { name: string; ratePaise: number; venueName: string }[]
   for (const v of venues) if (Number(v.ratePaise) > 0) push('venue', v.venueName, 1, Number(v.ratePaise), Number(v.ratePaise), v.name)
 

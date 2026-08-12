@@ -79,8 +79,20 @@ export type ProposalFunction = {
   venueName: string | null
   isBundle: boolean
   bundleMembers: string[]
-  /** null = no rate card for this venue + event type. A gate, never a zero (BR-R1). */
+  /**
+   * null = no rate card for this venue + event type. A gate, never a zero (BR-R1).
+   *
+   * ZERO here means something different and is not a gate: the venue-day is already charged on
+   * an earlier function (see `venueCoveredBy`). Hiring a hall takes it 9 AM to 8 AM next
+   * morning, so however many functions run inside that window, the hire is one charge.
+   */
   venueRatePaise: number | null
+  /**
+   * The function whose day-hire already covers this one — same venue, same date — or null when
+   * this function carries the charge itself. Printed instead of a second venue line, because a
+   * blank where a charge used to be reads as an omission.
+   */
+  venueCoveredBy: string | null
   menu: ProposalMenu | null
   foodAmountPaise: number
   addons: ProposalAddon[]
@@ -280,6 +292,9 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     ORDER BY s.is_extra, s.item_name
   `)) as unknown as Row[]
 
+  /** venue-day -> the function carrying its hire. `subs` is ordered by (date, start time). */
+  const venueDayCarrier = new Map<string, { id: string; name: string }>()
+
   const functions: ProposalFunction[] = subs.map((s) => {
     const menuId = s.menuId as string | null
     const pax = num(s.pax)
@@ -330,7 +345,16 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
         amountPaise: num(b.bottles) * num(b.ratePaise),
       }))
 
-    const venueRatePaise = s.venueRatePaise == null ? null : num(s.venueRatePaise)
+    // The hall is hired by the DAY, not by the function (client, 12 Aug 2026): the first
+    // function on a venue-day carries the charge and the rest are covered by it. Same rule and
+    // same carrier as lib/pricing.ts and lib/invoice.ts, so all three documents agree.
+    const dayKey = `${(s.bundleId as string | null) ?? (s.venueId as string | null) ?? 'none'}|${s.date as string}`
+    const holder = venueDayCarrier.get(dayKey)
+    const venueCoveredBy = holder && holder.id !== s.id ? holder.name : null
+    if (!holder) venueDayCarrier.set(dayKey, { id: s.id as string, name: s.name as string })
+
+    const rawVenueRate = s.venueRatePaise == null ? null : num(s.venueRatePaise)
+    const venueRatePaise = venueCoveredBy ? 0 : rawVenueRate
     // The bar is in the subtotal because it is in `proposal_total_paise`. Printing the bottles
     // and leaving their money out would put a document in the guest's hand whose own figures
     // do not add up to the one they are asked to pay against.
@@ -354,6 +378,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       isBundle: Boolean(s.isBundle),
       bundleMembers: (s.bundleMembers as string[]) ?? [],
       venueRatePaise,
+      venueCoveredBy,
       menu,
       foodAmountPaise,
       addons,
