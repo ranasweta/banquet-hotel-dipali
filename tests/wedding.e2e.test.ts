@@ -368,7 +368,7 @@ d('a whole wedding, start to finish', () => {
 
     // The priced chef delicacy is part of what the kitchen makes.
     const wedding = board.days[2]!.functions.find((f) => f.name === 'Wedding')!
-    expect(wedding.chefDishes).toContain('Live sushi counter')
+    expect(wedding.chefDishes).toContainEqual({ description: 'Live sushi counter', pending: false })
 
     // Not one rupee anywhere in the payload.
     expect(JSON.stringify(board)).not.toMatch(/[Pp]aise|ratePaise|perPlate/)

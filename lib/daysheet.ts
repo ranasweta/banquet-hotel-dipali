@@ -16,11 +16,15 @@ import { db } from '@/db/drizzle'
  * with no billing grant, so a per-plate rate travelling to the browser and being styled
  * away would be a leak with a stylesheet in front of it.
  *
- * Dishes carry their preference notes ("dal spicy") and the segment they belong to, plus
- * the chef delicacies that have actually been priced — an approved off-menu dish is part
- * of what the kitchen cooks, so it belongs on the same sheet.
+ * Dishes carry their preference notes ("dal spicy") and the segment they belong to, plus the
+ * chef delicacies — an off-menu dish is part of what the kitchen cooks, so it belongs on the
+ * same sheet. A request the Chef has not costed yet rides along flagged `pending` rather than
+ * being withheld: the floor plans around a dish from the moment the guest asks for it, and
+ * needs just as much to know it is not agreed. Declined asks are dropped — nobody cooks those.
  */
 export type OpsDish = { name: string; note: string | null; isExtra: boolean }
+/** An off-menu ask on a function. `pending` means the Chef has not priced it — not agreed. */
+export type ChefDish = { description: string; pending: boolean }
 export type OpsFunction = {
   subEventId: string
   date: string
@@ -35,10 +39,28 @@ export type OpsFunction = {
   tierName: string | null
   menuComplete: boolean
   segments: { name: string; dishes: OpsDish[] }[]
-  chefDishes: string[]
+  chefDishes: ChefDish[]
   addons: { description: string; qty: number }[]
 }
 export type OpsDay = { date: string; isToday: boolean; functions: OpsFunction[] }
+
+/**
+ * The off-menu asks on a set of functions, priced or still with the Chef. Shared by the
+ * fifteen-day board and the day sheet so the kitchen reads one list either way — the two
+ * screens are the same order printed at different lengths.
+ */
+async function chefDishesBySub(inList: ReturnType<typeof sql>): Promise<Map<string, ChefDish[]>> {
+  const rows = (await db.execute(sql`
+    SELECT sub_event_id AS "subEventId", description, status = 'pending' AS pending
+    FROM chef_requests WHERE sub_event_id IN (${inList}) AND status <> 'declined'
+    ORDER BY requested_at
+  `)) as unknown as { subEventId: string; description: string; pending: boolean }[]
+  const out = new Map<string, ChefDish[]>()
+  for (const r of rows) {
+    out.set(r.subEventId, [...(out.get(r.subEventId) ?? []), { description: r.description, pending: r.pending }])
+  }
+  return out
+}
 
 /**
  * Every function across a window of days, in operations shape. Drives the Banquet
@@ -101,7 +123,7 @@ export async function getOperationsHorizon(
   const ids = rows.map((r) => r.subEventId)
   const inList = sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)
 
-  const [dishes, chef, addons] = await Promise.all([
+  const [dishes, chefBySub, addons] = await Promise.all([
     db.execute(sql`
       SELECT m.sub_event_id AS "subEventId", s.category_name AS "categoryName",
              s.item_name AS "itemName", s.note, s.is_extra AS "isExtra"
@@ -109,12 +131,7 @@ export async function getOperationsHorizon(
       WHERE m.sub_event_id IN (${inList})
       ORDER BY s.category_name, s.is_extra, s.item_name
     `) as unknown as Promise<{ subEventId: string; categoryName: string; itemName: string; note: string | null; isExtra: boolean }[]>,
-    // Priced only: a request the Chef has not costed yet is not on the menu.
-    db.execute(sql`
-      SELECT sub_event_id AS "subEventId", description
-      FROM chef_requests WHERE sub_event_id IN (${inList}) AND status = 'priced'
-      ORDER BY requested_at
-    `) as unknown as Promise<{ subEventId: string; description: string }[]>,
+    chefDishesBySub(inList),
     db.execute(sql`
       SELECT sub_event_id AS "subEventId", description, qty
       FROM sub_event_addons WHERE sub_event_id IN (${inList})
@@ -129,8 +146,6 @@ export async function getOperationsHorizon(
     cats.set(d.categoryName, list)
     segBySub.set(d.subEventId, cats)
   }
-  const chefBySub = new Map<string, string[]>()
-  for (const c of chef) chefBySub.set(c.subEventId, [...(chefBySub.get(c.subEventId) ?? []), c.description])
   const addonBySub = new Map<string, { description: string; qty: number }[]>()
   for (const a of addons) {
     addonBySub.set(a.subEventId, [...(addonBySub.get(a.subEventId) ?? []), { description: a.description, qty: a.qty }])
@@ -159,6 +174,8 @@ export type DaySheetFunction = {
   pax: number
   venueName: string | null
   menu: { tierName: string; perPlatePaise: number; complete: boolean; categories: { name: string; items: string[] }[] } | null
+  /** The same off-menu asks the board carries: this sheet is what the kitchen cooks from. */
+  chefDishes: ChefDish[]
   addons: { description: string; qty: number; ratePaise: number }[]
 }
 
@@ -184,7 +201,7 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
   const ids = subs.map((s) => s.id)
   const inList = sql.join(ids.map((id) => sql`${id}::uuid`), sql`, `)
 
-  const [menus, selections, addons] = await Promise.all([
+  const [menus, selections, addons, chefBySub] = await Promise.all([
     db.execute(sql`
       SELECT m.sub_event_id AS "subEventId", m.tier_name AS "tierName",
              (m.base_rate_paise + m.surcharge_paise) AS "perPlatePaise", m.is_complete AS complete
@@ -200,6 +217,7 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
       SELECT sub_event_id AS "subEventId", description, qty, rate_paise AS "ratePaise"
       FROM sub_event_addons WHERE sub_event_id IN (${inList})
     `) as unknown as Promise<{ subEventId: string; description: string; qty: number; ratePaise: number }[]>,
+    chefDishesBySub(inList),
   ])
 
   const menuBySub = new Map(menus.map((m) => [m.subEventId, m]))
@@ -239,6 +257,7 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
             categories: cats ? [...cats.entries()].map(([name, items]) => ({ name, items })) : [],
           }
         : null,
+      chefDishes: chefBySub.get(s.id) ?? [],
       addons: addonsBySub.get(s.id) ?? [],
     }
   })
