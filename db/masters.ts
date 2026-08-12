@@ -265,6 +265,10 @@ export const MODULES = [
   // The venue master (client, 12 Aug 2026): venues, bundles and what each costs per event
   // type. Separate from `menu_master` so it can be granted on its own.
   'venue_master',
+  // The lodge master (client, 13 Aug 2026): categories, their room counts and nightly
+  // rates. Distinct from `rooms` (who is staying where) and `lodging_calendar` (the day
+  // sheet), so a Lodge Manager can run the desk without being able to re-price the hotel.
+  'lodge_master',
   'rooms',
   // The lodging calendar is its own module so it can be granted independently of `rooms`
   // (client, 20 Jul 2026: it belongs to the Lodge Manager). Sharing `rooms` meant no
@@ -323,6 +327,7 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   menus:       { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   menu_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
   venue_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  lodge_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
   rooms:       { booking_manager: 'view', banquet_manager: 'none', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
   // Lodge Managers only by default. The Auditor keeps `full` because that role IS the
   // permission utility — it grants and revokes for everyone, so locking it out of a module

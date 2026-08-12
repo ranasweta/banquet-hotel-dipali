@@ -142,6 +142,38 @@ the Authority approves a manual rate. An "Other" booking pays no standalone hall
 is stored as zeroes, not as gaps (SEED_ASSUMPTIONS §F26). Bundles keep their rate for every
 event type.
 
+## Lodge master (module: lodge_master)
+Added 13 Aug 2026 — the venue master's counterpart for rooms. Auditor `full`, Higher Authority
+`edit`. Distinct from `rooms` (who is staying where) and `lodging_calendar` (the day sheet), so
+a Lodge Manager can run the desk without being able to re-price the hotel.
+
+**The screen is category-wise; the table is room-wise.** `rooms` keeps one row per physical room
+because the hard inventory cap counts real rooms (rule 9), but every room of a category already
+shares one rate and pricing reads `min(rack_rate_paise)` per category. So the API speaks in
+categories and does the row bookkeeping underneath.
+
+- `GET  /lodge-master` — lodges → categories: `{ roomType, rooms, ratePaise, beds, committedPeak }`.
+  `committedPeak` is the most that category is promised on any single night; it is the floor a
+  reduction cannot cross, surfaced so the screen can explain a refusal before it happens.
+- `POST /lodge-master/lodges` { name } — a new lodge, with no categories yet.
+- `POST /lodge-master/categories` { unit_id, room_type, rate_paise, rooms, beds } — add a
+  category. `room_type` is normalised (`"Semi Suite"` → `semi_suite`), so it cannot be added
+  twice under two spellings.
+- `PUT  /lodge-master/categories` { unit_id, room_type, rate_paise?, rooms? } — re-price, resize,
+  or both. **A REDUCTION IS GUARDED**: rooms already promised to committed bookings are counted
+  per night and dropping below the busiest is refused (409) with the number that blocks it.
+  Growing is free. Enquiries hold nothing, so a draft never freezes the Auditor out.
+- `DELETE /lodge-master/categories` { unit_id, room_type } — retire a category. Same guard as
+  shrinking it to zero. Requires **`lodge_master:delete`**.
+
+Rooms are RETIRED (`is_active = false`), never deleted, so an old booking still explains itself;
+growing a category revives retired rows before numbering new ones.
+
+**Re-pricing moves unbilled bookings.** A room's rate is snapshotted nowhere — billing and the
+payable read it live — so a change reaches every proposal and unissued Draft of that category.
+Issued invoices keep the lines they were issued with. This is unlike venue and menu rates, which
+ARE snapshotted, and the screen says so rather than implying a protection that does not exist.
+
 ## Menus (module: menus)
 - `GET  /menu/catalog` — every tier → categories → items, for the dish picker (menus:view;
   reading tiers to build a booking is a `menus` concern, distinct from `menu_master` editing)

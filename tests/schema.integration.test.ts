@@ -148,9 +148,10 @@ d('seed', () => {
     // cards reference them (lib/event-types.ts).
     expect(await count('event_types')).toBe(6)
     expect(await count('menu_tiers')).toBe(8)
-    // 12 modules: `lodging_calendar` split out of `rooms` (20 Jul 2026), and `venue_master`
-    // arrived 12 Aug 2026 so the Auditor can keep venues, bundles and rates himself.
-    expect(await count('modules')).toBe(12)
+    // 13 modules: `lodging_calendar` split out of `rooms` (20 Jul 2026), then `venue_master`
+    // (12 Aug 2026) and `lodge_master` (13 Aug 2026) so the Auditor keeps the price lists
+    // himself — venues and bundles in one, room categories and nightly rates in the other.
+    expect(await count('modules')).toBe(13)
     expect(await count('roles')).toBe(7) // + chef, who alone prices a delicacy request
     expect(await count('lodging_units')).toBe(3)
   })
