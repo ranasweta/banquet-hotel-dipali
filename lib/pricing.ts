@@ -53,13 +53,42 @@ export async function venueRatePaise(
 
 export type ProposalPricing = {
   totalPaise: number
-  rates: Map<string, number> // subEventId -> venue rate paise
+  /**
+   * subEventId -> the venue charge carried BY THAT sub-event. Zero for a function whose
+   * venue-day is already paid for by an earlier one (see `coveredBy`).
+   */
+  rates: Map<string, number>
   missing: { subEventId: string; name: string }[] // sub-events with no rate card (BR-R1)
+  /** subEventId -> the sub-event whose day-hire covers it. Same venue, same date. */
+  coveredBy: Map<string, string>
 }
 
 /**
- * Prices every sub-event of an event from its rate card. `missing` lists any sub-event
- * that has no rate — the confirm transaction refuses while `missing` is non-empty.
+ * The venue-day a function belongs to. Hiring a hall takes it for the day — 9 AM to 8 AM the
+ * next morning — so every function inside that window shares one let (client, 12 Aug 2026).
+ *
+ * Keyed on the DATE, not on the occupancy window, which is why a function running 8 PM to
+ * 6 AM belongs to the day it started on and not to two of them. A different venue on the same
+ * day is a different let and is charged again; so is the same venue on another day.
+ */
+function venueDayKey(sub: SubEventForPricing): string {
+  return `${sub.bundleId ?? sub.venueId ?? 'none'}|${sub.eventDate}`
+}
+
+/**
+ * Prices an event's venue hire. `missing` lists any sub-event that has no rate — the confirm
+ * transaction refuses while `missing` is non-empty.
+ *
+ * **THE HALL IS CHARGED ONCE A DAY, NOT ONCE A FUNCTION** (client, 12 Aug 2026, after staff
+ * hit it in the field). Three functions in the same hall on one day billed the hire three
+ * times: the guest hired the room for the day and was charged for it thrice. The overlap rule
+ * is untouched — the windows still may not collide (BR-C1) — but a booking that clears it
+ * costs what one day costs.
+ *
+ * The EARLIEST function of a venue-day carries the charge, and the rest are `coveredBy` it.
+ * That is a display decision as much as an arithmetic one: the money is the same whichever
+ * function holds it, but a bill has to put the line somewhere a reader can find it, and "the
+ * day's hire is quoted on the first function" is a rule staff can say out loud.
  */
 export async function priceProposal(
   eventType: string,
@@ -68,9 +97,23 @@ export async function priceProposal(
 ): Promise<ProposalPricing> {
   const rates = new Map<string, number>()
   const missing: { subEventId: string; name: string }[] = []
+  const coveredBy = new Map<string, string>()
+  /** venue-day -> the sub-event already charged for it. */
+  const charged = new Map<string, string>()
   let totalPaise = 0
 
+  // `loadSubEventsForPricing` orders by (date, start time), so the first member of a group
+  // reached here is the day's first function. The TOTAL does not depend on that order — one
+  // rate per venue-day either way — only which function is shown carrying it.
   for (const sub of subs) {
+    const key = venueDayKey(sub)
+    const holder = charged.get(key)
+    if (holder) {
+      rates.set(sub.id, 0)
+      coveredBy.set(sub.id, holder)
+      continue
+    }
+
     const rate = await venueRatePaise(
       { venueId: sub.venueId, bundleId: sub.bundleId },
       eventType,
@@ -78,14 +121,17 @@ export async function priceProposal(
       e,
     )
     if (rate == null) {
+      // No carrier is recorded, so a later function on the same venue-day is reported missing
+      // too. Both are true and confirm is gated either way (BR-R1).
       missing.push({ subEventId: sub.id, name: sub.name })
     } else {
+      charged.set(key, sub.id)
       rates.set(sub.id, rate)
       totalPaise += rate
     }
   }
 
-  return { totalPaise, rates, missing }
+  return { totalPaise, rates, missing, coveredBy }
 }
 
 /**

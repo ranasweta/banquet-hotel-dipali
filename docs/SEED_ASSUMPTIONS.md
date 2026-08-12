@@ -1142,6 +1142,41 @@ proposal made today — the same guarantee menus get, by the same means. That is
 has one price and no effective-from date, unlike `menu_tier_prices`: the snapshot already does
 the work dating would, and a date nobody needs is a date somebody sets wrong.
 
+### F25. The hall is hired by the day, not by the function
+Client, 12 Aug 2026, reported by staff using the system: a booking with three functions in one
+hall on one day was charged the venue hire **three times**. The guest hired the room for the
+day; they were billed for it thrice.
+
+The rule as given: a venue hire runs **9 AM to 8 AM the next morning**, and between those hours
+the guest may hold as many functions with as many different menus as they like for one charge.
+Changing venue is fine and is charged the same way — a second hall on the same day is a second
+let. The same hall on another day is another let.
+
+**The earliest function of a venue-day carries the charge.** The money is the same whichever
+function holds it, but a bill has to put the line somewhere a reader can find it, and "the
+day's hire is quoted on the first function" is a rule staff can say out loud. Three code paths
+compute this and all three now use that carrier — `lib/pricing.ts` (the proposal total, and so
+the payable, the advance base and the discount cap), `lib/invoice.ts` (the Draft) and
+`lib/proposal.ts` (what the guest is handed) — because a fix in one is worth nothing if another
+still triples it.
+
+One trap worth recording. `confirmEvent` writes the per-function charge to
+`sub_events.venue_rate_paise`, which is now **0** for a covered function — and the bill's
+`COALESCE(NULLIF(se.venue_rate_paise, 0), <rate card>)` reads a zero as "never snapshotted" and
+falls back to the rate card. Relying on the zeroed snapshot would therefore have put the charge
+straight back on every function it had just been taken off. The bill de-duplicates explicitly,
+in SQL, rather than trusting that column.
+
+**The calendar no longer draws a carryover tail.** A function running 8 PM to 6 AM is drawn on
+its start day only, marked "⁺¹", because the morning it ends in belongs to the same let and
+painting the next day as taken lost a sellable day on the board. The `venue_bookings` occupancy
+range is untouched and still crosses midnight, so the GiST exclusion refuses a clashing booking
+exactly as before (BR-C1). **The consequence to know:** the morning after a late function looks
+free on the board while the availability check will still refuse an early slot in it. The data
+is right; the board is simply no longer showing that tail. If staff report being surprised by a
+refusal on a morning that looked free, this is why, and the answer is a hint on the day panel
+rather than bringing the tail back.
+
 ---
 
 ## E. Still needed from the client

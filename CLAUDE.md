@@ -60,6 +60,20 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      allowed. A window with end_time ≤ start_time runs past midnight into the next day.
      Rely on the `venue_bookings` GiST exclusion to win races; no fixed slots, no 11 AM
      rule. Booking a bundle inserts one `venue_bookings` row per member venue.
+     **The hall is charged once a DAY, not once a function** (client, 12 Aug 2026, after staff
+     hit it in the field). Hiring a venue takes it 9 AM to 8 AM the next morning; every function
+     inside that window shares one let, whatever their menus. Three functions in one hall on one
+     day billed the hire three times — the guest hired the room for the day and paid for it
+     thrice. The **earliest** function of a venue-day carries the charge and the rest are covered
+     by it; `lib/pricing.ts` owns that rule and `lib/invoice.ts` + `lib/proposal.ts` reproduce
+     the same carrier, so total, bill and printed proposal agree. A different venue on the same
+     day is a separate let, and so is the same venue on another day. **The overlap rule is
+     untouched** — windows still may not collide; only the price changed.
+     A function is keyed to the day it STARTS on: one running 8 PM–6 AM consumes one day of that
+     hall, and the calendar board draws it on that day only (no next-morning carryover chip).
+     The occupancy range still crosses midnight, so the exclusion refuses a clash as before —
+     but the board no longer paints the next day as taken, and the availability check may still
+     refuse an early slot that the board shows as free.
    - Confirm requires **some** recorded advance BEFORE inserting `venue_bookings`
      rows (BR-P1, amended 4 Aug 2026). The 25% is a debt now, not a gate: a guest who
      brings part of it confirms all the same, holds the venues like any other booking,
@@ -184,9 +198,9 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
 ## UI conventions
 - Use the ui-ux-pro-max skill for design decisions and the Magic MCP (`/ui`)
   for component generation where installed.
-- Screens follow the approved mockups: calendar board (venues × dates, confirmed +
-  carryover + in-progress states — locked-in deals only, no enquiries, per amended
-  FR-2.5), 5-step booking wizard, tier dish picker with per-category any-N counters
+- Screens follow the approved mockups: calendar board (confirmed + in-progress states —
+  locked-in deals only, no enquiries, per amended FR-2.5; the carryover tail was withdrawn
+  12 Aug 2026, see rule 3), 5-step booking wizard, tier dish picker with per-category any-N counters
   (all-included categories render read-only), approvals queue, lock checklist.
 - The approvals queue is **one row per proposal** (1 Aug 2026), opening onto that booking's
   asks grouped by section and, below them, the whole proposal as an editable form. Requested
