@@ -173,11 +173,23 @@ export type DaySheetFunction = {
   endTime: string
   pax: number
   venueName: string | null
-  menu: { tierName: string; perPlatePaise: number; complete: boolean; categories: { name: string; items: string[] }[] } | null
+  menu: { tierName: string; complete: boolean; categories: { name: string; items: string[] }[] } | null
   /** The same off-menu asks the board carries: this sheet is what the kitchen cooks from. */
   chefDishes: ChefDish[]
-  addons: { description: string; qty: number; ratePaise: number }[]
+  addons: { description: string; qty: number }[]
 }
+
+/**
+ * The consolidated kitchen & ops order for one date (FR-2.4) — the printable form of the
+ * board above, and money-free for the same reason and in the same way.
+ *
+ * It used to carry the menu's per-plate rate and each add-on's rate. Nothing rendered them,
+ * but the route is gated on `calendar:view`, which the Banquet Manager and the Chef hold and
+ * which grants nothing in billing — so the figures were leaving the server for browsers with
+ * no right to them and surviving in whatever printed or cached the response. Dropped at the
+ * query, not in the UI: the rule the board states at the top of this file applies to every
+ * payload this module serves, not only the one that happened to state it.
+ */
 
 export async function getDaySheet(date: string): Promise<{ date: string; functions: DaySheetFunction[] }> {
   const subs = (await db.execute(sql`
@@ -203,10 +215,9 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
 
   const [menus, selections, addons, chefBySub] = await Promise.all([
     db.execute(sql`
-      SELECT m.sub_event_id AS "subEventId", m.tier_name AS "tierName",
-             (m.base_rate_paise + m.surcharge_paise) AS "perPlatePaise", m.is_complete AS complete
+      SELECT m.sub_event_id AS "subEventId", m.tier_name AS "tierName", m.is_complete AS complete
       FROM sub_event_menus m WHERE m.sub_event_id IN (${inList})
-    `) as unknown as Promise<{ subEventId: string; tierName: string; perPlatePaise: number; complete: boolean }[]>,
+    `) as unknown as Promise<{ subEventId: string; tierName: string; complete: boolean }[]>,
     db.execute(sql`
       SELECT m.sub_event_id AS "subEventId", s.category_name AS "categoryName", s.item_name AS "itemName"
       FROM sub_event_menu_selections s JOIN sub_event_menus m ON m.id = s.menu_id
@@ -214,9 +225,9 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
       ORDER BY s.category_name, s.item_name
     `) as unknown as Promise<{ subEventId: string; categoryName: string; itemName: string }[]>,
     db.execute(sql`
-      SELECT sub_event_id AS "subEventId", description, qty, rate_paise AS "ratePaise"
+      SELECT sub_event_id AS "subEventId", description, qty
       FROM sub_event_addons WHERE sub_event_id IN (${inList})
-    `) as unknown as Promise<{ subEventId: string; description: string; qty: number; ratePaise: number }[]>,
+    `) as unknown as Promise<{ subEventId: string; description: string; qty: number }[]>,
     chefDishesBySub(inList),
   ])
 
@@ -229,10 +240,10 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
     cats.set(s.categoryName, items)
     selBySub.set(s.subEventId, cats)
   }
-  const addonsBySub = new Map<string, { description: string; qty: number; ratePaise: number }[]>()
+  const addonsBySub = new Map<string, { description: string; qty: number }[]>()
   for (const a of addons) {
     const list = addonsBySub.get(a.subEventId) ?? []
-    list.push({ description: a.description, qty: a.qty, ratePaise: Number(a.ratePaise) })
+    list.push({ description: a.description, qty: a.qty })
     addonsBySub.set(a.subEventId, list)
   }
 
@@ -252,7 +263,6 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
       menu: m
         ? {
             tierName: m.tierName,
-            perPlatePaise: Number(m.perPlatePaise),
             complete: m.complete,
             categories: cats ? [...cats.entries()].map(([name, items]) => ({ name, items })) : [],
           }
