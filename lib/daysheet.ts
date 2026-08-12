@@ -173,10 +173,10 @@ export type DaySheetFunction = {
   endTime: string
   pax: number
   venueName: string | null
-  menu: { tierName: string; complete: boolean; categories: { name: string; items: string[] }[] } | null
+  menu: { tierName: string; perPlatePaise: number; complete: boolean; categories: { name: string; items: string[] }[] } | null
   /** The same off-menu asks the board carries: this sheet is what the kitchen cooks from. */
   chefDishes: ChefDish[]
-  addons: { description: string; qty: number }[]
+  addons: { description: string; qty: number; ratePaise: number }[]
 }
 
 /**
@@ -227,7 +227,7 @@ export async function getDaySheet(date: string): Promise<{ date: string; functio
     db.execute(sql`
       SELECT sub_event_id AS "subEventId", description, qty
       FROM sub_event_addons WHERE sub_event_id IN (${inList})
-    `) as unknown as Promise<{ subEventId: string; description: string; qty: number }[]>,
+    `) as unknown as Promise<{ subEventId: string; description: string; qty: number; ratePaise: number }[]>,
     chefDishesBySub(inList),
   ])
 
