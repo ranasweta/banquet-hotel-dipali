@@ -200,7 +200,11 @@ export async function roomEstimatePaise(
            -- The proposal now names the lodge (21 Jul 2026), so price at THAT lodge's rate.
            -- The cheapest-across-lodges fallback only applies to rows captured before the
            -- proposal asked, where no unit is recorded and none may be invented.
+           -- The rate FROZEN AT CONFIRMATION wins (13 Aug 2026), so re-pricing a category in
+           -- the lodge master never moves a booking that has already been promised one.
+           -- NULL means the booking is still an enquiry, or predates the column: price live.
            COALESCE(
+             rr.rate_paise,
              (SELECT min(r.rack_rate_paise) FROM rooms r
                WHERE r.room_type = rr.room_type AND r.is_active
                  AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)),

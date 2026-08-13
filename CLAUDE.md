@@ -137,7 +137,8 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    the daily cron) starts an event when its first function's date arrives and
    completes it once the last has passed. Without it nothing reaches `completed`,
    and nothing can be locked, invoiced or billed.
-9. **Rooms are booked in bulk, and bounded twice** (client, 21 Jul 2026). The
+9. **Rooms are booked in bulk, bounded twice, and priced at confirmation** (client,
+   21 Jul 2026; the freeze added 13 Aug 2026). The
    proposal states lodge + category + count + dates, and that IS the booking —
    `room_requirements`, not `room_allocations`, which nothing writes any more.
    Two independent limits apply: a **hard inventory cap** (never more of a
@@ -149,6 +150,14 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    check-out reaching at most the morning after the To date. A guest may stay the
    whole event even when a function isn't scheduled on every day. Proposals made
    before that window was captured fall back to the functions' span.
+   **The nightly rate freezes at confirm, like a venue's** — `room_requirements.rate_paise`,
+   migration 0032. Until then a room charge was recomputed from the live rack rate on every
+   read, so re-pricing a category in the lodge master moved bookings already quoted. Every
+   reader is `COALESCE(rr.rate_paise, <live min>)`: NULL means "price it live" (an enquiry, or
+   a booking confirmed before the column existed), never "free". Saving requirements deletes
+   and re-inserts every line, so both writers call `freezeRoomRates` — without it a confirmed
+   booking whose rooms were edited would quietly start pricing live again. A post-confirm edit
+   therefore re-prices at today's rate, exactly as a post-confirm venue edit does.
 10. **Menu increases unlock, they do not increment** (client, 21 Jul 2026).
    Pressing Increase on a segment lifts its ceiling; every pick beyond
    `base_pick` is an extra, flagged on the selection so the picker can colour it

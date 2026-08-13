@@ -224,3 +224,45 @@ d('adding categories', () => {
     ).rejects.toMatchObject({ status: 409 })
   }, 120_000)
 })
+
+d('a confirmed booking keeps the rate it was confirmed at', () => {
+  it('freezes the nightly rate, so re-pricing the category never moves it', async () => {
+    const confirm = await import('@/lib/pricing')
+    const eventId = await commitRooms(4, 'deluxe', '2027-11-01', '2027-11-03')
+    // commitRooms writes the requirement directly, so freeze it the way confirmEvent does.
+    const roomsLib = await import('@/lib/rooms')
+    await db.transaction(async (tx) => roomsLib.freezeRoomRates(tx, eventId))
+
+    const before = await confirm.roomEstimatePaise(eventId)
+    expect(before.roomsPaise).toBe(4 * 2 * 500_000) // 4 rooms × 2 nights × ₹5,000
+
+    // The Auditor puts deluxe up by 40%.
+    await master.setCategoryRate(auditor, palaceId, 'deluxe', 700_000)
+
+    const after = await confirm.roomEstimatePaise(eventId)
+    expect(after.roomsPaise).toBe(before.roomsPaise) // the guest keeps what they were quoted
+  }, 120_000)
+
+  it('leaves an enquiry pricing live — a draft is not a promise', async () => {
+    const confirm = await import('@/lib/pricing')
+    const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
+    const [ev] = await db
+      .insert(schema.events)
+      .values({ code, guestName: 'Draft', eventType: 'other', createdBy: bmId })
+      .returning({ id: schema.events.id })
+    await db.execute(sql`
+      INSERT INTO room_requirements (event_id, unit_id, room_type, count, check_in, check_out)
+      VALUES (${ev!.id}, ${palaceId}, 'deluxe', 2, '2027-11-01'::date, '2027-11-03'::date)
+    `)
+    // freezeRoomRates only touches committed bookings, so this stays NULL…
+    await db.transaction(async (tx) => (await import('@/lib/rooms')).freezeRoomRates(tx, ev!.id))
+    const [row] = (await db.execute(sql`
+      SELECT rate_paise AS "ratePaise" FROM room_requirements WHERE event_id = ${ev!.id}
+    `)) as unknown as { ratePaise: number | null }[]
+    expect(row!.ratePaise).toBeNull()
+
+    // …and it follows the catalogue, exactly as it did before the freeze existed.
+    await master.setCategoryRate(auditor, palaceId, 'deluxe', 700_000)
+    expect((await confirm.roomEstimatePaise(ev!.id)).roomsPaise).toBe(2 * 2 * 700_000)
+  }, 120_000)
+})

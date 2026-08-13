@@ -5,6 +5,7 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
 import { applyMove, type ResolvedSchedule } from '@/lib/change-requests'
 import { recomputeProposal } from '@/lib/post-confirm'
+import { freezeRoomRates } from '@/lib/rooms'
 import { reissueInvoice } from '@/lib/invoice'
 import { getRoomAvailability } from '@/lib/rooms'
 import { formatPaise } from '@/lib/money'
@@ -431,6 +432,9 @@ async function applyRoomEdit(tx: Tx, actor: Actor, eventId: string, rooms: RoomE
     await tx.insert(schema.roomRequirements).values(
       rooms.map((r) => ({ eventId, unitId: r.unitId, roomType: r.roomType, count: r.count, checkIn: r.checkIn, checkOut: r.checkOut })),
     )
+    // Re-freeze: the delete-and-reinsert above drops the snapshot, and a confirmed booking
+    // that came back without one would quietly start pricing live again (13 Aug 2026).
+    await freezeRoomRates(tx, eventId)
   }
 
   const totalRooms = rooms.reduce((n, r) => n + r.count, 0)

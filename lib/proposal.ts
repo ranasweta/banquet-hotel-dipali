@@ -392,7 +392,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     SELECT rr.id, rr.unit_id AS "unitId", COALESCE(u.name, 'Lodging') AS lodge, rr.room_type AS "roomType",
            rr.count::int AS count, rr.check_in::text AS "checkIn", rr.check_out::text AS "checkOut",
            (rr.check_out - rr.check_in)::int AS nights,
-           COALESCE((SELECT min(r.rack_rate_paise) FROM rooms r
+           COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
                       WHERE r.room_type = rr.room_type AND r.is_active
                         AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)::bigint AS "ratePaise"
     FROM room_requirements rr

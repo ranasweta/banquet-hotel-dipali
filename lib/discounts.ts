@@ -67,7 +67,7 @@ async function headSubtotals(eventId: string, exec: Pick<typeof db, 'execute'> =
                      FROM sub_event_addons a JOIN sub_events se ON se.id = a.sub_event_id
                     WHERE se.event_id = ${eventId}), 0))::bigint AS menu,
       COALESCE((SELECT sum(rr.count::bigint * (rr.check_out - rr.check_in)
-                          * COALESCE((SELECT min(r.rack_rate_paise) FROM rooms r
+                          * COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
                                        WHERE r.room_type = rr.room_type AND r.is_active
                                          AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0))
                  FROM room_requirements rr WHERE rr.event_id = ${eventId}), 0)::bigint AS room

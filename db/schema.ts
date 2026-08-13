@@ -372,7 +372,7 @@ export const barBrands = pgTable("bar_brands", {
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	pricePerBottlePaise: bigint("price_per_bottle_paise", { mode: "number" }).notNull(),
 	isActive: boolean("is_active").default(true).notNull(),
-}, (table) => [
+}, () => [
 	uniqueIndex("bar_brands_name_key").using("btree", sql`lower(name)`),
 	check("bar_brands_price_per_bottle_paise_check", sql`price_per_bottle_paise > 0`),
 ]);
@@ -468,6 +468,11 @@ export const roomRequirements = pgTable("room_requirements", {
 	// Which lodge the rooms come from (migration 0009). NULL only on rows captured before
 	// the proposal asked for it — never inferred, see the migration's note.
 	unitId: uuid("unit_id"),
+	// The nightly rate frozen at confirmation (migration 0032). NULL while the booking is an
+	// enquiry, and on bookings confirmed before the column existed: every reader is
+	// COALESCE(rate_paise, live min), so NULL means "price it live", never "free".
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	ratePaise: bigint("rate_paise", { mode: "number" }),
 }, (table) => [
 	foreignKey({
 			columns: [table.eventId],
