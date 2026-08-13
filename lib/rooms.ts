@@ -257,6 +257,39 @@ export async function getLodgingDay(date: string, scopeUnitId?: string | null): 
 }
 
 
+/**
+ * Freezes the nightly rate onto an event's room lines, if that event is past the point of being
+ * a mere enquiry (client, 13 Aug 2026 — "yes freeze the room rates at confirm like venues").
+ *
+ * `confirmEvent` does this once at confirmation. It has to happen HERE too, because saving
+ * requirements deletes and re-inserts every line: a confirmed booking whose rooms were edited
+ * would otherwise come back with no snapshot and quietly start pricing live again — the exact
+ * drift the freeze exists to stop.
+ *
+ * An edit therefore RE-PRICES the block at today's rate, which is precisely what a post-confirm
+ * venue edit does (`recomputeProposal` rewrites `venue_rate_paise` from the current card). One
+ * rule for both, and an explicable one: change the booking, take today's prices.
+ *
+ * Enquiries are left NULL on purpose. A draft is not a promise, so it should go on quoting live
+ * prices exactly as an unconfirmed venue does.
+ */
+export async function freezeRoomRates(tx: Tx, eventId: string): Promise<void> {
+  await tx.execute(sql`
+    UPDATE room_requirements rr
+       SET rate_paise = (
+         SELECT min(r.rack_rate_paise) FROM rooms r
+          WHERE r.room_type = rr.room_type AND r.is_active
+            AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)
+       )
+     WHERE rr.event_id = ${eventId}
+       AND EXISTS (
+         SELECT 1 FROM events e
+          WHERE e.id = rr.event_id
+            AND e.status IN ('confirmed','in_progress','completed','locked','billed','closed')
+       )
+  `)
+}
+
 // ── Room availability — the hard inventory cap ───────────────────────────────
 
 /**
@@ -620,6 +653,7 @@ export async function saveRoomRequirements(
           checkOut: r.checkOut,
         })),
       )
+      await freezeRoomRates(tx, eventId)
     }
 
     await tx.delete(schema.exceptions).where(

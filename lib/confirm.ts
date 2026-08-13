@@ -270,6 +270,27 @@ export async function confirmEvent(
           .where(eq(schema.subEvents.id, sub.id))
       }
 
+      // 6a-ii. Freeze the ROOM rates too (client, 13 Aug 2026: "yes freeze the room rates at
+      // confirm like venues"). Until now a room charge was recomputed from the live rack rate
+      // on every read, so re-pricing a category in the lodge master moved bookings that had
+      // already been quoted — a guest promised 27 deluxe at 4,500 could be billed at 5,200
+      // with nothing on the booking to explain it.
+      //
+      // The lodge's own rate for the category, exactly as `roomsEstimate` prices it: the
+      // proposal names the lodge (21 Jul 2026), and the cheapest-across-lodges fallback is
+      // only for rows captured before it asked. A category with no active room prices at
+      // nothing and is left NULL rather than frozen at zero — a zero here would be a promise
+      // of free rooms, where NULL simply goes on reading live.
+      await tx.execute(sql`
+        UPDATE room_requirements rr
+           SET rate_paise = (
+             SELECT min(r.rack_rate_paise) FROM rooms r
+              WHERE r.room_type = rr.room_type AND r.is_active
+                AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)
+           )
+         WHERE rr.event_id = ${eventId}
+      `)
+
       // 6b. Proposal total + derived dates, then move to confirmed (via the state machine).
       const dates = subs.map((s) => s.eventDate).sort()
       await tx

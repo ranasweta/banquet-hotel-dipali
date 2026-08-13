@@ -110,7 +110,7 @@ async function payableRows(
       SELECT rr.event_id,
              (GREATEST(rr.count, 0)::bigint
               * GREATEST(rr.check_out - rr.check_in, 0)
-              * COALESCE((SELECT min(r.rack_rate_paise) FROM rooms r
+              * COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
                            WHERE r.room_type = rr.room_type AND r.is_active
                              AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)) AS amount
       FROM room_requirements rr
