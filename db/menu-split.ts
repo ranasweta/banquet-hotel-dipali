@@ -23,6 +23,14 @@ const EXPLICIT_SPLITS: Record<string, string[]> = {
   // ...and this one shares its leading words, so a plain split would leave a dish called
   // "Masala" on its own.
   'South Indian Dosa Plain, Masala': ['South Indian Dosa Plain', 'South Indian Dosa Masala'],
+  // "Two Types" is the count, not a dish. Diamond and Crown spell the same line out as
+  // "Missi Roti, Puri, Masala Puri", so Platinum's shorthand is those same two puris — left
+  // whole it read as one dish nobody else offered (client, 13 Aug 2026).
+  'Puri Two Types': ['Puri', 'Masala Puri'],
+  // Shares its trailing noun, like the koftas above: every other tier lists "Aloo Tikki
+  // Chaat", and Gold lists "Papdi Chaat" separately in the same breath. The heuristic cannot
+  // fire here because "Aloo Tikki" is two words, so it is written out.
+  'Aloo Tikki / Papdi Chaat': ['Aloo Tikki Chaat', 'Papdi Chaat'],
 }
 
 /** "/", "\" and "," all separate dishes on one printed line. */

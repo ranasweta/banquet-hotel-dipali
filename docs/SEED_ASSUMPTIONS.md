@@ -1120,10 +1120,18 @@ invented, and a made-up liquor rate card is exactly what this document exists to
 list starts empty and the Auditor fills it. Nothing breaks meanwhile: a function with no bar
 lines charges nothing, and the Alcohol panel says where the prices come from.
 
-**Two questions for the client / the hotel's CA, implemented as instructed and recorded rather
-than decided here:**
+**Question 1 is now SETTLED.** Asked again on 13 Aug 2026, the client ruled: *"its okay include
+it in the GST it doesnt matter as we are not taking it anyways"* — alcohol stays an 18%-shown
+line like food. The reasoning holds on its own terms: that 18% is printed and collected from
+nobody (§F8), so a label on money which never moves costs the guest nothing. **No code change
+was needed**; the bar has always billed as a `food`-section line. Recorded rather than struck
+out, because a CA reviewing these documents will still ask, and the answer should be findable —
+the hotel was told and chose this. **Question 2 remains open.**
 
-1. **The 18% GST label.** Asked how alcohol should be taxed, the client chose "same as food" —
+**The two questions as originally raised, implemented as instructed and recorded rather than
+decided here:**
+
+1. **The 18% GST label.** *(Settled 13 Aug 2026 — see above.)* Asked how alcohol should be taxed, the client chose "same as food" —
    18%, printed on the Total and collected from nobody (§F8). The money is therefore right by
    construction: a bar line enters no threshold, no balance and no discount cap beyond what
    `proposal_total_paise` already carries, and nothing is collected. But alcohol for human
@@ -1141,6 +1149,32 @@ name and rate when the line is added (rule 4), so re-pricing the bar tomorrow mo
 proposal made today — the same guarantee menus get, by the same means. That is also why the bar
 has one price and no effective-from date, unlike `menu_tier_prices`: the snapshot already does
 the work dating would, and a date nobody needs is a date somebody sets wrong.
+
+### F24a. Three dishes that were one dish under two names
+Client, 13 Aug 2026: *"if you see they are duplicates then remove them make them same in all"*.
+These were the last three near-duplicates surviving `dedupeMenuNames` in the pooled Swap list.
+
+The test that settled each: **does any single tier carry both spellings?** None did. Two dishes
+that are genuinely different turn up together on at least one card — "Puri" and "Masala Puri"
+sit side by side on Diamond and Crown, which is exactly why that pair was left alone.
+
+Two of the three were not spelling variants at all, but lines `db/menu-split.ts` left whole.
+Both are now in `EXPLICIT_SPLITS`, so a fresh seed produces the right dishes:
+
+- **Platinum · "Puri Two Types"** → `Puri` + `Masala Puri`. "Two Types" is the count, not a
+  dish; Diamond and Crown write the same line out as "Missi Roti, Puri, Masala Puri".
+- **Gold · "Aloo Tikki / Papdi Chaat"** → `Aloo Tikki Chaat` + `Papdi Chaat`. It shares its
+  trailing noun like the koftas already listed there: every other tier says "Aloo Tikki Chaat",
+  and Gold names "Papdi Chaat" in the same breath. The heuristic cannot fire because "Aloo
+  Tikki" is two words, so it is written out by hand.
+- **Crown · "Green Chilly Fried with Lemon"** → `Green Chilly Fried`, a genuine spelling variant
+  against the other four tiers. **If the lemon is a real difference in what Crown serves** rather
+  than a fuller way of writing the same thing, this is the one to put back — a rename in the
+  menu master, no migration needed.
+
+Migration 0033 repairs the database that is already seeded. Booked menus are untouched:
+selections copy dishes BY NAME at save (BR-M1), so an event that chose "Aloo Tikki" keeps saying
+so on its bill. This changes what the guest is offered next.
 
 ### F25. The hall is hired by the day, not by the function
 Client, 12 Aug 2026, reported by staff using the system: a booking with three functions in one
