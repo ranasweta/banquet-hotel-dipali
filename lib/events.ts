@@ -220,6 +220,11 @@ export async function loadEventDetail(eventId: string) {
       status: schema.events.status,
       firstDate: schema.events.firstDate,
       lastDate: schema.events.lastDate,
+      // The proposal's DECLARED run (migration 0018), distinct from first/last date, which
+      // cache the functions' span. Returned so the booking page can edit it in place — it is
+      // what bounds the room dates (rule 9), so it has to be changeable with everything else.
+      plannedFrom: schema.events.plannedFrom,
+      plannedTo: schema.events.plannedTo,
       proposalTotalPaise: schema.events.proposalTotalPaise,
       confirmedAt: schema.events.confirmedAt,
       createdAt: schema.events.createdAt,

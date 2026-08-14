@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, Trash2 } from 'lucide-react'
+import { Loader2, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { BOOKABLE_EVENT_TYPES, eventTypeLabel } from '@/lib/event-types'
@@ -10,6 +10,7 @@ import { formatPaise, rupeesToPaise } from '@/lib/money'
 import { formatTimeRange, todayISO } from '@/lib/time'
 import { TimePicker12 } from '@/components/ui/time-picker-12'
 import { Button } from '@/components/ui/button'
+import { FunctionEdit } from '@/components/function-edit'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -492,12 +493,16 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
             pools={pools}
             fromDate={fromDate}
             toDate={toDate}
+            canEditRows={eventStatus === 'enquiry'}
+            onEdited={async () => { if (eventId) await refreshFunctions(eventId) }}
             rows={subEvents.map((s) => ({
               id: s.id,
               name: s.name,
               eventDate: s.eventDate,
               startTime: s.startTime.slice(0, 5),
               endTime: s.endTime.slice(0, 5),
+              venueId: s.venueId ?? null,
+              bundleId: s.bundleId ?? null,
               venueLabel: s.bundleId
                 ? options.bundles.find((b) => b.id === s.bundleId)?.name ?? 'Bundle'
                 : options.venues.find((v) => v.id === s.venueId)?.name ?? 'Venue',
@@ -725,6 +730,13 @@ type FunctionRow = {
   menu?: { tierName: string; perPlatePaise: number }
 }
 
+/**
+ * A row the editor can open, which needs the venue IDS as well as the label — a label cannot be
+ * turned back into a selection. Kept apart from `FunctionRow` because the review step displays
+ * the same rows and has no use for them.
+ */
+type EditableFunctionRow = FunctionRow & { venueId: string | null; bundleId: string | null }
+
 function FunctionsEditor({
   tiers,
   pools,
@@ -733,16 +745,26 @@ function FunctionsEditor({
   rows,
   onAdd,
   onRemove,
+  canEditRows,
+  onEdited,
 }: {
   tiers: Tier[]
   pools: MenuPool[]
   fromDate: string
   toDate: string
-  rows: FunctionRow[]
+  rows: EditableFunctionRow[]
   onAdd: (spec: { name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; tierId: string }) => Promise<void>
   onRemove: (id: string) => Promise<void>
+  /**
+   * Whether a function on this proposal can be edited in place. False once it is confirmed:
+   * the server refuses (409) because a confirmed function is a HELD venue slot, and moving one
+   * belongs to lib/post-confirm.ts — which is what remove-and-re-add does here instead.
+   */
+  canEditRows: boolean
+  onEdited: () => Promise<void>
 }) {
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [openEdit, setOpenEdit] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
   const [target, setTarget] = useState('')
@@ -837,6 +859,15 @@ function FunctionsEditor({
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
+                  {canEditRows && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setOpenEdit((o) => (o === r.id ? null : r.id))}
+                    >
+                      <Pencil className="size-3.5" /> {openEdit === r.id ? 'Close' : 'Edit'}
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -849,6 +880,29 @@ function FunctionsEditor({
                   </Button>
                 </div>
               </div>
+              {/* Date, time, venue and pax in place — so changing one of them no longer means
+                  deleting the function and losing the menu with it (client, 15 Aug 2026). */}
+              {canEditRows && openEdit === r.id && (
+                <div className="mt-3">
+                  <FunctionEdit
+                    fn={{
+                      id: r.id,
+                      name: r.name,
+                      eventDate: r.eventDate,
+                      startTime: r.startTime,
+                      endTime: r.endTime,
+                      venueId: r.venueId,
+                      bundleId: r.bundleId,
+                      pax: r.pax,
+                    }}
+                    onSaved={async () => {
+                      await onEdited()
+                      setOpenEdit(null)
+                    }}
+                    onCancel={() => setOpenEdit(null)}
+                  />
+                </div>
+              )}
               {/* The full picker for this function — dishes, swap, preferences, chef delicacy.
                   Everything in it saves itself, so a menu can be assembled over several days. */}
               {openMenu === r.id && (
