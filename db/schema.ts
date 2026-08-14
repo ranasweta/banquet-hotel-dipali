@@ -992,3 +992,65 @@ export const lodgeExtras = pgTable("lodge_extras", {
 		}),
 	check("lodge_extras_in_room_dining_paise_check", sql`in_room_dining_paise >= 0`),
 ]);
+
+// Plates issued beyond what a function was catered for (migration 0035). Priced at that
+// function's own per-plate rate, snapshotted, and never without a photo.
+export const extraPlateEntries = pgTable("extra_plate_entries", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	eventId: uuid("event_id").notNull(),
+	subEventId: uuid("sub_event_id").notNull(),
+	plates: integer().notNull(),
+	ratePaise: bigint("rate_paise", { mode: "number" }).notNull(),
+	amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+	remarks: text(),
+	// NOT NULL by design: the photo is the only check on an invented charge, so an entry
+	// without one must not exist.
+	fileKey: text("file_key").notNull(),
+	createdBy: uuid("created_by").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("extra_plate_entries_event").using("btree", table.eventId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.eventId],
+			foreignColumns: [events.id],
+			name: "extra_plate_entries_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.subEventId],
+			foreignColumns: [subEvents.id],
+			name: "extra_plate_entries_sub_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.createdBy],
+			foreignColumns: [users.id],
+			name: "extra_plate_entries_created_by_fkey"
+		}),
+	check("extra_plate_entries_plates_check", sql`plates > 0`),
+	check("extra_plate_entries_rate_paise_check", sql`rate_paise > 0`),
+	check("extra_plate_entries_amount_paise_check", sql`amount_paise > 0`),
+]);
+
+// One row per event: the Utensil Manager's close, and nothing else (migration 0035).
+export const utensilExtras = pgTable("utensil_extras", {
+	eventId: uuid("event_id").primaryKey().notNull(),
+	closedAt: timestamp("closed_at", { withTimezone: true, mode: 'string' }),
+	closedBy: uuid("closed_by"),
+	updatedBy: uuid("updated_by").notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.eventId],
+			foreignColumns: [events.id],
+			name: "utensil_extras_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.closedBy],
+			foreignColumns: [users.id],
+			name: "utensil_extras_closed_by_fkey"
+		}),
+	foreignKey({
+			columns: [table.updatedBy],
+			foreignColumns: [users.id],
+			name: "utensil_extras_updated_by_fkey"
+		}),
+]);

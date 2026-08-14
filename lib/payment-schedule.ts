@@ -36,6 +36,10 @@ import { ROOM_GST_BP } from '@/lib/tax'
  * turns up needing four more rooms in September cannot be allowed to raise the advance that
  * fell due in June. Closed only, again: the Lodge Manager's close is what lets them count.
  *
+ * SO DO THE PLATES (client, 15 Aug 2026; migration 0035). Plates issued beyond what a function
+ * was catered for are counted at the pass on the night — later still than either of the above.
+ * Same side, same closed-only rule, and for the same reason.
+ *
  * THE MILESTONES.
  *   advance          25% of the pre-event base, at confirm. Short is allowed now (see
  *                    lib/confirm.ts): the money is taken, the dates are held, and the debt
@@ -77,11 +81,14 @@ export type PayableBreakdown = {
   extraRoomsTaxPaise: number
   /** In-room dining, one figure for the stay. Zero until the extras log is closed. */
   inRoomDiningPaise: number
+  /** Plates issued on the day. Zero until the Utensil Manager closes his log. */
+  extraPlatesPaise: number
   /** proposal + rooms + room tax − discount. The base for the 25% and the wedding 50%. */
   preEventPayablePaise: number
   /**
-   * The pre-event base plus everything logged during and after the event — closed maintenance
-   * and the Lodge Manager's closed extras. What is owed in full, and what the balance measures.
+   * The pre-event base plus everything logged during and after the event — closed maintenance,
+   * the Lodge Manager's closed extras and the Utensil Manager's closed plates. What is owed in
+   * full, and what the balance measures.
    */
   payablePaise: number
   paidPaise: number
@@ -99,6 +106,7 @@ type PayableRow = {
   extraRooms: number
   extraRoomsTax: number
   inRoomDining: number
+  extraPlates: number
   paid: number
   firstDate: string | null
   isWedding: boolean
@@ -112,6 +120,13 @@ type PayableRow = {
  * that fell due before anybody arrived.
  */
 const lodgeExtras = (r: PayableRow) => r.extraRooms + r.extraRoomsTax + r.inRoomDining
+
+/**
+ * Plates issued beyond what a function was catered for (migration 0035), once the Utensil
+ * Manager has closed his log. Kept apart from `lodgeExtras` only because it is a different
+ * person's log; it lands in exactly the same place.
+ */
+const utensilExtras = (r: PayableRow) => r.extraPlates
 
 /**
  * The payable arithmetic for a set of events, before discounts.
@@ -186,6 +201,10 @@ async function payableRows(
                       FROM extra_room_lines el WHERE el.event_id = e.id), 0)::bigint AS "extraRoomsTax",
            COALESCE((SELECT x.in_room_dining_paise FROM lodge_extras x
                       WHERE x.event_id = e.id AND x.closed_at IS NOT NULL), 0)::bigint AS "inRoomDining",
+           -- Plates issued on the day (migration 0035), on the same side of the split again.
+           COALESCE((SELECT sum(p.amount_paise) FROM extra_plate_entries p
+                      JOIN utensil_extras x ON x.event_id = p.event_id AND x.closed_at IS NOT NULL
+                     WHERE p.event_id = e.id), 0)::bigint AS "extraPlates",
            COALESCE((SELECT sum(CASE WHEN p.kind = 'refund' THEN -p.amount_paise ELSE p.amount_paise END)
                       FROM payments p WHERE p.event_id = e.id), 0)::bigint AS paid
     FROM events e
@@ -204,6 +223,7 @@ async function payableRows(
     extraRooms: Number(r.extraRooms),
     extraRoomsTax: Number(r.extraRoomsTax),
     inRoomDining: Number(r.inRoomDining),
+    extraPlates: Number(r.extraPlates),
     paid: Number(r.paid),
     firstDate: (r.firstDate as string) ?? null,
     isWedding: Boolean(r.isWedding),
@@ -230,7 +250,7 @@ export async function payableBreakdown(
   if (!row) throw new Error(`payableBreakdown: event ${eventId} not found`)
   const discountPaise = await effectiveDiscountPaise(eventId, exec)
   const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
-  const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row)
+  const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row) + utensilExtras(row)
   return {
     proposalPaise: row.venue + row.food + row.addons,
     roomsPaise: row.rooms,
@@ -240,6 +260,7 @@ export async function payableBreakdown(
     extraRoomsPaise: row.extraRooms,
     extraRoomsTaxPaise: row.extraRoomsTax,
     inRoomDiningPaise: row.inRoomDining,
+    extraPlatesPaise: row.extraPlates,
     preEventPayablePaise,
     payablePaise,
     paidPaise: row.paid,
@@ -283,7 +304,7 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
   if (!row) throw new Error(`paymentSchedule: event ${eventId} not found`)
   const discountPaise = await effectiveDiscountPaise(eventId)
   const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
-  const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row)
+  const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row) + utensilExtras(row)
   const paid = row.paid
   const today = asOf ?? new Date().toLocaleDateString('en-CA')
 
@@ -336,6 +357,7 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
     extraRoomsPaise: row.extraRooms,
     extraRoomsTaxPaise: row.extraRoomsTax,
     inRoomDiningPaise: row.inRoomDining,
+    extraPlatesPaise: row.extraPlates,
     preEventPayablePaise,
     payablePaise,
     paidPaise: paid,

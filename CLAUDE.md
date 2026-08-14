@@ -1,7 +1,7 @@
 # Hotel Dipali Banquet Management System
 
-Multi-property banquet/event management web app. Seven roles (the Chef was added
-19 Jul 2026), clash-proof venue calendar, menu snapshots, GM approvals,
+Multi-property banquet/event management web app. Eight roles (the Chef was added
+19 Jul 2026, the Utensil Manager 15 Aug 2026), clash-proof venue calendar, menu snapshots, GM approvals,
 consolidated GST billing, append-only audit trail. This file is the source of
 truth for conventions; read the docs below before implementing any feature.
 
@@ -229,6 +229,26 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    Nights, not dates, is deliberate: this records what was handed over, so it reaches no
    availability check, no rooms board and no lodging calendar. The hard inventory cap (rule 9)
    governs the booking; this governs the bill.
+15. **Extra plates are the Utensil Manager's, and no entry exists without a photograph**
+   (client, 15 Aug 2026; migration 0035, `lib/utensils.ts`). On the day, more guests arrive
+   than a function was catered for and the kitchen issues extra plates. He logs how many,
+   against which **function**, with a remark and a picture of them.
+   **The photo is mandatory and `file_key` is NOT NULL** — not "saved and flagged". This is the
+   one charge in the system with no booking, no rate card and no guest signature behind it,
+   only a number somebody counted at the pass, so the evidence *is* the entry. It is encrypted
+   at rest (rule 7) and served behind `utensils:view`, which by default means the Auditor and
+   the Higher Authority: the people who can question the charge are exactly the people who can
+   see the picture. Deleting an entry deletes its photo.
+   **A function, not just a booking**, because the price is that function's own per-plate rate:
+   `base_rate_paise + surcharge_paise + priced chef delicacies`, composed exactly as
+   `computeBillLines` composes a catered plate's, so an extra plate and a booked one at the same
+   function cost the same to the paisa. Snapshotted at entry (rule 4), with no live fallback. A
+   function with **no saved menu has no rate and is refused**, never priced at zero.
+   **The close is his own** and works like Maintenance's (FR-5.2/5.3): nothing is charged until
+   he presses it, a non-blocking lock-checklist item, green when there is nothing to close.
+   Plates are food — **18%, shown and collected from nobody** (rule 11) — and they sit with
+   maintenance and the lodge extras on the far side of rule 12's split: settlement and balance
+   only, never the 25%, the 50% or the 10% cap.
 
 ## UI conventions
 - Use the ui-ux-pro-max skill for design decisions and the Magic MCP (`/ui`)

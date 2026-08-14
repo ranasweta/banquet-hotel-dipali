@@ -83,6 +83,8 @@ export type Ledger = {
   maintenancePaise: number
   /** The Lodge Manager's closed extras: extra rooms, the 5% on them, and in-room dining. */
   lodgeExtrasPaise: number
+  /** The Utensil Manager's closed plates, priced at each function's own per-plate rate. */
+  extraPlatesPaise: number
   /**
    * Everything actually collectable: proposal + rooms + the 5% + maintenance + the lodge
    * extras, less discounts.
@@ -136,6 +138,7 @@ export async function getLedger(eventId: string): Promise<Ledger> {
     maintenancePaise: schedule.maintenancePaise,
     lodgeExtrasPaise:
       schedule.extraRoomsPaise + schedule.extraRoomsTaxPaise + schedule.inRoomDiningPaise,
+    extraPlatesPaise: schedule.extraPlatesPaise,
     discountPaise: schedule.discountPaise,
     payablePaise: schedule.payablePaise,
     shownGstPaise,

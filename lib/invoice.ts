@@ -203,6 +203,22 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     push('rooms', label, qty, Number(rm.ratePaise), qty * Number(rm.ratePaise))
   }
 
+  // Plates issued beyond the pax a function was catered for (migration 0035) — closed entries
+  // only, as maintenance. A `food` line at the function's own snapshotted per-plate rate, so an
+  // extra plate and a booked one at the same function cost the same to the paisa.
+  const plates = (await exec.execute(sql`
+    SELECT se.name AS "functionName", p.plates::int AS plates,
+           p.rate_paise AS "ratePaise", p.amount_paise AS "amountPaise"
+    FROM extra_plate_entries p
+    JOIN sub_events se ON se.id = p.sub_event_id
+    JOIN utensil_extras x ON x.event_id = p.event_id AND x.closed_at IS NOT NULL
+    WHERE p.event_id = ${eventId}
+    ORDER BY se.event_date, se.start_time, p.created_at
+  `)) as unknown as { functionName: string; plates: number; ratePaise: number; amountPaise: number }[]
+  for (const pl of plates) {
+    push('food', `Extra plates × ${pl.plates}`, pl.plates, Number(pl.ratePaise), Number(pl.amountPaise), pl.functionName)
+  }
+
   // Extra rooms the Lodge Manager handed out during the event (migration 0034) — closed lines
   // only, exactly as maintenance is charged. They are `rooms` lines because that is what they
   // are: the guest slept in them and the 5% on them is money the hotel collects. What keeps

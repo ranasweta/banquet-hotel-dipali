@@ -148,15 +148,18 @@ d('seed', () => {
     // cards reference them (lib/event-types.ts).
     expect(await count('event_types')).toBe(6)
     expect(await count('menu_tiers')).toBe(8)
-    // 13 modules: `lodging_calendar` split out of `rooms` (20 Jul 2026), then `venue_master`
+    // 14 modules: `lodging_calendar` split out of `rooms` (20 Jul 2026), then `venue_master`
     // (12 Aug 2026) and `lodge_master` (13 Aug 2026) so the Auditor keeps the price lists
-    // himself — venues and bundles in one, room categories and nightly rates in the other.
-    expect(await count('modules')).toBe(13)
-    expect(await count('roles')).toBe(7) // + chef, who alone prices a delicacy request
+    // himself — venues and bundles in one, room categories and nightly rates in the other —
+    // and `utensils` (15 Aug 2026) for the plate log, whose photos the Authority and Auditor
+    // read and the Maintenance team has no business in.
+    expect(await count('modules')).toBe(14)
+    // + chef, who alone prices a delicacy request, and the utensil manager (15 Aug 2026).
+    expect(await count('roles')).toBe(8)
     expect(await count('lodging_units')).toBe(3)
   })
 
-  it('provisions 16 users — the PRD\'s 14 plus the Auditor and the Chef', async () => {
+  it('provisions 17 users — the PRD\'s 14 plus the Auditor, the Chef and the Utensil Manager', async () => {
     const rows = await sql<{ name: string; n: number }[]>`
       SELECT r.name, count(*)::int AS n
       FROM users u JOIN roles r ON r.id = u.role_id
@@ -169,6 +172,7 @@ d('seed', () => {
       higher_authority: 2,
       lodge_manager: 3,
       maintenance: 1,
+      utensil_manager: 1, // added 15 Aug 2026 — logs plates issued on the day
     })
   })
 

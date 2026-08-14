@@ -161,7 +161,8 @@ export type ProposalDocument = {
   discounts: DiscountRow[]
   /**
    * Everything billed on actuals: the Lodge Manager's closed extras (extra rooms, in-room
-   * dining), closed maintenance and the Auditor's adjustments. Empty until they exist.
+   * dining), the Utensil Manager's closed plates, closed maintenance and the Auditor's
+   * adjustments. Empty until they exist.
    */
   extras: ProposalAddon[]
   payments: ProposalPayment[]
@@ -468,6 +469,19 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     0,
   )
 
+  // Plates issued on the day (migration 0035) — closed only, and food like any other plate:
+  // 18%, shown and collected from nobody.
+  const plates = (await db.execute(sql`
+    SELECT 'Extra plates — ' || se.name AS description, p.plates::int AS qty,
+           p.rate_paise AS "ratePaise", p.amount_paise AS "amountPaise",
+           ${STANDARD_GST_BP}::int AS "gstRateBp"
+    FROM extra_plate_entries p
+    JOIN sub_events se ON se.id = p.sub_event_id
+    JOIN utensil_extras x ON x.event_id = p.event_id AND x.closed_at IS NOT NULL
+    WHERE p.event_id = ${eventId}
+    ORDER BY se.event_date, se.start_time, p.created_at
+  `)) as unknown as Row[]
+
   const dining = (await db.execute(sql`
     SELECT 'In-room dining' AS description, 1 AS qty,
            in_room_dining_paise AS "ratePaise", in_room_dining_paise AS "amountPaise",
@@ -493,7 +507,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   `)) as unknown as Row[]
   // `extraRows` are the ones whose tax is SHOWN; the extra rooms are taxed above because theirs
   // is collected. Both kinds print in the same Extras block.
-  const extraRows = [...dining, ...maint, ...adjust]
+  const extraRows = [...plates, ...dining, ...maint, ...adjust]
   const extras: ProposalAddon[] = [...extraRoomRows, ...extraRows].map((m) => ({
     description: m.description as string,
     qty: num(m.qty),

@@ -474,6 +474,51 @@ export async function getMaintenanceDashboard(asOf: string = todayLocal()): Prom
   }
 }
 
+// ── Utensils ─────────────────────────────────────────────────────────────────
+
+export type UtensilEventRow = {
+  id: string
+  code: string
+  guestName: string
+  status: string
+  firstDate: string | null
+  entryCount: number
+  plates: number
+  totalPaise: number
+  closed: boolean
+}
+
+export type UtensilDashboard = { asOf: string; events: UtensilEventRow[] }
+
+/**
+ * The Utensil Manager's board (client, 15 Aug 2026): every event he may log plates against —
+ * In Progress / Completed, the same window Maintenance works in — with the plate count, what
+ * it comes to, and whether he has closed the log. Nothing on an open log is charged yet.
+ */
+export async function getUtensilDashboard(asOf: string = todayLocal()): Promise<UtensilDashboard> {
+  const events = (await db.execute(sql`
+    SELECT e.id, e.code, e.guest_name AS "guestName", e.status::text AS status,
+           (SELECT min(se.event_date)::text FROM sub_events se WHERE se.event_id = e.id) AS "firstDate",
+           (SELECT count(*)::int FROM extra_plate_entries p WHERE p.event_id = e.id) AS "entryCount",
+           COALESCE((SELECT sum(p.plates) FROM extra_plate_entries p WHERE p.event_id = e.id), 0) AS plates,
+           COALESCE((SELECT sum(p.amount_paise) FROM extra_plate_entries p WHERE p.event_id = e.id), 0) AS "totalPaise",
+           EXISTS (SELECT 1 FROM utensil_extras x WHERE x.event_id = e.id AND x.closed_at IS NOT NULL) AS closed
+    FROM events e
+    WHERE e.status IN ('in_progress','completed')
+    ORDER BY (e.status = 'in_progress') DESC, "firstDate" NULLS LAST, e.code
+  `)) as unknown as UtensilEventRow[]
+  return {
+    asOf,
+    events: events.map((e) => ({
+      ...e,
+      entryCount: Number(e.entryCount),
+      plates: Number(e.plates),
+      totalPaise: Number(e.totalPaise),
+      closed: Boolean(e.closed),
+    })),
+  }
+}
+
 // ── Role dispatch ────────────────────────────────────────────────────────────
 
 // ── Chef ─────────────────────────────────────────────────────────────────────
@@ -657,10 +702,11 @@ export type RoleDashboard =
   | ({ kind: 'chef' } & ChefDashboard)
   | ({ kind: 'authority' } & AuthorityDashboard)
   | ({ kind: 'auditor' } & AuditorDashboard)
+  | ({ kind: 'utensils' } & UtensilDashboard)
 
 /**
  * The board for a role — every role has its own. The fallback is the Booking board, but it is
- * only reached by a role that doesn't exist yet: all seven are matched explicitly, deliberately,
+ * only reached by a role that doesn't exist yet: all eight are matched explicitly, deliberately,
  * so a new role can never silently inherit a board full of data it cannot act on.
  */
 export async function getDashboardForRole(
@@ -679,6 +725,8 @@ export async function getDashboardForRole(
       return { kind: 'maintenance', ...(await getMaintenanceDashboard(asOf)) }
     case 'chef':
       return { kind: 'chef', ...(await getChefDashboard(asOf)) }
+    case 'utensil_manager':
+      return { kind: 'utensils', ...(await getUtensilDashboard(asOf)) }
     case 'higher_authority':
       return { kind: 'authority', ...(await getAuthorityDashboard(asOf)) }
     case 'auditor':

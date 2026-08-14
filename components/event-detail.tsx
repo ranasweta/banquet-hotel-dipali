@@ -16,6 +16,7 @@ import { EventRooms } from '@/components/event-rooms'
 import { EventBilling } from '@/components/event-billing'
 import { EventMaintenance } from '@/components/event-maintenance'
 import { EventLodgeExtras } from '@/components/event-lodge-extras'
+import { EventExtraPlates } from '@/components/event-extra-plates'
 import { RequestChange } from '@/components/request-change'
 import { CancelBooking } from '@/components/cancel-booking'
 import { EventLockInvoice } from '@/components/event-lock-invoice'
@@ -64,6 +65,8 @@ export function EventDetailView({
   canEditBilling,
   canViewMaintenance,
   canEditMaintenance,
+  canViewUtensils,
+  canEditUtensils,
   canEditBookings,
   canViewAudit,
   role,
@@ -78,6 +81,8 @@ export function EventDetailView({
   canEditBilling: boolean
   canViewMaintenance: boolean
   canEditMaintenance: boolean
+  canViewUtensils: boolean
+  canEditUtensils: boolean
   canEditBookings: boolean
   canViewAudit: boolean
   role: string
@@ -341,6 +346,20 @@ export function EventDetailView({
             <EventLodgeExtras
               eventId={event.id}
               editable={canEditRooms && ['in_progress', 'completed'].includes(event.status)}
+            />
+          </div>
+        </>
+      )}
+
+      {/* Plates issued on the day (15 Aug 2026). Same window as maintenance and lodge extras. */}
+      {canViewUtensils && ['in_progress', 'completed', 'locked', 'billed', 'closed'].includes(event.status) && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Extra plates</h2>
+            <EventExtraPlates
+              eventId={event.id}
+              editable={canEditUtensils && ['in_progress', 'completed'].includes(event.status)}
             />
           </div>
         </>

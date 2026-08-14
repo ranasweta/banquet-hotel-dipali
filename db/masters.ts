@@ -275,6 +275,11 @@ export const MODULES = [
   // permission could show the calendar without also showing the room-by-room board.
   'lodging_calendar',
   'maintenance',
+  // Extra plates issued on the day (client, 15 Aug 2026): the Utensil Manager's log, priced
+  // off the function's own menu rate. Its own module rather than a corner of `maintenance`,
+  // because the photo behind each entry is evidence the Auditor and Authority read and the
+  // Maintenance team has no business in.
+  'utensils',
   'approvals',
   'billing',
   'roles_users',
@@ -292,6 +297,10 @@ export const ROLES = [
   // Added 19 Jul 2026 (client): prices "chef delicacy" special requests — a guest asking for
   // something off-menu (sushi, say). The Chef sets the per-plate charge; nobody else can.
   'chef',
+  // Added 15 Aug 2026 (client): logs plates issued beyond the pax a function was catered for,
+  // each against a photo of them. He closes his own log, as Maintenance does, and until he
+  // does none of it is charged.
+  'utensil_manager',
 ] as const
 export type RoleName = (typeof ROLES)[number]
 
@@ -316,36 +325,41 @@ const MATRIX: Record<ModuleCode, Record<RoleName, Grant>> = {
   // `billing` stays (no tab, but it carries their lock sign-off). Departs from PRD §2.1,
   // which gives them bookings/calendar/approvals — recorded in SEED_ASSUMPTIONS §F6.
   // Higher Authority can now create & continue proposals as well (tester, 23 Jul 2026): view → edit.
-  bookings:    { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  bookings:    { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none', utensil_manager: 'none' },
   // Client, 21-22 Jul 2026: the Banquet Manager approves nothing and, as of 22 Jul, his
   // whole screen is the 15-day board — Dashboard and Next 15 days, nothing else. `calendar`
   // stays at view because the board reads it; every other read grant is revoked below so the
   // pages actually bounce him, not just hide from the sidebar. `billing` stays for his lock
   // sign-off (no tab). Venue/date/time moves are the Authority's, hence calendar edit there.
-  calendar:    { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
+  calendar:    { booking_manager: 'view', banquet_manager: 'view', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view', utensil_manager: 'none' },
   // The Chef reads menus to price a delicacy request, but never edits a guest's menu.
-  menus:       { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
-  menu_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view' },
-  venue_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
-  lodge_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
-  rooms:       { booking_manager: 'view', banquet_manager: 'none', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  menus:       { booking_manager: 'edit', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view', utensil_manager: 'none' },
+  menu_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'view', utensil_manager: 'none' },
+  venue_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none', utensil_manager: 'none' },
+  lodge_master: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none', utensil_manager: 'none' },
+  rooms:       { booking_manager: 'view', banquet_manager: 'none', lodge_manager: 'edit', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none', utensil_manager: 'none' },
   // Lodge Managers only by default. The Auditor keeps `full` because that role IS the
   // permission utility — it grants and revokes for everyone, so locking it out of a module
   // would make the module ungovernable. Anyone else can be granted this from /admin/roles.
-  lodging_calendar: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'view', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none' },
-  maintenance: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  lodging_calendar: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'view', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none', utensil_manager: 'none' },
+  maintenance: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'edit', higher_authority: 'view', auditor: 'full', chef: 'none', utensil_manager: 'none' },
+  // Extra plates (client, 15 Aug 2026). The Utensil Manager logs and closes his own; the
+  // Higher Authority and the Auditor get `view` because the point of the photo on every entry
+  // is that THEY can check it — a charge nobody with authority can inspect is the fraud the
+  // photo exists to stop. View, not edit: seeing the evidence is not the same as writing it.
+  utensils:    { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none', utensil_manager: 'edit' },
   // Approvals is a deciders-only screen now (tester, 23 Jul 2026): only the Higher Authority
   // and the Auditor get it. The Booking and Lodge Managers still raise exceptions through their
   // own flows and hear the outcome via notifications and the event's audit trail — but they no
   // longer see the approvals queue itself.
-  approvals:   { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  approvals:   { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'edit', auditor: 'full', chef: 'none', utensil_manager: 'none' },
   // Booking Manager gains billing edit (client, 25 Jul 2026): he gives per-head discounts on
   // the Payment review; over the 10% cap routes to the Higher Authority.
-  billing:     { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none' },
+  billing:     { booking_manager: 'edit', banquet_manager: 'edit', lodge_manager: 'edit', maintenance: 'edit', higher_authority: 'edit', auditor: 'full', chef: 'none', utensil_manager: 'none' },
   // Roles & Permissions (and the Users screen it shares) is the Auditor's alone (tester,
   // 23 Jul 2026); the Higher Authority no longer sees it.
-  roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none' },
-  audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none' },
+  roles_users: { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'none', auditor: 'full', chef: 'none', utensil_manager: 'none' },
+  audit:       { booking_manager: 'none', banquet_manager: 'none', lodge_manager: 'none', maintenance: 'none', higher_authority: 'view', auditor: 'full', chef: 'none', utensil_manager: 'none' },
 }
 
 const GRANT_ACTIONS: Record<Grant, string[]> = {
@@ -396,6 +410,14 @@ export const USERS: UserSeed[] = [
   { fullName: 'Banquet Manager — Residency', loginId: 'Banq.Ground03', mobile: '9000000014', role: 'banquet_manager' },
   { fullName: 'Maintenance Lead', loginId: 'Banq.MaintM', mobile: '9000000015', role: 'maintenance' },
   { fullName: 'Head Chef', loginId: 'Banq.Chef', mobile: '9000000016', role: 'chef' },
+  // Client, 15 Aug 2026: "create new user UT ... a utensil manager". Logs plates issued beyond
+  // what a function was catered for, each against a photo. Starter password only — the Auditor
+  // resets it from /admin/users, and a re-seed never touches a changed password (see db/seed.ts).
+  //
+  // `Banq.UT`, not the bare "UT" asked for: `users_login_id_format` (migration 0027) requires
+  // 3-32 characters, and the prefix is the house pattern the other single-post staff follow
+  // (Banq.MaintM, Banq.Chef). Renameable from /admin/users if the hotel wants something else.
+  { fullName: 'Utensil Manager', loginId: 'Banq.UT', mobile: '9000000017', role: 'utensil_manager' },
 ]
 
 export const SETTINGS: { key: string; value: string }[] = [

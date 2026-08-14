@@ -8,6 +8,7 @@ import { MaintenanceDashboard } from '@/components/dashboard-maintenance'
 import { ChefDashboard } from '@/components/dashboard-chef'
 import { AuthorityDashboard } from '@/components/dashboard-authority'
 import { AuditorDashboard } from '@/components/dashboard-auditor'
+import { UtensilDashboard } from '@/components/dashboard-utensils'
 
 export default async function DashboardPage() {
   // Next renders the layout and this page in parallel, so the page cannot rely on the
@@ -37,6 +38,8 @@ export default async function DashboardPage() {
       return <AuthorityDashboard data={board} user={u} />
     case 'auditor':
       return <AuditorDashboard data={board} user={u} />
+    case 'utensils':
+      return <UtensilDashboard data={board} user={u} />
     default:
       return <DashboardHome data={board} user={u} canAdmin={canAdmin} />
   }
