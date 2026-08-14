@@ -59,6 +59,27 @@ CLAUDE.md rule 14.
 - **Deploy note:** run `pnpm migrate` against the target DB before deploying — the bill, the
   payable and the proposal all query the two new tables, so every money read errors without them.
 
+### An eighth role: the Utensil Manager (client, 15 Aug 2026)
+PRD §2 provisions six designations and 14 users. The Chef made seven (19 Jul 2026); the
+**Utensil Manager** makes eight. He logs plates issued beyond what a function was catered for —
+work the PRD gives to nobody, and which was being counted at the pass and argued about at
+billing.
+
+Migration **0035** adds the role, the `utensils` module, the grants and the user, so an
+already-seeded database gains all four without a re-seed (a plain `pnpm seed` would re-upsert
+every master and undo the Auditor's own edits to venue and lodge rates). `db/masters.ts` carries
+the same four so a fresh seed matches. Reasoning in §F28 and CLAUDE.md rule 15.
+
+- **Login `Banq.UT`, not the `UT` asked for.** `users_login_id_format` (migration 0027) requires
+  3–32 characters. The prefix follows the other single-post staff (`Banq.MaintM`, `Banq.Chef`).
+  Renameable from /admin/users.
+- **Starter password `utensil123`**, at the client's request ("keep any easy password our auditor
+  will update it afterwards"). It is a bcrypt hash in the migration, and the `ON CONFLICT` there
+  deliberately leaves `password_hash` alone so re-running never resets a changed password. **It
+  should be changed on first use** — it is in a committed migration and therefore public to
+  anyone with the repository.
+- **Deploy note:** run `pnpm migrate` against the target DB before deploying, as above.
+
 ---
 
 ## A. Invented data (placeholders)
@@ -1316,6 +1337,45 @@ Adding rooms to it in September would raise a threshold that fell due in June an
 milestone retrospectively short — the failure rule 12 already describes for maintenance. These
 sit beside maintenance instead: in the settlement and the balance, in neither threshold, and in
 neither the 10% discount cap.
+
+### F28. Extra plates, and the photograph that makes them checkable
+Client, 15 Aug 2026. Migration 0035, `lib/utensils.ts`, CLAUDE.md rule 15.
+
+**Nothing is seeded and no price is invented.** The rate is the function's own snapshotted
+per-plate price, so this feature introduces no new number into the system — only a count of
+plates and a picture of them.
+
+**Why the photo is a NOT NULL column rather than a flag.** The client's own reason: *"as this is
+something where people can fraud"*. Every other charge in the system is anchored to something
+outside the person entering it — a rate card, a booked menu, a signed proposal, a lodge's
+inventory. This one is anchored to a number somebody counted at the pass. A photo that is
+optional-and-flagged still lets an unevidenced charge reach the bill and relies on somebody
+noticing the flag; a mandatory one means the class of "plate charge nobody can check" does not
+exist. It is served only to `utensils:view` — the Auditor and the Higher Authority by default —
+because evidence nobody in authority can open is not evidence.
+
+**Camera or gallery, both.** The panel offers a Camera button (`capture="environment"`, which
+opens the rear camera directly on a phone) and a Gallery button beside it. The client asked for
+live capture; the gallery is there because a desktop browser has no camera to open and because a
+photo already taken on the night is the same evidence. Note that `capture` is a *hint* — the
+browser decides — so this cannot and does not claim the image was taken at that moment. If the
+hotel needs that guarantee, it is a different feature (server-side capture timestamp, EXIF
+checks) and should be asked for explicitly.
+
+**A function, not just a booking.** The client said "that event that menu prices × extra plates".
+An event does not have one menu price: a wedding's Sangeet is Silver where its Reception is Gold.
+So an entry names the function, and the rate is composed exactly as the bill composes a catered
+plate's — `base_rate_paise + surcharge_paise + priced chef delicacies` — which means an extra
+plate and a booked plate at the same function agree to the paisa. Confirmed with the client
+before building.
+
+**Tax: 18%, shown, collected from nobody** (rule 11), like any other food line. The same standing
+CA question applies here as to the bar (§F24) and in-room dining (§F27) — the money is right by
+construction because that 18% is collected from no one, but the label is the hotel's to confirm.
+
+**A function with no saved menu is refused, not zeroed** — the standing rule. Such a function is
+still *listed* in the panel, marked unpriced, so the screen explains the refusal rather than
+hiding the option.
 
 ---
 

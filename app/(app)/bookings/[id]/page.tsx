@@ -36,6 +36,8 @@ export default async function BookingDetailPage({
         canEditBilling={can('billing', 'create_edit')}
         canViewMaintenance={can('maintenance', 'view')}
         canEditMaintenance={can('maintenance', 'create_edit')}
+        canViewUtensils={can('utensils', 'view')}
+        canEditUtensils={can('utensils', 'create_edit')}
         canEditBookings={can('bookings', 'create_edit')}
         canViewAudit={can('audit', 'view')}
         role={user.roleName}

@@ -46,6 +46,9 @@ export async function lockChecklist(
       (EXISTS (SELECT 1 FROM additional_rooms WHERE event_id = e.id)
         OR EXISTS (SELECT 1 FROM lodge_extras WHERE event_id = e.id AND in_room_dining_paise > 0)) AS "hasExtras",
       EXISTS (SELECT 1 FROM lodge_extras WHERE event_id = e.id AND closed_at IS NOT NULL) AS "extrasClosed",
+      -- The Utensil Manager's plate log (migration 0035), read the same two ways.
+      EXISTS (SELECT 1 FROM extra_plate_entries WHERE event_id = e.id) AS "hasPlates",
+      EXISTS (SELECT 1 FROM utensil_extras WHERE event_id = e.id AND closed_at IS NOT NULL) AS "platesClosed",
       EXISTS (SELECT 1 FROM room_requirements WHERE event_id = e.id) AS "hasRooms",
       -- Extras the guest has taken that no submit button has sent on. Not auto-sent here:
       -- pressing submit is the manager's call (21 Jul 2026).
@@ -69,7 +72,8 @@ export async function lockChecklist(
     FROM events e WHERE e.id = ${eventId}
   `)) as unknown as {
     status: string; subCount: number; menuComplete: number; pendingExc: number; pendingCr: number
-    banquet: boolean; lodge: boolean; maint: boolean; hasExtras: boolean; extrasClosed: boolean; hasRooms: boolean
+    banquet: boolean; lodge: boolean; maint: boolean; hasExtras: boolean; extrasClosed: boolean
+    hasPlates: boolean; platesClosed: boolean; hasRooms: boolean
     unsubmittedExtras: number; paid: number
   }[]
   if (!row) throw notFound('Event not found')
@@ -98,6 +102,12 @@ export async function lockChecklist(
       key: 'lodge_extras',
       label: 'Lodge extras closed',
       done: !row.hasExtras || row.extrasClosed,
+      blocking: false,
+    },
+    {
+      key: 'utensils',
+      label: 'Extra plates closed',
+      done: !row.hasPlates || row.platesClosed,
       blocking: false,
     },
     { key: 'payments', label: 'Advance / payments recorded', done: Number(row.paid) > 0, blocking: true },

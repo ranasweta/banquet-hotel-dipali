@@ -254,6 +254,29 @@ the 10% discount cap — they are in the settlement and the balance only (CLAUDE
 printed and collected from nobody (rule 11). So the bill carries them as `rooms` and `food`
 lines respectively and `lib/tax.ts` needs no new section.
 
+## Extra plates (module: utensils)
+Added 15 Aug 2026 — the Utensil Manager's log. Utensil Manager `edit`, Higher Authority and
+Auditor `view`, everyone else nothing. Same lifecycle as maintenance and the lodge extras:
+logged while **In Progress / Completed**, charged only once **closed**, and outside the 25%
+advance, the wedding 50% and the 10% discount cap.
+
+- `GET  /utensils/events` — the work queue, mirroring `/maintenance/events`.
+- `GET  /events/:id/extra-plates` — `{ closed, entries[], totalPaise, functions[] }`.
+  `functions` carries each function's per-plate rate, `ratePaise: null` where no menu is saved,
+  so the screen can say why plates cannot be charged there rather than silently omitting it.
+- `POST /events/:id/extra-plates` — **multipart**, fields `sub_event_id`, `plates`, `remarks?`
+  and **`photo` (required)**. Images only (JPEG/PNG/WebP/HEIC, ≤ 8 MB); a request without one is
+  a 400. Priced at the function's own `base + surcharge + priced chef delicacies` and
+  snapshotted; a function with no saved menu is refused (400), never priced at zero.
+- `DELETE /extra-plates/:id` — remove an entry before the close. Its photo is deleted with it.
+- `GET  /extra-plates/:id/photo` — the decrypted image, `utensils:view`, `no-store`.
+- `POST /events/:id/extra-plates/close` — freeze the log and put it on the bill. A
+  lock-checklist item (`utensils`), non-blocking and green when there is nothing to close.
+
+**Why a function and not just the booking:** a wedding's Sangeet is Silver where its Reception
+is Gold, so "the event's menu price" is not one number. **Tax:** plates are food — 18%, shown
+and collected from nobody.
+
 ## Discounts & payments (module: billing — booking_manager has none; the advance is
 ## recorded on the bookings/confirm path instead)
 - `GET|POST /events/:id/discounts` — head menu/venue/room/overall. POST takes `amount_paise`

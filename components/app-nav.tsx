@@ -49,6 +49,9 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   // hold `rooms: view` and so get the row read-only, which is the right amount of access.
   { href: '/rooms/extras', label: 'Lodge extras', module: 'rooms', icon: BedDouble },
   { href: '/maintenance', label: 'Maintenance', module: 'maintenance', icon: Wrench },
+  // Extra plates (15 Aug 2026). The Utensil Manager logs here; the Authority and the Auditor
+  // get the row read-only, which is how they reach the photo behind each charge.
+  { href: '/extra-plates', label: 'Extra plates', module: 'utensils', icon: UtensilsCrossed },
   { href: '/chef', label: 'Chef requests', module: 'menus', icon: ChefHat },
   { href: '/approvals', label: 'Approvals', module: 'approvals', icon: BadgeCheck },
   { href: '/approvals/history', label: 'Approvals history', module: 'approvals', icon: History },
