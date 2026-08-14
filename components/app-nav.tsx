@@ -44,6 +44,10 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   // Rooms stays off the sidebar: it is reached from the dashboard tile that already points
   // at it, so it doesn't need a nav row of its own.
   { href: '/rooms/calendar', label: 'Lodging calendar', module: 'lodging_calendar', icon: BedDouble },
+  // Extra rooms and in-room dining (15 Aug 2026). On `rooms` rather than `lodging_calendar`
+  // because that is the grant the Lodge Manager logs under; Booking Managers and the Authority
+  // hold `rooms: view` and so get the row read-only, which is the right amount of access.
+  { href: '/rooms/extras', label: 'Lodge extras', module: 'rooms', icon: BedDouble },
   { href: '/maintenance', label: 'Maintenance', module: 'maintenance', icon: Wrench },
   { href: '/chef', label: 'Chef requests', module: 'menus', icon: ChefHat },
   { href: '/approvals', label: 'Approvals', module: 'approvals', icon: BadgeCheck },

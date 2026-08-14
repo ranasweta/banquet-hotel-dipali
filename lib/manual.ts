@@ -318,6 +318,26 @@ const LODGE_MANAGER: RoleGuide = {
       ],
     },
     {
+      heading: 'Extras you give out on the day',
+      where: 'Lodge extras',
+      steps: [
+        {
+          title: 'Rooms beyond the booking',
+          body: 'A party arrives bigger than it was booked and you find them rooms. Log the lodge, the category, how many and how many nights. The rate comes from the lodge master — you never type a price.',
+          note: 'Do not add these to the booking’s own rooms. Those were priced and part-paid months ago; adding to them would move what the guest already owed.',
+        },
+        {
+          title: 'In-room dining',
+          body: 'One total in rupees for the whole stay. Saving replaces the last figure rather than adding to it, so put in the running total, not each order.',
+        },
+        {
+          title: 'Nothing is charged until you close',
+          body: 'While the log is open the guest is not being billed for any of it. Press Close lodge extras when the stay is over and the figures are final — that is what puts them on the bill.',
+          note: 'After closing, the lines are frozen and neither you nor anyone else can change them — ask the Auditor if a figure turns out to be wrong.',
+        },
+      ],
+    },
+    {
       heading: 'Closing an event',
       steps: [
         {

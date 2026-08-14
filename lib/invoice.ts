@@ -203,6 +203,33 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     push('rooms', label, qty, Number(rm.ratePaise), qty * Number(rm.ratePaise))
   }
 
+  // Extra rooms the Lodge Manager handed out during the event (migration 0034) — closed lines
+  // only, exactly as maintenance is charged. They are `rooms` lines because that is what they
+  // are: the guest slept in them and the 5% on them is money the hotel collects. What keeps
+  // them apart from the booking is the description and the fact that they are OUTSIDE the
+  // pre-event base — see lib/payment-schedule.ts.
+  const extraRooms = (await exec.execute(sql`
+    SELECT u.name AS "unitName", a.room_type AS "roomType", a.count::int AS count,
+           a.nights::int AS nights, a.rate_paise AS "ratePaise", a.amount_paise AS "amountPaise"
+    FROM additional_rooms a
+    LEFT JOIN lodging_units u ON u.id = a.unit_id
+    JOIN lodge_extras x ON x.event_id = a.event_id AND x.closed_at IS NOT NULL
+    WHERE a.event_id = ${eventId}
+    ORDER BY u.name, a.room_type, a.created_at
+  `)) as unknown as { unitName: string | null; roomType: string; count: number; nights: number; ratePaise: number; amountPaise: number }[]
+  for (const rm of extraRooms) {
+    const label = `${rm.unitName ?? 'Lodging'} — extra ${rm.roomType.replace(/_/g, ' ')} × ${rm.count} room(s) × ${rm.nights} night(s)`
+    push('rooms', label, rm.count * rm.nights, Number(rm.ratePaise), Number(rm.amountPaise))
+  }
+
+  // In-room dining — one figure for the whole stay (client, 15 Aug 2026). A `food` line, so it
+  // carries the 18% that is shown and collected from nobody (rule 11).
+  const [dining] = (await exec.execute(sql`
+    SELECT in_room_dining_paise AS "amountPaise" FROM lodge_extras
+    WHERE event_id = ${eventId} AND closed_at IS NOT NULL AND in_room_dining_paise > 0
+  `)) as unknown as { amountPaise: number }[]
+  if (dining) push('food', 'In-room dining', 1, Number(dining.amountPaise), Number(dining.amountPaise))
+
   // Maintenance — closed entries only (FR-5.3).
   const maint = (await exec.execute(sql`
     SELECT item, qty, rate_paise AS "ratePaise", amount_paise AS "amountPaise"

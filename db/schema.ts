@@ -925,3 +925,70 @@ export const chefRequests = pgTable("chef_requests", {
 		}),
 	check("chef_requests_status_chk", sql`status = ANY (ARRAY['pending'::text, 'priced'::text, 'declined'::text])`),
 ]);
+
+// Rooms handed to a guest during the event beyond the booking (migration 0034). Category,
+// count and nights — not a date range: this records what was given, not what can be sold.
+export const additionalRooms = pgTable("additional_rooms", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	eventId: uuid("event_id").notNull(),
+	unitId: uuid("unit_id"),
+	roomType: text("room_type").notNull(),
+	count: integer().notNull(),
+	nights: integer().notNull(),
+	// The lodge's rate for the category, snapshotted at entry (rule 4). No live fallback —
+	// unlike room_requirements this line never had an enquiry phase to price live for.
+	ratePaise: bigint("rate_paise", { mode: "number" }).notNull(),
+	amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+	remarks: text(),
+	createdBy: uuid("created_by").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("additional_rooms_event").using("btree", table.eventId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.eventId],
+			foreignColumns: [events.id],
+			name: "additional_rooms_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.unitId],
+			foreignColumns: [lodgingUnits.id],
+			name: "additional_rooms_unit_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.createdBy],
+			foreignColumns: [users.id],
+			name: "additional_rooms_created_by_fkey"
+		}),
+	check("additional_rooms_count_check", sql`count > 0`),
+	check("additional_rooms_nights_check", sql`nights > 0`),
+	check("additional_rooms_rate_paise_check", sql`rate_paise > 0`),
+	check("additional_rooms_amount_paise_check", sql`amount_paise > 0`),
+]);
+
+// One row per event: the in-room dining total, and the close that lets both kinds of lodge
+// extra reach the bill (migration 0034). `closedAt` is the single close for the whole log.
+export const lodgeExtras = pgTable("lodge_extras", {
+	eventId: uuid("event_id").primaryKey().notNull(),
+	inRoomDiningPaise: bigint("in_room_dining_paise", { mode: "number" }).default(0).notNull(),
+	closedAt: timestamp("closed_at", { withTimezone: true, mode: 'string' }),
+	closedBy: uuid("closed_by"),
+	updatedBy: uuid("updated_by").notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.eventId],
+			foreignColumns: [events.id],
+			name: "lodge_extras_event_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.closedBy],
+			foreignColumns: [users.id],
+			name: "lodge_extras_closed_by_fkey"
+		}),
+	foreignKey({
+			columns: [table.updatedBy],
+			foreignColumns: [users.id],
+			name: "lodge_extras_updated_by_fkey"
+		}),
+	check("lodge_extras_in_room_dining_paise_check", sql`in_room_dining_paise >= 0`),
+]);

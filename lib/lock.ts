@@ -40,6 +40,12 @@ export async function lockChecklist(
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'banquet_manager') AS banquet,
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'lodge_manager') AS lodge,
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'maintenance') AS maint,
+      -- The Lodge Manager's extras (migration 0034). Two facts, because unlike maintenance this
+      -- item can be green for the right reason: hasExtras says there is money waiting on a
+      -- close, extrasClosed says it has had one.
+      (EXISTS (SELECT 1 FROM additional_rooms WHERE event_id = e.id)
+        OR EXISTS (SELECT 1 FROM lodge_extras WHERE event_id = e.id AND in_room_dining_paise > 0)) AS "hasExtras",
+      EXISTS (SELECT 1 FROM lodge_extras WHERE event_id = e.id AND closed_at IS NOT NULL) AS "extrasClosed",
       EXISTS (SELECT 1 FROM room_requirements WHERE event_id = e.id) AS "hasRooms",
       -- Extras the guest has taken that no submit button has sent on. Not auto-sent here:
       -- pressing submit is the manager's call (21 Jul 2026).
@@ -63,7 +69,7 @@ export async function lockChecklist(
     FROM events e WHERE e.id = ${eventId}
   `)) as unknown as {
     status: string; subCount: number; menuComplete: number; pendingExc: number; pendingCr: number
-    banquet: boolean; lodge: boolean; maint: boolean; hasRooms: boolean
+    banquet: boolean; lodge: boolean; maint: boolean; hasExtras: boolean; extrasClosed: boolean; hasRooms: boolean
     unsubmittedExtras: number; paid: number
   }[]
   if (!row) throw notFound('Event not found')
@@ -85,6 +91,15 @@ export async function lockChecklist(
     // the checklist so Maintenance can still close it when they do log something, but it no
     // longer blocks the lock — an event with no entries simply bills Rs 0.
     { key: 'maintenance', label: 'Maintenance closed', done: row.maint, blocking: false },
+    // Same shape and the same reason as maintenance: most bookings take no extras, and a
+    // booking must not be held from locking waiting on a close that is not owed. Green when
+    // there is nothing to close, so what the Auditor sees red is money genuinely waiting.
+    {
+      key: 'lodge_extras',
+      label: 'Lodge extras closed',
+      done: !row.hasExtras || row.extrasClosed,
+      blocking: false,
+    },
     { key: 'payments', label: 'Advance / payments recorded', done: Number(row.paid) > 0, blocking: true },
   ]
   const canLock = row.status === 'completed' && items.every((i) => !i.blocking || i.done)
