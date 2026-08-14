@@ -225,6 +225,35 @@ ARE snapshotted, and the screen says so rather than implying a protection that d
 - `GET  /rooms/calendar/:date` — that date drilled down: `{ date, inventory[], holders[] }`,
   each holder being an event, its category, its count and its state.
 
+## Lodge extras (module: rooms)
+Added 15 Aug 2026 — what the desk gave out beyond the booking. Lodge Manager `edit`, Booking
+Manager and Higher Authority `view`, Auditor `full`. Two kinds of charge, one close, and the
+same lifecycle as maintenance: logged while the event is **In Progress / Completed**, and
+charged only once the log is **closed**. Both stay out of the 25% advance, the wedding 50% and
+the 10% discount cap — they are in the settlement and the balance only (CLAUDE.md rule 12).
+
+- `GET  /lodge-extras/events` — the work queue: In Progress / Completed events with a line
+  count and a closed flag, mirroring `/maintenance/events`.
+- `GET  /events/:id/lodge-extras` — `{ closed, rooms[], roomsPaise, roomsTaxPaise,
+  inRoomDiningPaise, totalPaise, options[] }`. `options` is every priced lodge + category, sent
+  with the view because the Lodge Manager has no `bookings` permission and so cannot call
+  `/booking-options`, which is where every other room form gets its categories.
+- `POST /events/:id/lodge-extras/rooms` { unit_id, room_type, count, nights, remarks? } —
+  rooms given beyond the booking. Priced `count × nights ×` the lodge's rate for the category
+  and **snapshotted** at entry, so re-pricing the lodge master never moves it. A category the
+  lodge has no active room of is refused (400), never priced at zero. Deliberately NOT a date
+  range: this records what was handed over, so it reaches no availability check and no board.
+- `DELETE /additional-rooms/:id` — remove a line, before the close.
+- `PUT  /events/:id/lodge-extras/dining` { amount_paise } — the in-room dining total for the
+  whole stay. A PUT because it is one box overwritten as it grows: sending 4,200 twice leaves
+  4,200. The figure it replaced is in the audit log.
+- `POST /events/:id/lodge-extras/close` — freeze both kinds and let them reach the bill. A
+  lock-checklist item (`lodge_extras`), non-blocking and green when there is nothing to close.
+
+**Tax.** An extra room is a room: 5%, printed **and collected**. In-room dining is food: 18%,
+printed and collected from nobody (rule 11). So the bill carries them as `rooms` and `food`
+lines respectively and `lib/tax.ts` needs no new section.
+
 ## Discounts & payments (module: billing — booking_manager has none; the advance is
 ## recorded on the bookings/confirm path instead)
 - `GET|POST /events/:id/discounts` — head menu/venue/room/overall. POST takes `amount_paise`

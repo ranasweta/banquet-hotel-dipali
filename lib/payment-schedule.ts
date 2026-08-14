@@ -24,10 +24,17 @@ import { ROOM_GST_BP } from '@/lib/tax'
  * So there are two bases, and each milestone names the one it is owed against:
  *
  *   preEventPayablePaise   venue + food + add-ons + rooms + 5%, less discounts
- *   payablePaise           that, plus closed maintenance — the balance and the settlement
+ *   payablePaise           that, plus everything logged during and after the event — the
+ *                          balance and the settlement
  *
  * Only entries the Maintenance team has CLOSED count, matching what the bill charges: an open
  * entry is still being typed, and a balance that moves under the guest is worse than a late one.
+ *
+ * THE LODGE MANAGER'S EXTRAS JOIN IT (client, 15 Aug 2026; migration 0034). Extra rooms handed
+ * out during the event, the 5% on them, and in-room dining are logged after the fact for the
+ * same reason maintenance is, so they fall on the same side of the split. A wedding party that
+ * turns up needing four more rooms in September cannot be allowed to raise the advance that
+ * fell due in June. Closed only, again: the Lodge Manager's close is what lets them count.
  *
  * THE MILESTONES.
  *   advance          25% of the pre-event base, at confirm. Short is allowed now (see
@@ -35,7 +42,8 @@ import { ROOM_GST_BP } from '@/lib/tax'
  *                    shows on the calendar until it clears.
  *   wedding balance  50% of the pre-event base, cumulative, 30 days before the first
  *                    function. Was the whole remaining 75% until 4 Aug 2026.
- *   settlement       100% of the payable amount, maintenance included, at billing.
+ *   settlement       100% of the payable amount, maintenance and lodge extras included, at
+ *                    billing.
  * Over-payment is never refused — each milestone is a floor, not a figure.
  *
  * WHY ONE MODULE. Three places computed a balance before this and all three disagreed:
@@ -63,9 +71,18 @@ export type PayableBreakdown = {
   discountPaise: number
   /** Closed maintenance entries. Zero until the Maintenance team closes the event's log. */
   maintenancePaise: number
+  /** Extra rooms given during the event. Zero until the Lodge Manager closes the extras log. */
+  extraRoomsPaise: number
+  /** 5% on those, rounded per line. Collected, like any other room tax. */
+  extraRoomsTaxPaise: number
+  /** In-room dining, one figure for the stay. Zero until the extras log is closed. */
+  inRoomDiningPaise: number
   /** proposal + rooms + room tax − discount. The base for the 25% and the wedding 50%. */
   preEventPayablePaise: number
-  /** The pre-event base plus maintenance — what is owed in full, and what the balance measures. */
+  /**
+   * The pre-event base plus everything logged during and after the event — closed maintenance
+   * and the Lodge Manager's closed extras. What is owed in full, and what the balance measures.
+   */
   payablePaise: number
   paidPaise: number
   balancePaise: number
@@ -79,10 +96,22 @@ type PayableRow = {
   rooms: number
   roomsTax: number
   maintenance: number
+  extraRooms: number
+  extraRoomsTax: number
+  inRoomDining: number
   paid: number
   firstDate: string | null
   isWedding: boolean
 }
+
+/**
+ * The Lodge Manager's closed extras — extra rooms, the 5% on them, and in-room dining.
+ *
+ * One helper because all three land on the same side of the split: logged during and after the
+ * event, so they are in the settlement and the balance and in neither of the two thresholds
+ * that fell due before anybody arrived.
+ */
+const lodgeExtras = (r: PayableRow) => r.extraRooms + r.extraRoomsTax + r.inRoomDining
 
 /**
  * The payable arithmetic for a set of events, before discounts.
@@ -115,6 +144,15 @@ async function payableRows(
                              AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)) AS amount
       FROM room_requirements rr
       WHERE rr.event_id IN (${ids})
+    ),
+    -- Rooms handed out during the event (migration 0034). CLOSED lines only, as maintenance:
+    -- an open log is still being typed. No COALESCE — the rate is snapshotted at entry and
+    -- there is no live fallback to fall back to.
+    extra_room_lines AS (
+      SELECT a.event_id, a.amount_paise AS amount
+      FROM additional_rooms a
+      JOIN lodge_extras x ON x.event_id = a.event_id AND x.closed_at IS NOT NULL
+      WHERE a.event_id IN (${ids})
     )
     SELECT e.id AS "eventId",
            t.is_wedding AS "isWedding",
@@ -142,6 +180,12 @@ async function payableRows(
            -- still being edited by the Maintenance team.
            COALESCE((SELECT sum(me.amount_paise) FROM maintenance_entries me
                       WHERE me.event_id = e.id AND me.is_closed), 0)::bigint AS maintenance,
+           -- The Lodge Manager's extras, on the same side of the split as maintenance.
+           COALESCE((SELECT sum(el.amount) FROM extra_room_lines el WHERE el.event_id = e.id), 0)::bigint AS "extraRooms",
+           COALESCE((SELECT sum(round(el.amount::numeric * ${ROOM_GST_BP} / 10000))
+                      FROM extra_room_lines el WHERE el.event_id = e.id), 0)::bigint AS "extraRoomsTax",
+           COALESCE((SELECT x.in_room_dining_paise FROM lodge_extras x
+                      WHERE x.event_id = e.id AND x.closed_at IS NOT NULL), 0)::bigint AS "inRoomDining",
            COALESCE((SELECT sum(CASE WHEN p.kind = 'refund' THEN -p.amount_paise ELSE p.amount_paise END)
                       FROM payments p WHERE p.event_id = e.id), 0)::bigint AS paid
     FROM events e
@@ -157,6 +201,9 @@ async function payableRows(
     rooms: Number(r.rooms),
     roomsTax: Number(r.roomsTax),
     maintenance: Number(r.maintenance),
+    extraRooms: Number(r.extraRooms),
+    extraRoomsTax: Number(r.extraRoomsTax),
+    inRoomDining: Number(r.inRoomDining),
     paid: Number(r.paid),
     firstDate: (r.firstDate as string) ?? null,
     isWedding: Boolean(r.isWedding),
@@ -183,13 +230,16 @@ export async function payableBreakdown(
   if (!row) throw new Error(`payableBreakdown: event ${eventId} not found`)
   const discountPaise = await effectiveDiscountPaise(eventId, exec)
   const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
-  const payablePaise = preEventPayablePaise + row.maintenance
+  const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row)
   return {
     proposalPaise: row.venue + row.food + row.addons,
     roomsPaise: row.rooms,
     roomsTaxPaise: row.roomsTax,
     discountPaise,
     maintenancePaise: row.maintenance,
+    extraRoomsPaise: row.extraRooms,
+    extraRoomsTaxPaise: row.extraRoomsTax,
+    inRoomDiningPaise: row.inRoomDining,
     preEventPayablePaise,
     payablePaise,
     paidPaise: row.paid,
@@ -233,7 +283,7 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
   if (!row) throw new Error(`paymentSchedule: event ${eventId} not found`)
   const discountPaise = await effectiveDiscountPaise(eventId)
   const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
-  const payablePaise = preEventPayablePaise + row.maintenance
+  const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row)
   const paid = row.paid
   const today = asOf ?? new Date().toLocaleDateString('en-CA')
 
@@ -283,6 +333,9 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
     roomsTaxPaise: row.roomsTax,
     discountPaise,
     maintenancePaise: row.maintenance,
+    extraRoomsPaise: row.extraRooms,
+    extraRoomsTaxPaise: row.extraRoomsTax,
+    inRoomDiningPaise: row.inRoomDining,
     preEventPayablePaise,
     payablePaise,
     paidPaise: paid,

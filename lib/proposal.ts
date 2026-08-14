@@ -159,7 +159,10 @@ export type ProposalDocument = {
    * remove, including one still pending his own decision.
    */
   discounts: DiscountRow[]
-  /** Maintenance entries and Auditor adjustments. Empty until they exist in the app. */
+  /**
+   * Everything billed on actuals: the Lodge Manager's closed extras (extra rooms, in-room
+   * dining), closed maintenance and the Auditor's adjustments. Empty until they exist.
+   */
   extras: ProposalAddon[]
   payments: ProposalPayment[]
   totals: {
@@ -167,13 +170,17 @@ export type ProposalDocument = {
     proposalPaise: number
     roomsPaise: number
     roomsTaxPaise: number
+    /** Extra rooms given during the event. A subset of `extrasPaise`, kept apart for its tax. */
+    extraRoomsPaise: number
+    /** 5% on those — collected, like any room tax, and outside the advance base. */
+    extraRoomsTaxPaise: number
     extrasPaise: number
     discountPaise: number
     /** proposal + rooms + extras − discount, before tax. */
     subtotalPaise: number
     /**
-     * The AMOUNT PAYABLE — subtotal plus the 5% room tax. What the advance, the wedding
-     * milestone and the balance are all measured against.
+     * The AMOUNT PAYABLE — subtotal plus the 5% on rooms, booked and extra alike. What the
+     * advance, the wedding milestone and the balance are all measured against.
      */
     totalPaise: number
     /** 18% on venue, food, add-ons and extras. Printed; never collected, never in a threshold. */
@@ -435,8 +442,40 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     lodge.subtotalPaise += amountPaise
   }
 
-  // ── Extras: closed maintenance + the Auditor's adjustments ───────────────────
-  // The template has no row for either, so both stay blank until the app has them.
+  // ── Extras: the Lodge Manager's, closed maintenance, the Auditor's adjustments ─
+  // The template has no row for any of them, so the block stays blank until the app has some.
+  //
+  // The Lodge Manager's extras are CLOSED-only, exactly as maintenance is (migration 0034), and
+  // they are the one kind of extra whose tax is COLLECTED: an extra room is a room, so its 5%
+  // is money and belongs beside `roomsTaxPaise` in the payable, not in the 18% nobody pays.
+  // It is kept in its own total rather than folded into `roomsTaxPaise` because that figure
+  // feeds `thresholdBasePaise` below, and a room given out in September must not move the
+  // advance that fell due in June.
+  const extraRoomRows = (await db.execute(sql`
+    SELECT COALESCE(u.name, 'Lodging') || ' — extra ' || replace(a.room_type, '_', ' ')
+             || ' × ' || a.count || ' room(s) × ' || a.nights || ' night(s)' AS description,
+           (a.count * a.nights)::int AS qty, a.rate_paise AS "ratePaise", a.amount_paise AS "amountPaise"
+    FROM additional_rooms a
+    LEFT JOIN lodging_units u ON u.id = a.unit_id
+    JOIN lodge_extras x ON x.event_id = a.event_id AND x.closed_at IS NOT NULL
+    WHERE a.event_id = ${eventId}
+    ORDER BY u.name, a.room_type, a.created_at
+  `)) as unknown as Row[]
+  const extraRoomsPaise = extraRoomRows.reduce((n, r) => n + num(r.amountPaise), 0)
+  // Per line, then summed — matches lib/invoice.ts and lib/payment-schedule.ts to the paisa.
+  const extraRoomsTaxPaise = extraRoomRows.reduce(
+    (n, r) => n + Math.round((num(r.amountPaise) * ROOM_GST_BP) / 10000),
+    0,
+  )
+
+  const dining = (await db.execute(sql`
+    SELECT 'In-room dining' AS description, 1 AS qty,
+           in_room_dining_paise AS "ratePaise", in_room_dining_paise AS "amountPaise",
+           ${STANDARD_GST_BP}::int AS "gstRateBp"
+    FROM lodge_extras
+    WHERE event_id = ${eventId} AND closed_at IS NOT NULL AND in_room_dining_paise > 0
+  `)) as unknown as Row[]
+
   const maint = (await db.execute(sql`
     SELECT item AS description, qty, rate_paise AS "ratePaise", amount_paise AS "amountPaise",
            ${STANDARD_GST_BP}::int AS "gstRateBp"
@@ -452,8 +491,10 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     WHERE i.event_id = ${eventId} AND i.superseded_at IS NULL AND l.section = 'adjustment'
     ORDER BY l.description
   `)) as unknown as Row[]
-  const extraRows = [...maint, ...adjust]
-  const extras: ProposalAddon[] = extraRows.map((m) => ({
+  // `extraRows` are the ones whose tax is SHOWN; the extra rooms are taxed above because theirs
+  // is collected. Both kinds print in the same Extras block.
+  const extraRows = [...dining, ...maint, ...adjust]
+  const extras: ProposalAddon[] = [...extraRoomRows, ...extraRows].map((m) => ({
     description: m.description as string,
     qty: num(m.qty),
     ratePaise: num(m.ratePaise),
@@ -481,7 +522,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   const discounts = await listDiscounts(eventId)
   const discountPaise = await effectiveDiscountPaise(eventId)
   const subtotalPaise = proposalPaise + roomsPaise + extrasPaise - discountPaise
-  const totalPaise = subtotalPaise + roomsTaxPaise
+  const totalPaise = subtotalPaise + roomsTaxPaise + extraRoomsTaxPaise
 
   // The 18% shown on everything but rooms, rounded per line and summed — the same lines
   // lib/invoice.ts pushes (one per venue, one per function's food, one per add-on, one per
@@ -529,6 +570,8 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       proposalPaise,
       roomsPaise,
       roomsTaxPaise,
+      extraRoomsPaise,
+      extraRoomsTaxPaise,
       extrasPaise,
       discountPaise,
       subtotalPaise,

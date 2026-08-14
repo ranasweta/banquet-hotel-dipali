@@ -45,6 +45,20 @@ bounded by the proposal's **declared From/To window**, stored on the event as
 - **Deploy note:** run `pnpm migrate` against the target DB — the new columns must exist or
   every event-create / room-save query referencing them will error.
 
+### The Lodge Manager has extras of his own (client, 15 Aug 2026)
+The PRD gives the Lodge Manager **FR-4.x** — allocate rooms against what was booked — and gives
+event-linked after-the-fact costs to Maintenance alone (**FR-5.x**). The desk turned out to have
+two of its own: rooms handed to a party that arrived larger than it was booked, and in-room
+dining. Both were being carried on paper and reaching the bill by hand.
+
+They are now `additional_rooms` and `lodge_extras.in_room_dining_paise` (migration **0034**),
+with the lifecycle FR-5.2/5.3 gives maintenance: logged while In Progress / Completed, frozen
+and charged on a close, and outside every pre-event threshold. Full reasoning in §F27 and
+CLAUDE.md rule 14.
+
+- **Deploy note:** run `pnpm migrate` against the target DB before deploying — the bill, the
+  payable and the proposal all query the two new tables, so every money read errors without them.
+
 ---
 
 ## A. Invented data (placeholders)
@@ -1261,6 +1275,47 @@ what one hall costs; that is what the client's list says and it was confirmed wh
 in no PDF and no PRD table, so their capacities are invented outright and flagged as such in
 `db/masters.ts`. Capacities gate nothing (rule 13), so the invention costs nothing but should
 be corrected when the hotel says what they actually seat.
+
+### F27. The lodge's extras — rooms given out, and in-room dining
+Client, 15 Aug 2026. Two charges the desk had been carrying on paper. Migration 0034,
+`lib/lodge-extras.ts`, CLAUDE.md rule 14.
+
+**Nothing is seeded and nothing is invented.** Both are records of things that happen during an
+event; an empty log is the correct state for every booking until the desk fills one in. The
+extra-room rate is not invented either — it is read from the lodge master's rack rate for that
+category and snapshotted, so this feature adds no new price to the system.
+
+**Nights, not dates — and what that costs.** The client asked for "how many and which category",
+so a line is a count of rooms and a count of nights. That is enough to price it and it matches
+what the desk actually knows after the fact, but it cannot express *which* nights, so these
+rooms reach no availability check, no rooms board and no lodging calendar. That is the intended
+trade and not an oversight: `getRoomAvailability` answers "what can I still sell", and a room
+already handed over is not one being sold. The consequence to be aware of is that the lodging
+calendar can show a category as free on a night the hotel actually filled from this log. If the
+hotel later wants occupancy to reflect it, the fix is a date range on `additional_rooms` and a
+join in the availability CTE — the pricing would not change.
+
+**Tax, and the one question for the CA.** Implemented as instructed, and recorded here rather
+than decided:
+
+- An **extra room is a room**: 5%, printed and **collected**, like every other room charge. Its
+  tax is therefore money, and it is inside the balance and the settlement.
+- **In-room dining is food**: 18%, printed and collected from nobody (§F8). So the hotel keeps
+  the dining amount and takes none of the tax printed beside it.
+
+The second is worth a CA's eye for the same reason the bar line is (§F24). Restaurant service in
+a hotel is commonly taxed differently from banquet catering in India, and this bills at the
+banquet rate because rule 11 admits exactly two rates and puts everything that is not a room on
+18%. The money is right by construction either way — that 18% is collected from nobody — but the
+*label* on a guest-facing document may not be. It is a one-line change in `lib/invoice.ts` plus a
+section in `lib/tax.ts` if the answer comes back different.
+
+**Why it is not an edit to the booking's rooms.** `room_requirements` is what was sold, frozen at
+its confirmed rate (§F10, migration 0032) and the base of the 25% advance and the wedding 50%.
+Adding rooms to it in September would raise a threshold that fell due in June and make a met
+milestone retrospectively short — the failure rule 12 already describes for maintenance. These
+sit beside maintenance instead: in the settlement and the balance, in neither threshold, and in
+neither the 10% discount cap.
 
 ---
 

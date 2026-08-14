@@ -15,6 +15,7 @@ import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-p
 import { EventRooms } from '@/components/event-rooms'
 import { EventBilling } from '@/components/event-billing'
 import { EventMaintenance } from '@/components/event-maintenance'
+import { EventLodgeExtras } from '@/components/event-lodge-extras'
 import { RequestChange } from '@/components/request-change'
 import { CancelBooking } from '@/components/cancel-booking'
 import { EventLockInvoice } from '@/components/event-lock-invoice'
@@ -326,6 +327,21 @@ export function EventDetailView({
                 }
               />
             )}
+          </div>
+        </>
+      )}
+
+      {/* Extras the lodge gave out during the event (15 Aug 2026). Same window as maintenance:
+          there is nothing to log before the guest arrives, and the log is read-only after lock. */}
+      {canViewRooms && ['in_progress', 'completed', 'locked', 'billed', 'closed'].includes(event.status) && (
+        <>
+          <Separator />
+          <div className="space-y-4">
+            <h2 className="text-lg font-semibold">Lodge extras</h2>
+            <EventLodgeExtras
+              eventId={event.id}
+              editable={canEditRooms && ['in_progress', 'completed'].includes(event.status)}
+            />
           </div>
         </>
       )}

@@ -447,8 +447,10 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                             </tr>
                           </thead>
                           <tbody>
-                            {extras.map((x) => (
-                              <tr key={x.description}>
+                            {/* Keyed by index as well as description: two extra-room lines can
+                                legitimately read the same (four Deluxe for two nights, twice). */}
+                            {extras.map((x, i) => (
+                              <tr key={`${x.description}-${i}`}>
                                 <td>
                                   <span className="it-name">{titleCase(x.description)}</span>
                                 </td>
@@ -511,11 +513,18 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                           </div>
                           <div className="v">{formatPaise(totals.subtotalPaise)}</div>
                         </div>
+                        {/* Booked rooms and the extras the lodge gave out during the event are
+                            one 5% line: both are rooms, and both are collected. They are
+                            summed here rather than in `totals` because the advance base is
+                            measured on the booked half alone (see lib/proposal.ts). */}
                         <div className="sline tax">
                           <div className="l">
-                            GST 5% — rooms <small>on {formatPaise(totals.roomsPaise)}</small>
+                            GST 5% — rooms{' '}
+                            <small>on {formatPaise(totals.roomsPaise + totals.extraRoomsPaise)}</small>
                           </div>
-                          <div className="v">+ {formatPaise(totals.roomsTaxPaise)}</div>
+                          <div className="v">
+                            + {formatPaise(totals.roomsTaxPaise + totals.extraRoomsTaxPaise)}
+                          </div>
                         </div>
                         <div className="sline tax">
                           <div className="l">

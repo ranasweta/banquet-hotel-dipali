@@ -183,7 +183,7 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    recorded in `SEED_ASSUMPTIONS.md` §F8; it is a one-constant change.
 12. **The payable amount and the milestones live in `lib/payment-schedule.ts`**, and
    nothing recomputes them locally. Payable = venue + food + add-ons + rooms + the 5%
-   + **closed maintenance**, less discounts. Milestones are floors on the CUMULATIVE total
+   + **closed maintenance** + **closed lodge extras**, less discounts. Milestones are floors on the CUMULATIVE total
    received, never instalments of their own: **25%** at confirm, **50%** thirty days before
    the first function for weddings (BR-P2, amended 4 Aug 2026 — was the whole remaining 75%),
    **100%** at billing. Over-payment is always accepted.
@@ -198,11 +198,37 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    that one — and `payablePaise` (with it) is the base for the settlement and the balance.
    Only entries the Maintenance team has **closed** count, matching what `computeBillLines`
    charges. Maintenance is not in the 10% discount cap either (rule 3's base is unchanged).
+   **The Lodge Manager's extras sit beside it** (client, 15 Aug 2026; see rule 14): same side of
+   the split, same closed-only rule, same absence from the discount cap.
 13. **No pax limit anywhere** (client, 4 Aug 2026, completing the 3 Aug removal of the
    venue-capacity cap). A positive whole number is a type check, not a limit — no
    ceiling in Zod, no capacity gate, and `pax_override_note` is gone with the capacity
    it explained. `venues.capacity_min/max` survive as descriptive seed data and gate
    nothing.
+14. **The lodge's extras are logged after the fact and charged on the close** (client,
+   15 Aug 2026; migration 0034, `lib/lodge-extras.ts`). Two things the desk had been carrying on
+   paper: **extra rooms** given to a party that arrived bigger than it was booked
+   (`additional_rooms` — lodge + category + count + **nights**, no date range), and **in-room
+   dining**, one rupee total for the whole stay (`lodge_extras.in_room_dining_paise`, a single
+   box that is overwritten, never incremented).
+   They are **not** an edit to `room_requirements`: that is what was SOLD, frozen at its
+   confirmed rate, and the base of the advance — adding September's rooms to it would raise a
+   threshold that fell due in June. They behave like maintenance instead, and rule 12 places
+   them: settlement and balance only, never the 25%, the 50% or the 10% cap.
+   **Nothing counts until the Lodge Manager closes the log** — one `closed_at`, covering both
+   kinds, a non-blocking lock-checklist item, and the same reason maintenance has one: an open
+   log is still being typed. Closed-only is enforced identically in `computeBillLines`,
+   `payableRows` and `proposalDocument`, so the three cannot disagree.
+   **The rate is snapshotted at entry** (rule 4) with no live fallback — unlike a room
+   requirement, one of these lines never had an enquiry phase to price live for. A category the
+   lodge has no priced room of is refused, never zeroed.
+   **Tax follows what the thing is** (rule 11): an extra room is a `rooms` line at 5%, printed
+   and **collected**; in-room dining is a `food` line at 18%, printed and collected from nobody.
+   `lib/tax.ts` needs no new section — using the wrong one of the two is how a counter takes 18%
+   too much or leaves a balance permanently short.
+   Nights, not dates, is deliberate: this records what was handed over, so it reaches no
+   availability check, no rooms board and no lodging calendar. The hard inventory cap (rule 9)
+   governs the booking; this governs the bill.
 
 ## UI conventions
 - Use the ui-ux-pro-max skill for design decisions and the Magic MCP (`/ui`)
