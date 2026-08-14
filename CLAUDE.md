@@ -250,6 +250,20 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    maintenance and the lodge extras on the far side of rule 12's split: settlement and balance
    only, never the 25%, the 50% or the 10% cap.
 
+16. **An enquiry is editable in place, everywhere, until it is confirmed** (client, 15 Aug 2026:
+   *"if someone wants to change the no. of pax or venue or date or timing"*). The booking page
+   edits guest, contacts, the declared run, and each function's name / date / time / venue /
+   pax, alongside the menus and rooms it already edited. **Rooms are shown on an enquiry** — the
+   requirements ARE the booking (rule 9) and the wizard has always captured them at step 4; the
+   page used to say "Rooms can be allocated once the booking is confirmed", which was wrong.
+   **The boundary is confirmation, and it is the server's.** `PUT /sub-events/:id` refuses
+   anything past `enquiry` with a 409. That is not squeamishness: an enquiry holds **no**
+   `venue_bookings` — they are written at confirm — so moving its date or venue moves nothing
+   and can clash with nothing. A confirmed function is a held slot, and moving it belongs to the
+   change-request flow or `lib/post-confirm.ts`, both of which re-book the hold.
+   Editing a function **recomputes `proposal_total_paise`** (venue and pax are both priced) and
+   audits field by field, so the trail says what moved rather than "the function changed".
+
 ## UI conventions
 - Use the ui-ux-pro-max skill for design decisions and the Magic MCP (`/ui`)
   for component generation where installed.

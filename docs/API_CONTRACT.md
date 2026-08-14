@@ -27,6 +27,12 @@ races return 409 with a human-readable message.
 - `PUT  /events/:id` — pre-confirm edits; post-confirm → creates change request
 - `POST /events/:id/documents` — multipart Aadhaar front/back upload
 - `POST /events/:id/sub-events` | `PUT /sub-events/:id` | `DELETE /sub-events/:id`
+  `PUT` edits a function in place — name, date, time, venue/bundle, pax — and is **enquiry
+  only** (409 otherwise: a confirmed function is a held slot and moves through the
+  change-request flow, or the Authority's own editor). It recomputes `proposal_total_paise`,
+  since venue and pax are both priced, and audits field by field. Wired to the booking page on
+  15 Aug 2026: the route existed from M3 but nothing ever called it, so the only way to change a
+  venue was to delete the function and lose its menu with it.
 - `GET  /availability?venue_id=&date=&start=&end=` — time-overlap check (bundle-aware),
   returns { available, conflicts[], open_enquiries }
 - `POST /events/:id/confirm` — THE transaction: re-validates all windows, requires SOME

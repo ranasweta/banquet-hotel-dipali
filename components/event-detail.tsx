@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { CalendarDays, MapPin, Users } from 'lucide-react'
+import { CalendarDays, MapPin, Pencil, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
 import { formatTimeRange } from '@/lib/time'
 import { Badge } from '@/components/ui/badge'
-import { buttonVariants } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-picker'
@@ -19,6 +19,8 @@ import { EventLodgeExtras } from '@/components/event-lodge-extras'
 import { EventExtraPlates } from '@/components/event-extra-plates'
 import { RequestChange } from '@/components/request-change'
 import { CancelBooking } from '@/components/cancel-booking'
+import { FunctionEdit } from '@/components/function-edit'
+import { BookingBasicsEdit } from '@/components/booking-basics-edit'
 import { EventLockInvoice } from '@/components/event-lock-invoice'
 import { EventTrail } from '@/components/event-trail'
 import { titleCase } from '@/lib/text'
@@ -29,6 +31,10 @@ type SubEvent = {
   eventDate: string
   startTime: string
   endTime: string
+  // The ids as well as the names: `loadEventDetail` has always returned them, and the in-place
+  // editor needs them to pre-select the venue the function already has.
+  venueId: string | null
+  bundleId: string | null
   venueName: string | null
   bundleName: string | null
   pax: number
@@ -41,6 +47,9 @@ export type EventDetail = {
   status: string
   firstDate: string | null
   lastDate: string | null
+  /** The proposal's declared run (migration 0018) — what the room dates are bounded by. */
+  plannedFrom: string | null
+  plannedTo: string | null
   proposalTotalPaise: number
   subEvents: SubEvent[]
   contacts: { phone: string; label: string | null }[]
@@ -89,6 +98,10 @@ export function EventDetailView({
   isAuditor: boolean
 }) {
   const [event, setEvent] = useState(initial)
+  // Which function's in-place editor is open. One at a time: two half-edited functions on one
+  // screen is how the wrong one gets saved.
+  const [editingFn, setEditingFn] = useState<string | null>(null)
+  const [editingBasics, setEditingBasics] = useState(false)
   const [tiers, setTiers] = useState<CatalogTier[] | null>(null)
   const [pools, setPools] = useState<MenuPool[]>([])
 
@@ -112,6 +125,14 @@ export function EventDetailView({
     }
   }, [event.id])
 
+  // After editing a function, the whole record is reloaded rather than the total alone: the
+  // date, time, venue and pax on the card all moved, and so may the event's own first/last
+  // dates. A miss here is not cosmetic, so it surfaces.
+  const refreshEvent = useCallback(async () => {
+    const r = await api<{ event: EventDetail }>(`/events/${event.id}`)
+    setEvent(r.event)
+  }, [event.id])
+
   const advancePaid = event.payments
     .filter((p) => p.kind === 'advance_block' || p.kind === 'part_payment')
     .reduce((s, p) => s + p.amountPaise, 0)
@@ -124,6 +145,10 @@ export function EventDetailView({
   // The Higher Authority and Auditor may reopen a CONFIRMED booking in the wizard (tester,
   // 23 Jul 2026); everyone else's post-confirm changes go through the change-request flow.
   const isAuthority = role === 'higher_authority' || isAuditor
+
+  // Everything on a proposal is editable in place until it is confirmed (client, 15 Aug 2026).
+  // After that a function is a held venue slot and moves through the change-request flow.
+  const isEnquiry = event.status === 'enquiry'
 
   async function uploadDoc(kind: 'aadhaar_front' | 'aadhaar_back', file: File) {
     try {
@@ -207,9 +232,35 @@ export function EventDetailView({
         </div>
       </div>
 
+      {/* Guest, contacts and the declared run — editable in place while it is an enquiry. */}
+      {isEnquiry && canEditBookings && editingBasics && (
+        <BookingBasicsEdit
+          eventId={event.id}
+          guestName={event.guestName}
+          contacts={event.contacts}
+          plannedFrom={event.plannedFrom}
+          plannedTo={event.plannedTo}
+          onSaved={async () => {
+            await refreshEvent()
+            setEditingBasics(false)
+          }}
+          onCancel={() => setEditingBasics(false)}
+        />
+      )}
+
       {/* At-a-glance meta */}
       <div className="grid gap-3 sm:grid-cols-3">
         <MetaCard title="Contacts">
+          {isEnquiry && canEditBookings && !editingBasics && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="-ml-2 mb-1 h-7"
+              onClick={() => setEditingBasics(true)}
+            >
+              <Pencil className="size-3" /> Guest &amp; contacts
+            </Button>
+          )}
           {event.contacts.length === 0 ? (
             <span className="text-muted-foreground">None</span>
           ) : (
@@ -286,10 +337,42 @@ export function EventDetailView({
                       <Users className="size-3.5" />
                       {s.pax}
                     </span>
+                    {/* Enquiry only. A confirmed function is a held venue slot: it moves
+                        through the change-request flow below, or the Authority's editor. */}
+                    {isEnquiry && canEditBookings && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditingFn(editingFn === s.id ? null : s.id)}
+                      >
+                        <Pencil className="size-3.5" /> {editingFn === s.id ? 'Close' : 'Edit'}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
               <CardContent>
+                {isEnquiry && canEditBookings && editingFn === s.id && (
+                  <div className="mb-3">
+                    <FunctionEdit
+                      fn={{
+                        id: s.id,
+                        name: s.name,
+                        eventDate: s.eventDate,
+                        startTime: s.startTime,
+                        endTime: s.endTime,
+                        venueId: s.venueId,
+                        bundleId: s.bundleId,
+                        pax: s.pax,
+                      }}
+                      onSaved={async () => {
+                        await refreshEvent()
+                        setEditingFn(null)
+                      }}
+                      onCancel={() => setEditingFn(null)}
+                    />
+                  </div>
+                )}
                 {!canViewMenus ? (
                   <p className="text-sm text-muted-foreground">You don’t have access to menus.</p>
                 ) : !tiers ? (
@@ -319,18 +402,23 @@ export function EventDetailView({
           <Separator />
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">Rooms &amp; lodging</h2>
-            {event.status === 'enquiry' ? (
+            {/* Editable on an enquiry too (client, 15 Aug 2026). This used to read "Rooms can
+                be allocated once the booking is confirmed", which was wrong on both counts:
+                the requirements ARE the booking (rule 9) and the wizard has always captured
+                them at step 4 on an enquiry. The service allowed it all along; only this
+                screen refused to show it. An enquiry still HOLDS nothing — whoever confirms
+                first takes the rooms — which is what the panel says while it is one. */}
+            <EventRooms
+              eventId={event.id}
+              editable={
+                canEditRooms &&
+                ['enquiry', 'confirmed', 'in_progress', 'completed'].includes(event.status)
+              }
+            />
+            {isEnquiry && (
               <p className="text-sm text-muted-foreground">
-                Rooms can be allocated once the booking is confirmed.
+                An enquiry holds no rooms — whoever confirms first takes them.
               </p>
-            ) : (
-              <EventRooms
-                eventId={event.id}
-                editable={
-                  canEditRooms &&
-                  ['confirmed', 'in_progress', 'completed'].includes(event.status)
-                }
-              />
             )}
           </div>
         </>
