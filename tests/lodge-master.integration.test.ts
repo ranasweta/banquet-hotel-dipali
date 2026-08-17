@@ -27,8 +27,14 @@ if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping lodge-maste
 const auditor = { id: '', roleName: 'auditor' }
 let bmId = ''
 let palaceId = ''
-/** Palace's rooms exactly as the seed left them, so cleanup can restore rather than guess. */
-let seeded: { id: string; ratePaise: number }[] = []
+/**
+ * EVERY lodge's rooms exactly as the seed left them, so cleanup can restore rather than guess.
+ *
+ * All three lodges, not just Palace: a rename is per-lodge, and one test has to take a category
+ * name off Regency and Residency to prove what happens when no lodge answers to it any more.
+ * Only Palace's ROWS are added and deleted, so only Palace is reconciled for row membership.
+ */
+let seeded: { id: string; unitId: string; ratePaise: number; roomType: string }[] = []
 
 async function catalog() {
   return master.getLodgeCatalog()
@@ -60,8 +66,9 @@ beforeAll(async () => {
   const [p] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = 'Palace'`)) as unknown as { id: string }[]
   palaceId = p!.id
   seeded = (await db.execute(sql`
-    SELECT id, rack_rate_paise AS "ratePaise" FROM rooms WHERE unit_id = ${palaceId}
-  `)) as unknown as { id: string; ratePaise: number }[]
+    SELECT id, unit_id AS "unitId", rack_rate_paise AS "ratePaise", room_type AS "roomType"
+    FROM rooms
+  `)) as unknown as { id: string; unitId: string; ratePaise: number; roomType: string }[]
 }, 120_000)
 
 /** A confirmed booking holding `count` rooms of a category over a future range. */
@@ -84,16 +91,32 @@ async function commitRooms(count: number, roomType: string, checkIn: string, che
  * Not by room number: an earlier version guessed at the numbering ("anything above P133") and
  * deleted three seeded SUITES, which then made a later test fail for a reason that had nothing
  * to do with the code under test.
+ *
+ * `room_type` is restored as well as the rate. A rename moves it, and a category left under
+ * its new name leaks into the next test as a category that has simply vanished.
  */
 async function cleanup() {
   if (!hasDb || seeded.length === 0) return
+  // Invoices first: `invoices.event_id` does not cascade, so an event that has been drafted
+  // cannot be deleted until its document is. One test here drafts one.
+  await db.delete(schema.invoices)
   await db.delete(schema.events)
-  const ids = sql.join(seeded.map((r) => sql`${r.id}::uuid`), sql`, `)
-  await db.execute(sql`DELETE FROM rooms WHERE unit_id = ${palaceId} AND id NOT IN (${ids})`)
+  const palaceIds = sql.join(
+    seeded.filter((r) => r.unitId === palaceId).map((r) => sql`${r.id}::uuid`),
+    sql`, `,
+  )
+  await db.execute(sql`DELETE FROM rooms WHERE unit_id = ${palaceId} AND id NOT IN (${palaceIds})`)
   await db.execute(sql`UPDATE rooms SET is_active = true WHERE unit_id = ${palaceId}`)
-  for (const r of seeded) {
-    await db.execute(sql`UPDATE rooms SET rack_rate_paise = ${r.ratePaise} WHERE id = ${r.id}`)
-  }
+  // One statement rather than a round trip per room: this runs after every test.
+  const rows = sql.join(
+    seeded.map((r) => sql`(${r.id}::uuid, ${r.ratePaise}::bigint, ${r.roomType}::text)`),
+    sql`, `,
+  )
+  await db.execute(sql`
+    UPDATE rooms r SET rack_rate_paise = s.rate, room_type = s.room_type
+      FROM (VALUES ${rows}) AS s(id, rate, room_type)
+     WHERE r.id = s.id
+  `)
 }
 afterEach(cleanup)
 afterAll(cleanup)
@@ -222,6 +245,149 @@ d('adding categories', () => {
     await expect(
       master.addCategory(auditor, palaceId, { roomType: 'zztest_wing', ratePaise: 1, rooms: 1, beds: 1 }),
     ).rejects.toMatchObject({ status: 409 })
+  }, 120_000)
+})
+
+d('renaming a category', () => {
+  it('carries the rooms and every booking that names them across', async () => {
+    const eventId = await commitRooms(2, 'suite', '2027-11-01', '2027-11-03')
+
+    await master.renameCategory(auditor, palaceId, 'suite', 'Garden Suite')
+
+    // Normalised, like every other category name.
+    expect(await category('suite')).toBeUndefined()
+    expect(await category('garden_suite')).toMatchObject({ rooms: 3, ratePaise: 800_000 })
+
+    // THE POINT OF THE TEST: the booking followed. If `room_requirements` had been left behind,
+    // the rate lookup would find nothing and an enquiry would silently re-price to zero.
+    const [req] = (await db.execute(sql`
+      SELECT room_type AS "roomType" FROM room_requirements WHERE event_id = ${eventId}
+    `)) as unknown as { roomType: string }[]
+    expect(req!.roomType).toBe('garden_suite')
+    expect((await category('garden_suite'))!.committedPeak).toBe(2)
+
+    const { roomEstimatePaise } = await import('@/lib/pricing')
+    expect((await roomEstimatePaise(eventId)).roomsPaise).toBe(2 * 2 * 800_000)
+
+    // AND THE PROPOSAL ALREADY MADE READS BACK UNDER THE NEW NAME. The printed document is
+    // rebuilt from `room_requirements` every time it is opened, so an existing booking shows
+    // the rename rather than a category the lodge no longer has.
+    const { proposalDocument } = await import('@/lib/proposal')
+    const doc = await proposalDocument(eventId)
+    expect(doc.lodges[0]!.lines[0]!.roomType).toBe('garden_suite')
+    expect(doc.totals.roomsPaise).toBe(2 * 2 * 800_000)
+  }, 120_000)
+
+  /**
+   * The other half of the answer: what is FROZEN does not move. A numbered document the guest
+   * holds keeps the words it was issued with — `invoice_lines.description` is a snapshot, not
+   * a view — and so does the audit trail. Redrafting rebuilds from the booking and picks the
+   * new name up.
+   */
+  it('leaves an issued document saying what it said, and updates it on a redraft', async () => {
+    const invoiceLib = await import('@/lib/invoice')
+    const eventId = await commitRooms(1, 'suite', '2027-11-01', '2027-11-03')
+    await db.transaction(async (tx) => invoiceLib.draftInvoice(tx, auditor, eventId))
+
+    const before = await invoiceLib.getInvoice(eventId)
+    expect(before!.lines.some((l) => l.description.includes('suite'))).toBe(true)
+
+    await master.renameCategory(auditor, palaceId, 'suite', 'garden_suite')
+
+    // The stored lines are untouched — nobody rewrote a document that had been drawn up.
+    const after = await invoiceLib.getInvoice(eventId)
+    expect(after!.lines.map((l) => l.description)).toEqual(before!.lines.map((l) => l.description))
+
+    // A redraft reads the booking again, so from here it says the new name.
+    await db.transaction(async (tx) => invoiceLib.reissueInvoice(tx, auditor, eventId, 'category renamed'))
+    const redrafted = await invoiceLib.getInvoice(eventId)
+    expect(redrafted!.lines.some((l) => l.description.includes('garden suite'))).toBe(true)
+  }, 120_000)
+
+  it('renames retired rooms too, so the old name cannot come back', async () => {
+    // Shrink 3 suites to 1 — two rows go inactive — then rename.
+    await master.setCategoryCount(auditor, palaceId, 'suite', 1)
+    await master.renameCategory(auditor, palaceId, 'suite', 'garden_suite')
+    const [{ n }] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM rooms WHERE unit_id = ${palaceId} AND room_type = 'suite'
+    `)) as unknown as { n: number }[]
+    expect(n).toBe(0)
+  }, 120_000)
+
+  it('moves rooms handed over on the day as well as the booking', async () => {
+    const eventId = await commitRooms(1, 'suite', '2027-11-01', '2027-11-03')
+    await db.execute(sql`
+      INSERT INTO additional_rooms (event_id, unit_id, room_type, count, nights, rate_paise, amount_paise, created_by)
+      VALUES (${eventId}, ${palaceId}, 'suite', 1, 1, 800000, 800000, ${bmId})
+    `)
+
+    await master.renameCategory(auditor, palaceId, 'suite', 'garden_suite')
+
+    const [extra] = (await db.execute(sql`
+      SELECT room_type AS "roomType" FROM additional_rooms WHERE event_id = ${eventId}
+    `)) as unknown as { roomType: string }[]
+    expect(extra!.roomType).toBe('garden_suite')
+  }, 120_000)
+
+  /**
+   * `room_requirements.unit_id` is nullable (migration 0009) and those rows price off
+   * `min(rack_rate_paise)` across every lodge carrying the name. They must not follow a rename
+   * while another lodge still answers to the old name — but they MUST once none does, or they
+   * resolve to nothing and price at zero, which is the failure the whole cascade exists for.
+   */
+  it('leaves lodge-less rows alone while another lodge keeps the name, and moves them once none does', async () => {
+    const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
+    const [ev] = await db
+      .insert(schema.events)
+      .values({ code, guestName: 'Legacy', eventType: 'other', createdBy: bmId })
+      .returning({ id: schema.events.id })
+    // A pre-migration-0009 row: a category, no lodge.
+    await db.execute(sql`
+      INSERT INTO room_requirements (event_id, unit_id, room_type, count, check_in, check_out)
+      VALUES (${ev!.id}, NULL, 'deluxe', 1, '2027-11-01'::date, '2027-11-03'::date)
+    `)
+    const nameOf = async () => {
+      const [r] = (await db.execute(sql`
+        SELECT room_type AS "roomType" FROM room_requirements WHERE event_id = ${ev!.id}
+      `)) as unknown as { roomType: string }[]
+      return r!.roomType
+    }
+
+    // Regency and Residency still have deluxe, so the row may well have meant one of those.
+    await master.renameCategory(auditor, palaceId, 'deluxe', 'palace_deluxe')
+    expect(await nameOf()).toBe('deluxe')
+
+    // Take the name off every other lodge and it has nowhere left to resolve — so it follows.
+    const others = (await db.execute(sql`
+      SELECT DISTINCT unit_id AS "unitId" FROM rooms WHERE room_type = 'deluxe'
+    `)) as unknown as { unitId: string }[]
+    for (const o of others) await master.renameCategory(auditor, o.unitId, 'deluxe', 'standard')
+    expect(await nameOf()).toBe('standard')
+
+    const { roomEstimatePaise } = await import('@/lib/pricing')
+    // The point of all of it: it still prices, rather than falling to a silent zero.
+    expect((await roomEstimatePaise(ev!.id)).roomsPaise).toBeGreaterThan(0)
+  }, 120_000)
+
+  it('refuses a name the lodge already uses, retired rooms included', async () => {
+    await expect(
+      master.renameCategory(auditor, palaceId, 'suite', 'deluxe'),
+    ).rejects.toMatchObject({ status: 409 })
+
+    // Retire deluxe entirely, and it still blocks — merging two categories is not a rename.
+    await master.removeCategory(auditor, palaceId, 'deluxe')
+    await expect(
+      master.renameCategory(auditor, palaceId, 'suite', 'deluxe'),
+    ).rejects.toMatchObject({ status: 409 })
+  }, 120_000)
+
+  it('refuses a category that is not in this lodge, and shrugs at a no-op', async () => {
+    await expect(
+      master.renameCategory(auditor, palaceId, 'presidential_suite', 'penthouse'),
+    ).rejects.toMatchObject({ status: 404 })
+    // Same name in, same name out — nothing to audit, nothing to move.
+    expect(await master.renameCategory(auditor, palaceId, 'suite', 'Suite')).toBe('suite')
+    expect((await category('suite'))!.rooms).toBe(3)
   }, 120_000)
 })
 

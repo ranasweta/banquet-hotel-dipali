@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { CalendarDays, MapPin, Pencil, Users } from 'lucide-react'
+import { CalendarDays, ChevronDown, MapPin, Pencil, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
@@ -101,6 +101,26 @@ export function EventDetailView({
   // Which function's in-place editor is open. One at a time: two half-edited functions on one
   // screen is how the wrong one gets saved.
   const [editingFn, setEditingFn] = useState<string | null>(null)
+  /**
+   * Which function cards are folded shut (client, 17 Aug 2026). A wedding runs to five or six
+   * functions and each one carries a whole tier picker, so the page was thousands of pixels of
+   * checkboxes and the next function to fill was never on screen.
+   *
+   * A booking with ONE function opens flat, as it always did — there is nothing to scroll past.
+   * From two upwards everything starts shut, so the run of functions is visible at a glance and
+   * one is opened at a time. Ids, not indexes: adding a function must not shuffle what is open.
+   */
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set(initial.subEvents.length > 1 ? initial.subEvents.map((s) => s.id) : []),
+  )
+  const toggleCollapsed = useCallback((id: string, open?: boolean) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (open ?? next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
   const [editingBasics, setEditingBasics] = useState(false)
   const [tiers, setTiers] = useState<CatalogTier[] | null>(null)
   const [pools, setPools] = useState<MenuPool[]>([])
@@ -315,15 +335,45 @@ export function EventDetailView({
 
       {/* Functions with menus */}
       <div className="space-y-5">
-        <h2 className="text-lg font-semibold">Functions &amp; menus</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold">Functions &amp; menus</h2>
+          {event.subEvents.length > 1 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setCollapsed(
+                  collapsed.size === 0 ? new Set(event.subEvents.map((s) => s.id)) : new Set(),
+                )
+              }
+            >
+              {collapsed.size === 0 ? 'Collapse all' : 'Expand all'}
+            </Button>
+          )}
+        </div>
         {event.subEvents.length === 0 ? (
           <p className="text-sm text-muted-foreground">No functions on this event yet.</p>
         ) : (
-          event.subEvents.map((s) => (
+          event.subEvents.map((s) => {
+          const open = !collapsed.has(s.id)
+          return (
             <Card key={s.id}>
-              <CardHeader className="pb-3">
+              <CardHeader className={open ? 'pb-3' : undefined}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <CardTitle>{titleCase(s.name)}</CardTitle>
+                  {/* The title is the handle. A whole-header click would swallow the Edit
+                      button beside it, and the meta line has to stay selectable. */}
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() => toggleCollapsed(s.id)}
+                    className="-ml-1 flex items-center gap-1.5 rounded px-1 text-left hover:bg-muted/60"
+                  >
+                    <ChevronDown
+                      className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? '' : '-rotate-90'}`}
+                      aria-hidden
+                    />
+                    <CardTitle>{titleCase(s.name)}</CardTitle>
+                  </button>
                   <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
                     <span className="flex items-center gap-1 tabular-nums">
                       <CalendarDays className="size-3.5" />
@@ -343,7 +393,13 @@ export function EventDetailView({
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => setEditingFn(editingFn === s.id ? null : s.id)}
+                        onClick={() => {
+                          const next = editingFn === s.id ? null : s.id
+                          setEditingFn(next)
+                          // Editing a folded function has to unfold it, or the form opens
+                          // inside a card that is not showing its body.
+                          if (next) toggleCollapsed(s.id, true)
+                        }}
                       >
                         <Pencil className="size-3.5" /> {editingFn === s.id ? 'Close' : 'Edit'}
                       </Button>
@@ -351,6 +407,7 @@ export function EventDetailView({
                   </div>
                 </div>
               </CardHeader>
+              {open && (
               <CardContent>
                 {isEnquiry && canEditBookings && editingFn === s.id && (
                   <div className="mb-3">
@@ -392,8 +449,10 @@ export function EventDetailView({
                   </div>
                 )}
               </CardContent>
+              )}
             </Card>
-          ))
+          )
+          })
         )}
       </div>
 

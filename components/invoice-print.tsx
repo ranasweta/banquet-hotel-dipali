@@ -189,6 +189,14 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
   const runFrom = event.plannedFrom ?? event.firstDate
   const runTo = event.plannedTo ?? event.lastDate
 
+  // Which room-GST bands this booking actually has money in (client, 17 Aug 2026). A band with
+  // nothing in it prints no line: "GST 18% — rooms on ₹0.00" beside a real 5% line reads as an
+  // error, and so does the mirror image of it. When there are no rooms at all the 5% line still
+  // prints at zero, exactly as it did before the band existed.
+  const roomTax = totals.roomTaxSplit
+  const hasHighRoomTax = roomTax.high.basePaise > 0
+  const showLowRoomTax = roomTax.low.basePaise > 0 || !hasHighRoomTax
+
   return (
     <div className="pd" ref={ref}>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
@@ -335,15 +343,27 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         {roomsAndNights(counts.rooms, counts.roomNights, 'night')}
                       </div>
                     </div>
+                    {/* Room GST is banded by the ₹7,500-a-night rate (client, 17 Aug 2026), and
+                        both bands are collected. The GLANCE stays one tile of five: `.glance` is
+                        a fixed five-column A4 grid, and a sixth tile wraps onto a second row with
+                        four empty cells beside it. The tile names the split and the Statement of
+                        Charges below carries it in full, line by line, which is where a guest
+                        checking the arithmetic reads it anyway. */}
                     <div className="gt">
-                      <div className="gl2">GST 5% · rooms</div>
-                      <div className="gv2">{formatPaise(totals.roomsTaxPaise)}</div>
-                      <div className="gs">Included in the amount payable</div>
+                      <div className="gl2">{hasHighRoomTax ? 'GST · rooms' : 'GST 5% · rooms'}</div>
+                      <div className="gv2">
+                        {formatPaise(roomTax.low.taxPaise + roomTax.high.taxPaise)}
+                      </div>
+                      <div className="gs">
+                        {hasHighRoomTax
+                          ? '5% & 18% · in the amount payable'
+                          : 'Included in the amount payable'}
+                      </div>
                     </div>
                     <div className="gt">
                       <div className="gl2">GST 18%</div>
                       <div className="gv2">{formatPaise(totals.shownGstPaise)}</div>
-                      <div className="gs">Shown, not collected</div>
+                      <div className="gs">Venue, food &amp; add-ons</div>
                     </div>
                     <div className="gt hi">
                       <div className="gl2">Amount Payable</div>
@@ -514,18 +534,29 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                           <div className="v">{formatPaise(totals.subtotalPaise)}</div>
                         </div>
                         {/* Booked rooms and the extras the lodge gave out during the event are
-                            one 5% line: both are rooms, and both are collected. They are
-                            summed here rather than in `totals` because the advance base is
-                            measured on the booked half alone (see lib/proposal.ts). */}
-                        <div className="sline tax">
-                          <div className="l">
-                            GST 5% — rooms{' '}
-                            <small>on {formatPaise(totals.roomsPaise + totals.extraRoomsPaise)}</small>
+                            banded together: both are rooms, and both are collected. They are
+                            summed in `roomTaxSplit` rather than in `totals` because the advance
+                            base is measured on the booked half alone (see lib/proposal.ts).
+                            A room over ₹7,500 a night carries 18% instead of 5% (client, 17 Aug
+                            2026) and gets its OWN line — this is the bifurcation the guest has
+                            to be able to read, so it is never blended into a single figure. */}
+                        {showLowRoomTax && (
+                          <div className="sline tax">
+                            <div className="l">
+                              GST 5% — rooms <small>on {formatPaise(roomTax.low.basePaise)}</small>
+                            </div>
+                            <div className="v">+ {formatPaise(roomTax.low.taxPaise)}</div>
                           </div>
-                          <div className="v">
-                            + {formatPaise(totals.roomsTaxPaise + totals.extraRoomsTaxPaise)}
+                        )}
+                        {hasHighRoomTax && (
+                          <div className="sline tax">
+                            <div className="l">
+                              GST 18% — rooms over ₹7,500 a night{' '}
+                              <small>on {formatPaise(roomTax.high.basePaise)}</small>
+                            </div>
+                            <div className="v">+ {formatPaise(roomTax.high.taxPaise)}</div>
                           </div>
-                        </div>
+                        )}
                         <div className="sline tax">
                           <div className="l">
                             GST 18% <small>venue, food, add-ons &amp; extras</small>
@@ -538,9 +569,17 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         <div className="tv">{formatPaise(totals.displayTotalPaise)}</div>
                       </div>
                       {/* Two totals, and the smaller one is the one that is collected. The 18%
-                          is shown on this document and is not charged (client, 4 Aug 2026), so
-                          a single headline figure would have the guest — and our own counter —
-                          settling against a number nobody is asking for. */}
+                          on venue, food and add-ons is shown on this document and is not
+                          charged (client, 4 Aug 2026), so a single headline figure would have
+                          the guest — and our own counter — settling against a number nobody is
+                          asking for.
+                          WHY THE DOCUMENT DOES NOT SAY SO. It used to carry a note explaining
+                          that the 18% is not collected. The client had it struck out (17 Aug
+                          2026): how the hotel treats that tax is the hotel's business and must
+                          not be in the guest's hand on paper. The two totals still print, and
+                          the payable one is still the one every instalment is taken from —
+                          only the explanation is gone. Staff screens keep it: the Payment
+                          review, the lock panel and the reports still say it out loud. */}
                       <div className="trow pay">
                         <div className="tl">Amount Payable</div>
                         <div className="tv">{formatPaise(totals.totalPaise)}</div>
@@ -548,8 +587,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                       <div className="words">
                         Rupees {words.rupees} and {words.paise} Paise Only.
                         <span className="wnote">
-                          GST 18% is shown above for your records and is not collected. All
-                          instalments below are measured against the amount payable.
+                          All instalments below are measured against the amount payable.
                         </span>
                       </div>
                       <div className="adv">
@@ -588,7 +626,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                   </div>
 
                   {/* ══════════ PAYMENT ══════════ */}
-                  <PillRow title="Payment" tag="On the amount payable · rooms & 5% included" />
+                  <PillRow title="Payment" tag="On the amount payable · rooms & their GST included" />
 
                   <div className="pay avoid">
                     <div className="pstep">
@@ -700,10 +738,18 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                             <b>Rooms</b> — {roomsAndNights(counts.rooms, counts.roomNights)}, {lodges.map((l) => l.name).join(', ')}.
                           </li>
                         )}
+                        {/* What the guest is charged, and nothing about what we do with the
+                            rest (client, 17 Aug 2026). Each band is named only when this
+                            booking has rooms in it. */}
                         <li>
-                          <b>GST</b> — 5% on accommodation, included in the amount payable. The
-                          18% shown against venue, food and add-ons is stated for your records
-                          and is not collected.
+                          <b>GST</b> —{' '}
+                          {[
+                            showLowRoomTax ? '5% on accommodation' : null,
+                            hasHighRoomTax ? '18% on rooms over ₹7,500 a night' : null,
+                          ]
+                            .filter(Boolean)
+                            .join(', ')}
+                          , included in the amount payable.
                         </li>
                         {functions.flatMap((f) => f.addons.filter((a) => a.ratePaise === 0)).length > 0 && (
                           <li>
@@ -1071,6 +1117,11 @@ function Lodge({ lodge, multi }: { lodge: ProposalDocument['lodges'][number]; mu
               {titleCase(l.roomType)}{' '}
               <span className="dates">
                 · {fmtDM(l.checkIn)} → {fmtDM(l.checkOut)}
+                {/* Named on the line itself, so the 18% figure in the Statement of Charges
+                    points at the rooms it was charged on rather than appearing from nowhere.
+                    The band is decided in lib/tax.ts and travels on the line — the threshold and
+                    the dormitory carve-out are not re-implemented here to drift out of step. */}
+                {l.gstRateBp === 1800 && ' · GST 18%'}
               </span>
             </span>
           </td>

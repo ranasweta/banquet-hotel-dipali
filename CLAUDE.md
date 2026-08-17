@@ -165,12 +165,38 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    FUNCTION are free (not per segment); the rest go to the GM when that
    function's submit button is pressed — not batched at the lock.
 11. **Two GSTs, and only one of them is money** (client's lead, 4 Aug 2026).
-   **Rooms 5%** — printed and collected. **Everything else 18%** (venue, food,
-   add-ons, maintenance) — printed and collected from nobody: "at the end we are
-   just showing we are taking 18% gst but we wont be taking it."
-   Every document therefore carries two totals and must show both: **Total**
+   **Rooms** — printed and collected, at **5%** up to ₹7,500 a night and **18%
+   above it** (client, 17 Aug 2026; strictly above, so ₹7,500 exactly is 5%).
+   **A dormitory is exempt whatever it costs** (same instruction): its rate buys a
+   room of 18–30 beds, not a bed, so the threshold does not speak to it. The
+   carve-out is keyed on the category NAME — anything containing `dorm` — because
+   `room_type` is free text; renaming a dormitory away from that word moves it into
+   the 18% band, which is why the lodge master shows each category's band beside
+   its rate. `lib/tax.ts` owns both halves (`roomGstBp`, `roomGstBpSql`,
+   `isDormitory`) and nothing re-derives them, client components included: the
+   band travels down on the row (`gstRateBp`) instead.
+   **Everything else 18%** (venue, food, add-ons, maintenance) — printed and
+   collected from nobody: "at the end we are just showing we are taking 18% gst
+   but we wont be taking it."
+   The two 18%s are not the same thing and must never be summed: a room's is
+   **money** — in the payable, the 25%, the wedding 50% and the balance, exactly
+   as its 5% always was. The collected/shown split therefore stays keyed on the
+   **section** (`isCollectedSection`), never on the rate; only the rate itself is
+   per line, from `roomGstBp(nightlyRatePaise)`. The band is read off the **nightly
+   rate**, never the line total — six nights of a ₹5,000 room is 5%, not 18%.
+   **The bifurcation is printed**: a document showing room GST states the 5% and
+   the 18% as separate lines with the money each was charged on
+   (`totals.roomTaxSplit`), and names the 18% rooms on their own accommodation
+   lines. It applies everywhere a room is charged, the Lodge Manager's day-of
+   extra rooms included (rule 14).
+   Every document carries two totals and must show both: **Total**
    (with all tax) and **Amount payable** (what is actually collected). Showing one
    figure is how a counter takes 18% too much.
+   **Never explain the shown-not-collected 18% on a guest-facing document**
+   (client, 17 Aug 2026). That the hotel prints it and does not take it is the
+   hotel's business; the note that used to say so on the proposal has been struck
+   out. Staff screens — the Payment review, the lock panel, the billing ledger,
+   the reports — still say it plainly, and must.
    The 18% enters **no** threshold and **no** balance — not the 25% advance, not
    the wedding 50%, not the discount cap, not `balance = payable − paid`. Folding
    it into a balance would leave every booking 18% short of zero for ever and
@@ -222,10 +248,10 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    **The rate is snapshotted at entry** (rule 4) with no live fallback — unlike a room
    requirement, one of these lines never had an enquiry phase to price live for. A category the
    lodge has no priced room of is refused, never zeroed.
-   **Tax follows what the thing is** (rule 11): an extra room is a `rooms` line at 5%, printed
-   and **collected**; in-room dining is a `food` line at 18%, printed and collected from nobody.
-   `lib/tax.ts` needs no new section — using the wrong one of the two is how a counter takes 18%
-   too much or leaves a balance permanently short.
+   **Tax follows what the thing is** (rule 11): an extra room is a `rooms` line, printed and
+   **collected**, at 5% or 18% by its own nightly rate; in-room dining is a `food` line at 18%,
+   printed and collected from nobody. `lib/tax.ts` needs no new section — using the wrong one of
+   the two is how a counter takes 18% too much or leaves a balance permanently short.
    Nights, not dates, is deliberate: this records what was handed over, so it reaches no
    availability check, no rooms board and no lodging calendar. The hard inventory cap (rule 9)
    governs the booking; this governs the bill.

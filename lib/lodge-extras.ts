@@ -4,7 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { assertPaise } from '@/lib/money'
-import { ROOM_GST_BP } from '@/lib/tax'
+import { roomGstBp, taxOf } from '@/lib/tax'
 
 /**
  * The Lodge Manager's extras (client, 15 Aug 2026) — what the desk gave out during the event
@@ -14,7 +14,8 @@ import { ROOM_GST_BP } from '@/lib/tax'
  *    rooms out of whatever is free. Category, count and nights, priced from the lodge's rate
  *    for that category and SNAPSHOTTED at entry (rule 4) — re-pricing the lodge master
  *    tomorrow must not move a figure the guest was shown at checkout. They bill as `rooms`
- *    lines, so they carry the 5% the hotel actually collects.
+ *    lines, so they carry the GST the hotel actually collects — 5% at or under ₹7,500 a night
+ *    and 18% above it (client, 17 Aug 2026), the same band a booked room of that price takes.
  *  - **In-room dining** (`lodge_extras.in_room_dining_paise`): one rupee total for the whole
  *    stay. The kitchen's dockets are the itemisation; this is the figure the desk has. It
  *    bills as a `food` line — 18%, printed and collected from nobody (rule 11).
@@ -222,6 +223,9 @@ export type AdditionalRoomLine = {
   ratePaise: number
   amountPaise: number
   remarks: string | null
+  /** 500 or 1800, by the nightly rate and the category. Derived here, so the panel needs no
+   * copy of the rule and cannot drift from the bill. */
+  gstRateBp: number
 }
 
 /** A lodge + category the desk can hand out, with what it costs a night. */
@@ -231,10 +235,10 @@ export type LodgeExtrasView = {
   closed: boolean
   rooms: AdditionalRoomLine[]
   roomsPaise: number
-  /** 5% on the extra rooms, rounded per line — the only tax here that is money. */
+  /** GST on the extra rooms, rounded per line at 5% or 18% — the only tax here that is money. */
   roomsTaxPaise: number
   inRoomDiningPaise: number
-  /** Rooms + their 5% + dining: what the close will add to the bill. */
+  /** Rooms + their GST + dining: what the close will add to the bill. */
   totalPaise: number
   /** Every priced lodge + category, for the form. Fetched here so the panel needs one request. */
   options: RoomCategoryOption[]
@@ -252,7 +256,7 @@ export async function getLodgeExtras(eventId: string): Promise<LodgeExtrasView> 
       LEFT JOIN lodging_units u ON u.id = a.unit_id
       WHERE a.event_id = ${eventId}
       ORDER BY a.created_at
-    `) as unknown as Promise<AdditionalRoomLine[]>,
+    `) as unknown as Promise<Omit<AdditionalRoomLine, 'gstRateBp'>[]>,
     db.execute(sql`
       SELECT in_room_dining_paise AS "amountPaise" FROM lodge_extras WHERE event_id = ${eventId}
     `) as unknown as Promise<{ amountPaise: number }[]>,
@@ -269,11 +273,18 @@ export async function getLodgeExtras(eventId: string): Promise<LodgeExtrasView> 
     `) as unknown as Promise<RoomCategoryOption[]>,
   ])
 
-  const rooms = rows.map((r) => ({ ...r, ratePaise: Number(r.ratePaise), amountPaise: Number(r.amountPaise) }))
+  const rooms: AdditionalRoomLine[] = rows.map((r) => ({
+    ...r,
+    ratePaise: Number(r.ratePaise),
+    amountPaise: Number(r.amountPaise),
+    gstRateBp: roomGstBp(Number(r.ratePaise), r.roomType),
+  }))
   const roomsPaise = rooms.reduce((n, r) => n + r.amountPaise, 0)
   // Per line, then summed — matches lib/invoice.ts, lib/proposal.ts and lib/payment-schedule.ts,
-  // which would otherwise differ from this panel by a paisa.
-  const roomsTaxPaise = rooms.reduce((n, r) => n + Math.round((r.amountPaise * ROOM_GST_BP) / 10000), 0)
+  // which would otherwise differ from this panel by a paisa. Banded by the NIGHTLY rate, so a
+  // suite handed over on the night carries the same 18% it would have carried if it had been
+  // booked in June (client, 17 Aug 2026).
+  const roomsTaxPaise = rooms.reduce((n, r) => n + taxOf(r.amountPaise, r.gstRateBp), 0)
   const inRoomDiningPaise = header[0] ? Number(header[0].amountPaise) : 0
 
   return {

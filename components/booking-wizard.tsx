@@ -53,7 +53,7 @@ type RoomReq = { unit_id: string; room_type: string; count: number; check_in: st
 type Quote = {
   totalPaise: number
   discountPaise: number
-  /** Venue + food + rooms + the 5% on rooms, less discounts — what is actually collected. */
+  /** Venue + food + rooms + the GST on rooms, less discounts — what is actually collected. */
   payablePaise: number
   /** The 18% printed on the guest's proposal and charged to nobody (client, 4 Aug 2026). */
   shownGstPaise: number
@@ -72,11 +72,23 @@ const STEPS = ['Date & event', 'KYC', 'Functions & menu', 'Rooms', 'Payment revi
 const SUGGESTED_FUNCTIONS = ['Mehndi', 'Haldi', 'Sangeet', 'Wedding', 'Reception', 'Tilak']
 
 /**
- * Basis points. Rooms carry 5% and it is the only GST the hotel actually collects — the 18%
- * added on 4 Aug 2026 is printed on the guest's proposal and enters no threshold, so it plays
- * no part in this step's live estimate. Mirrors ROOM_GST_BP in lib/tax.ts.
+ * Basis points. Room GST is the only one the hotel actually collects — the 18% added on
+ * 4 Aug 2026 on venue, food and add-ons is printed on the guest's proposal and enters no
+ * threshold, so it plays no part in this step's live estimate.
+ *
+ * A room's own nightly rate picks its band: 18% above ₹7,500, 5% at or under it — except a
+ * dormitory, whose rate buys a room of 18–30 beds and which stays at 5% however much it costs
+ * (client, 17 Aug 2026). Mirrors `roomGstBp` in lib/tax.ts, which cannot be imported here — it
+ * is `server-only` and this estimate runs in the browser as the form is typed. The server is
+ * the authority: this figure is replaced by the quote's the moment step 5 loads.
  */
 const ROOM_TAX_BP = 500
+const ROOM_TAX_HIGH_BP = 1800
+const ROOM_TAX_THRESHOLD_PAISE = 750_000
+const roomTaxBp = (nightlyRatePaise: number, roomType: string) =>
+  nightlyRatePaise > ROOM_TAX_THRESHOLD_PAISE && !roomType.toLowerCase().includes('dorm')
+    ? ROOM_TAX_HIGH_BP
+    : ROOM_TAX_BP
 
 export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}) {
   const router = useRouter()
@@ -380,17 +392,24 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
 
   // Lodging estimate: rooms × nights × the type's rack rate. The exact charge is settled when
   // the Lodge Manager allocates real rooms, but the proposal has to show a number.
-  const roomLinePaise = (r: (typeof rooms)[number]) => {
-    // Rate is per lodge + category — the same pairing the server prices with.
-    const rate =
-      options.roomRates?.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
-    return rate * Math.max(0, r.count) * nightsBetween(r.check_in, r.check_out)
-  }
+  // Rate is per lodge + category — the same pairing the server prices with.
+  const roomNightlyRatePaise = (r: (typeof rooms)[number]) =>
+    options.roomRates?.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
+  const roomLinePaise = (r: (typeof rooms)[number]) =>
+    roomNightlyRatePaise(r) * Math.max(0, r.count) * nightsBetween(r.check_in, r.check_out)
   const roomsTotalPaise = rooms.reduce((sum, r) => sum + roomLinePaise(r), 0)
-  // Only rooms are taxed, at 5% (client, 20 Jul 2026) — mirrors GST_BP in lib/invoice.ts.
-  // Rounded per line and then summed, exactly as the payment review does it, so this
-  // estimate and the figure on the Draft can never disagree by a rounding paisa.
-  const roomsTaxPaise = rooms.reduce((sum, r) => sum + Math.round((roomLinePaise(r) * ROOM_TAX_BP) / 10000), 0)
+  // Only rooms are taxed in a way that is collected (client, 20 Jul 2026) — mirrors GST_BP in
+  // lib/invoice.ts. Rounded per line and then summed, exactly as the payment review does it, so
+  // this estimate and the figure on the Draft can never disagree by a rounding paisa. The band
+  // comes off the NIGHTLY rate, so a week of a cheap room never tips itself into 18%.
+  const roomsTaxPaise = rooms.reduce(
+    (sum, r) => sum + Math.round((roomLinePaise(r) * roomTaxBp(roomNightlyRatePaise(r), r.room_type)) / 10000),
+    0,
+  )
+  /** True once any room on the form is in the higher band — the label says 5% or "5% / 18%". */
+  const hasHighTaxRoom = rooms.some(
+    (r) => roomTaxBp(roomNightlyRatePaise(r), r.room_type) === ROOM_TAX_HIGH_BP,
+  )
 
   return (
     <div className="space-y-6">
@@ -534,7 +553,9 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
                 <span className="tabular-nums">{formatPaise(roomsTotalPaise)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Tax — 5% on rooms</span>
+                <span className="text-muted-foreground">
+                  {hasHighTaxRoom ? 'Tax — 5% on rooms, 18% over ₹7,500 a night' : 'Tax — 5% on rooms'}
+                </span>
                 <span className="tabular-nums">+ {formatPaise(roomsTaxPaise)}</span>
               </div>
               <div className="flex justify-between border-t pt-1 font-medium">
@@ -1282,6 +1303,15 @@ function ReviewStep({
   })()
 
   const grossPaise = quote ? quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise : 0
+  // Whether any room on this booking is over ₹7,500 a night and so carries 18% rather than 5%
+  // (client, 17 Aug 2026). Both are collected; the label only has to say which is in play.
+  const hasHighTaxRoom = rooms.some(
+    (r) =>
+      roomTaxBp(
+        roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0,
+        r.room_type,
+      ) === ROOM_TAX_HIGH_BP,
+  )
   // What is actually being collected right now, so the form can say how far short it falls.
   const amountPaise = Number.isFinite(Number(amount)) ? Math.round(Number(amount) * 100) : 0
 
@@ -1367,6 +1397,10 @@ function ReviewStep({
                                 <td className="px-3 py-2 pl-6">
                                   <span className="capitalize">{r.room_type.replace(/_/g, ' ')}</span>
                                   {' — '}{r.count} room{r.count === 1 ? '' : 's'} × {nights} night{nights === 1 ? '' : 's'} × {formatPaise(rate)}
+                                  {/* Which band this line falls in, beside the rate that decides it. */}
+                                  {roomTaxBp(rate, r.room_type) === ROOM_TAX_HIGH_BP && (
+                                    <span className="ml-2 text-xs text-muted-foreground">GST 18%</span>
+                                  )}
                                 </td>
                                 <td className="px-3 py-2 text-right tabular-nums">
                                   {formatPaise(rate * Math.max(0, r.count) * nights)}
@@ -1382,7 +1416,9 @@ function ReviewStep({
                       )
                     })}
                     <tr>
-                      <td className="px-3 py-2 text-muted-foreground">Tax — 5% on rooms</td>
+                      <td className="px-3 py-2 text-muted-foreground">
+                        {hasHighTaxRoom ? 'Tax on rooms — 5%, and 18% over ₹7,500 a night' : 'Tax — 5% on rooms'}
+                      </td>
                       <td className="px-3 py-2 text-right tabular-nums">+ {formatPaise(roomsTaxPaise)}</td>
                     </tr>
                   </>

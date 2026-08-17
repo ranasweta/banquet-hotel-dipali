@@ -158,17 +158,34 @@ because the hard inventory cap counts real rooms (rule 9), but every room of a c
 shares one rate and pricing reads `min(rack_rate_paise)` per category. So the API speaks in
 categories and does the row bookkeeping underneath.
 
-- `GET  /lodge-master` — lodges → categories: `{ roomType, rooms, ratePaise, beds, committedPeak }`.
+- `GET  /lodge-master` — lodges → categories:
+  `{ roomType, rooms, ratePaise, beds, committedPeak, gstRateBp }`.
   `committedPeak` is the most that category is promised on any single night; it is the floor a
   reduction cannot cross, surfaced so the screen can explain a refusal before it happens.
+  `gstRateBp` is 500 or 1800 from `lib/tax.ts` — the band the rate and the name put this
+  category's guests in (rule 11) — returned rather than re-derived on the client so the screen
+  and the bill cannot disagree.
 - `POST /lodge-master/lodges` { name } — a new lodge, with no categories yet.
 - `POST /lodge-master/categories` { unit_id, room_type, rate_paise, rooms, beds } — add a
   category. `room_type` is normalised (`"Semi Suite"` → `semi_suite`), so it cannot be added
   twice under two spellings.
-- `PUT  /lodge-master/categories` { unit_id, room_type, rate_paise?, rooms? } — re-price, resize,
-  or both. **A REDUCTION IS GUARDED**: rooms already promised to committed bookings are counted
-  per night and dropping below the busiest is refused (409) with the number that blocks it.
-  Growing is free. Enquiries hold nothing, so a draft never freezes the Auditor out.
+- `PUT  /lodge-master/categories` { unit_id, room_type, next_room_type?, rate_paise?, rooms? } —
+  rename, re-price, resize, or any combination. **A REDUCTION IS GUARDED**: rooms already
+  promised to committed bookings are counted per night and dropping below the busiest is refused
+  (409) with the number that blocks it. Growing is free. Enquiries hold nothing, so a draft never
+  freezes the Auditor out.
+  **`next_room_type` renames the category and everything that names it** (client, 17 Aug 2026).
+  `room_type` is plain text with no foreign key, so a rename that did not cascade would leave
+  bookings pointing at a category that no longer exists and an enquiry would silently re-price to
+  zero. Exactly three tables hold a live category name and all three move: `rooms` (retired rows
+  included), `room_requirements` and `additional_rooms`, for this lodge. Rows with no `unit_id`
+  (migration 0009) follow only once **no** lodge anywhere still carries the old name — until
+  then they may legitimately have meant another lodge's category. What deliberately does not
+  move: `invoice_lines.description` (a document already issued), `audit_log` (append-only), and
+  the 35+ rooms `exceptions.payload` (a record of what was asked for, read for display only).
+  Normalised like any category name, and refused (409) if the lodge already uses it — retired
+  rooms count, since merging two categories is not a rename. The rename is applied before any
+  rate or count in the same request, and a rename that changes nothing is a no-op.
 - `DELETE /lodge-master/categories` { unit_id, room_type } — retire a category. Same guard as
   shrinking it to zero. Requires **`lodge_master:delete`**.
 
@@ -256,9 +273,11 @@ the 10% discount cap — they are in the settlement and the balance only (CLAUDE
 - `POST /events/:id/lodge-extras/close` — freeze both kinds and let them reach the bill. A
   lock-checklist item (`lodge_extras`), non-blocking and green when there is nothing to close.
 
-**Tax.** An extra room is a room: 5%, printed **and collected**. In-room dining is food: 18%,
-printed and collected from nobody (rule 11). So the bill carries them as `rooms` and `food`
-lines respectively and `lib/tax.ts` needs no new section.
+**Tax.** An extra room is a room: printed **and collected**, at 5% or — over ₹7,500 a night —
+18% (rule 11, FR-11.7a). In-room dining is food: 18%, printed and collected from nobody. So the
+bill carries them as `rooms` and `food` lines respectively and `lib/tax.ts` needs no new
+section. `GET /events/:id/lodge-extras` returns `gstRateBp` per room line, so the panel can show
+the desk which band each one is in without a second copy of the threshold.
 
 ## Extra plates (module: utensils)
 Added 15 Aug 2026 — the Utensil Manager's log. Utensil Manager `edit`, Higher Authority and
@@ -291,8 +310,9 @@ and collected from nobody.
   { capPct, capBasePaise, capPaise, usedPaise, headroomPaise } so a screen can state the
   remaining headroom in rupees.
 - `DELETE /discounts/:id` — remove a discount (and its pending exception)
-- `GET  /events/:id/ledger` — the payable amount (venue + food + rooms + 5% room GST, less
-  discounts), the 18% shown-not-collected GST beside it, payments trail, paid vs balance, and
+- `GET  /events/:id/ledger` — the payable amount (venue + food + rooms + room GST at whichever
+  band each room falls in, less discounts), the 18% shown-not-collected GST beside it,
+  payments trail, paid vs balance, and
   `milestones[]` — 25% advance / wedding 50% at D-30 / 100% settlement, each with required,
   paid, shortfall, dueOn and overdue (4 Aug 2026)
 - `POST /events/:id/payments` { kind, amount_paise, mode, receipt_no, received_on } — unique receipt

@@ -205,7 +205,7 @@ export async function confirmEvent(
           'advance_required',
           `An advance must be recorded to block the dates. The full ${ADVANCE_PCT}% comes to ${rupees(required)} on a payable total of ${rupees(bill.preEventPayablePaise)}${
             bill.roomsPaise > 0
-              ? ` (venue, food and add-ons ${rupees(proposalTotal)} plus rooms ${rupees(bill.roomsPaise + bill.roomsTaxPaise)} including 5% GST)`
+              ? ` (venue, food and add-ons ${rupees(proposalTotal)} plus rooms ${rupees(bill.roomsPaise + bill.roomsTaxPaise)} including GST)`
               : ''
           }; a part payment is accepted and the rest is carried as due.`,
         )

@@ -88,7 +88,9 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
       </div>
       <p className="-mt-3 text-xs text-muted-foreground">
         Venue, food &amp; add-ons {formatPaise(ledger.proposalTotalPaise)}
-        {ledger.roomsPaise > 0 && <> · rooms {formatPaise(ledger.roomsPaise)} + 5% {formatPaise(ledger.roomsTaxPaise)}</>}
+        {/* Room GST is 5% or 18% by the nightly rate (client, 17 Aug 2026) and both are
+            collected, so one figure covers them — the bill's own lines carry the rates. */}
+        {ledger.roomsPaise > 0 && <> · rooms {formatPaise(ledger.roomsPaise)} + GST {formatPaise(ledger.roomsTaxPaise)}</>}
         {ledger.maintenancePaise > 0 && <> · maintenance {formatPaise(ledger.maintenancePaise)}</>}
         {ledger.lodgeExtrasPaise > 0 && <> · lodge extras {formatPaise(ledger.lodgeExtrasPaise)}</>}
         {ledger.extraPlatesPaise > 0 && <> · extra plates {formatPaise(ledger.extraPlatesPaise)}</>}

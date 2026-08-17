@@ -110,13 +110,14 @@ function renderReport(kind: Kind, d: any) {
     case 'revenue':
       return (
         <div className="space-y-4">
-          {/* Two GST figures, because the documents carry two. The 5% on rooms is collected and
-              sits inside "Net billed"; the 18% is printed on every bill and taken from nobody
+          {/* Two GST figures, because the documents carry two. The GST on rooms is collected —
+              5% up to ₹7,500 a night and 18% above it (client, 17 Aug 2026) — and sits inside
+              "Net billed"; the other 18% is printed on every bill and taken from nobody
               (client, 4 Aug 2026), so it is shown apart rather than summed into anything here. */}
           <div className="grid gap-3 sm:grid-cols-5">
             <Stat label="Gross billed" value={formatPaise(d.taxSummary.grossPaise)} />
             <Stat label="Discounts" value={formatPaise(d.taxSummary.discountPaise)} />
-            <Stat label="GST collected (rooms 5%)" value={formatPaise(d.taxSummary.taxPaise)} />
+            <Stat label="GST collected (rooms)" value={formatPaise(d.taxSummary.taxPaise)} />
             <Stat label="GST shown, not taken (18%)" value={formatPaise(d.taxSummary.shownTaxPaise)} />
             <Stat label="Net billed" value={formatPaise(d.taxSummary.netPaise)} />
           </div>

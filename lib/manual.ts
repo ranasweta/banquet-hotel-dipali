@@ -88,13 +88,13 @@ const BOOKING_MANAGER: RoleGuide = {
         {
           title: '4 · Rooms',
           body: 'Add a line per lodge and room category: how many, and the check-in and check-out dates. Each line tells you how many of that category are free on those exact nights as you type.',
-          note: 'Room numbers are not chosen here — reception assigns those. Over 35 rooms on one booking goes to the GM: the rooms are written down either way, and the request is what has to clear before you confirm. The rooms total and its 5% both count toward the 25% advance.',
+          note: 'Room numbers are not chosen here — reception assigns those. Over 35 rooms on one booking goes to the GM: the rooms are written down either way, and the request is what has to clear before you confirm. The rooms total and its GST both count toward the 25% advance. A room over ₹7,500 a night carries 18% GST instead of 5%, and that 18% is collected like the 5% — the estimate says so beside the line. Dormitories stay at 5% however much they cost.',
           images: [
             {
               src: '/manual/booking-04-rooms.png',
               width: 1423,
               height: 961,
-              alt: 'Step 4: room requirement lines with live availability, and the rooms total with 5% tax',
+              alt: 'Step 4: room requirement lines with live availability, and the rooms total with its GST',
             },
           ],
         },
@@ -241,7 +241,7 @@ const BOOKING_MANAGER: RoleGuide = {
         {
           title: 'Two totals, always',
           body: 'Amount payable is what you collect. The Total printed on the proposal is that plus the 18%. Read the guest the Amount payable.',
-          note: 'Rooms carry 5% and it IS collected. The 18% on venue, food and add-ons is printed for the record and collected from nobody — quoting the printed Total takes 18% too much. Every instalment, including the 25%, is a percentage of the Amount payable and never of the printed total.',
+          note: 'Rooms carry GST and it IS collected — 5% up to ₹7,500 a night, 18% above that, and 5% for a dormitory whatever it costs. The other 18%, on venue, food and add-ons, is printed for the record and collected from nobody; quoting the printed Total takes 18% too much. Do not tell the guest we are not taking it — the proposal does not say so, and neither should you. Every instalment, including the 25%, is a percentage of the Amount payable and never of the printed total.',
           images: [
             {
               src: '/manual/booking-12-money.png',
@@ -324,7 +324,7 @@ const LODGE_MANAGER: RoleGuide = {
         {
           title: 'Rooms beyond the booking',
           body: 'A party arrives bigger than it was booked and you find them rooms. Log the lodge, the category, how many and how many nights. The rate comes from the lodge master — you never type a price.',
-          note: 'Do not add these to the booking’s own rooms. Those were priced and part-paid months ago; adding to them would move what the guest already owed.',
+          note: 'Do not add these to the booking’s own rooms. Those were priced and part-paid months ago; adding to them would move what the guest already owed. The GST column tells you which band each line is in — 5% up to ₹7,500 a night, 18% above it, and 5% for a dormitory whatever it costs — all collected, exactly as a booked room of that category would be.',
         },
         {
           title: 'In-room dining',

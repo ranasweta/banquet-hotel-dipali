@@ -3,17 +3,22 @@ import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { effectiveDiscountPaise } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
-import { ROOM_GST_BP } from '@/lib/tax'
+import { roomGstBpSql } from '@/lib/tax'
 
 /**
  * What the guest actually owes, and when — the one arithmetic every screen measures against
  * (client's lead, 4 Aug 2026).
  *
- * THE PAYABLE AMOUNT. Venue + food + add-ons + rooms, less discounts, plus the 5% room tax,
+ * THE PAYABLE AMOUNT. Venue + food + add-ons + rooms, less discounts, plus the room tax,
  * plus CLOSED maintenance. The 18% GST introduced on 4 Aug is printed on the document and
  * collected from nobody, so it appears nowhere in this file. Neither does it enter the 10%
  * discount cap — that is measured pre-tax on the undiscounted bill and stays where it is, in
  * lib/discounts.ts.
+ *
+ * ROOM TAX IS 5% OR 18% BY THE NIGHTLY RATE (client, 17 Aug 2026), and the 18% on a room over
+ * ₹7,500 a night is nothing like the 18% above it: it is COLLECTED. It is inside `roomsTax`
+ * here, inside the payable, and inside every threshold a room charge already entered. Only the
+ * arithmetic changed — the shape of this file did not.
  *
  * MAINTENANCE, AND WHY IT SPLITS THE BASE IN TWO (client, 11 Aug 2026). The bill has always
  * charged closed maintenance and this module never counted it, so the Billing panel read
@@ -23,7 +28,7 @@ import { ROOM_GST_BP } from '@/lib/tax'
  * that met its advance in full would go retrospectively short because a generator ran late.
  * So there are two bases, and each milestone names the one it is owed against:
  *
- *   preEventPayablePaise   venue + food + add-ons + rooms + 5%, less discounts
+ *   preEventPayablePaise   venue + food + add-ons + rooms + room tax, less discounts
  *   payablePaise           that, plus everything logged during and after the event — the
  *                          balance and the settlement
  *
@@ -31,7 +36,7 @@ import { ROOM_GST_BP } from '@/lib/tax'
  * entry is still being typed, and a balance that moves under the guest is worse than a late one.
  *
  * THE LODGE MANAGER'S EXTRAS JOIN IT (client, 15 Aug 2026; migration 0034). Extra rooms handed
- * out during the event, the 5% on them, and in-room dining are logged after the fact for the
+ * out during the event, the tax on them, and in-room dining are logged after the fact for the
  * same reason maintenance is, so they fall on the same side of the split. A wedding party that
  * turns up needing four more rooms in September cannot be allowed to raise the advance that
  * fell due in June. Closed only, again: the Lodge Manager's close is what lets them count.
@@ -70,14 +75,14 @@ export type PayableBreakdown = {
   /** Venue + food + add-ons — what `proposal_total_paise` means. */
   proposalPaise: number
   roomsPaise: number
-  /** 5% on rooms, rounded per line. The only tax that is money. */
+  /** Room GST, rounded per line — 5% or 18% by the nightly rate. Collected either way. */
   roomsTaxPaise: number
   discountPaise: number
   /** Closed maintenance entries. Zero until the Maintenance team closes the event's log. */
   maintenancePaise: number
   /** Extra rooms given during the event. Zero until the Lodge Manager closes the extras log. */
   extraRoomsPaise: number
-  /** 5% on those, rounded per line. Collected, like any other room tax. */
+  /** GST on those, rounded per line at the same 5%/18% band. Collected, like any room tax. */
   extraRoomsTaxPaise: number
   /** In-room dining, one figure for the stay. Zero until the extras log is closed. */
   inRoomDiningPaise: number
@@ -113,7 +118,7 @@ type PayableRow = {
 }
 
 /**
- * The Lodge Manager's closed extras — extra rooms, the 5% on them, and in-room dining.
+ * The Lodge Manager's closed extras — extra rooms, the GST on them, and in-room dining.
  *
  * One helper because all three land on the same side of the split: logged during and after the
  * event, so they are in the settlement and the balance and in neither of the two thresholds
@@ -149,9 +154,16 @@ async function payableRows(
     eventIds.map((id) => sql`${id}::uuid`),
     sql`, `,
   )
+  // `rate` and `room_type` ride along beside `amount` because the room tax band is decided by
+  // the NIGHTLY rate — not the line total — and by the category: 5% at or under ₹7,500, 18%
+  // above it, and 5% for a dormitory whatever it costs (client, 17 Aug 2026). Both bands are
+  // collected, so both stay inside `roomsTax` and the thresholds it feeds.
   const rows = (await exec.execute(sql`
     WITH room_lines AS (
-      SELECT rr.event_id,
+      SELECT rr.event_id, rr.room_type,
+             COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
+                          WHERE r.room_type = rr.room_type AND r.is_active
+                            AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0) AS rate,
              (GREATEST(rr.count, 0)::bigint
               * GREATEST(rr.check_out - rr.check_in, 0)
               * COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
@@ -164,7 +176,7 @@ async function payableRows(
     -- an open log is still being typed. No COALESCE — the rate is snapshotted at entry and
     -- there is no live fallback to fall back to.
     extra_room_lines AS (
-      SELECT a.event_id, a.amount_paise AS amount
+      SELECT a.event_id, a.room_type, a.rate_paise AS rate, a.amount_paise AS amount
       FROM additional_rooms a
       JOIN lodge_extras x ON x.event_id = a.event_id AND x.closed_at IS NOT NULL
       WHERE a.event_id IN (${ids})
@@ -189,7 +201,7 @@ async function payableRows(
                       FROM sub_event_addons a JOIN sub_events se ON se.id = a.sub_event_id
                      WHERE se.event_id = e.id), 0)::bigint AS addons,
            COALESCE((SELECT sum(rl.amount) FROM room_lines rl WHERE rl.event_id = e.id), 0)::bigint AS rooms,
-           COALESCE((SELECT sum(round(rl.amount::numeric * ${ROOM_GST_BP} / 10000))
+           COALESCE((SELECT sum(round(rl.amount::numeric * ${roomGstBpSql(sql`rl.rate`, sql`rl.room_type`)} / 10000))
                       FROM room_lines rl WHERE rl.event_id = e.id), 0)::bigint AS "roomsTax",
            -- CLOSED entries only, exactly as computeBillLines charges them. An open entry is
            -- still being edited by the Maintenance team.
@@ -197,7 +209,7 @@ async function payableRows(
                       WHERE me.event_id = e.id AND me.is_closed), 0)::bigint AS maintenance,
            -- The Lodge Manager's extras, on the same side of the split as maintenance.
            COALESCE((SELECT sum(el.amount) FROM extra_room_lines el WHERE el.event_id = e.id), 0)::bigint AS "extraRooms",
-           COALESCE((SELECT sum(round(el.amount::numeric * ${ROOM_GST_BP} / 10000))
+           COALESCE((SELECT sum(round(el.amount::numeric * ${roomGstBpSql(sql`el.rate`, sql`el.room_type`)} / 10000))
                       FROM extra_room_lines el WHERE el.event_id = e.id), 0)::bigint AS "extraRoomsTax",
            COALESCE((SELECT x.in_room_dining_paise FROM lodge_extras x
                       WHERE x.event_id = e.id AND x.closed_at IS NOT NULL), 0)::bigint AS "inRoomDining",
@@ -231,7 +243,7 @@ async function payableRows(
 }
 
 /**
- * Payable before discounts and before maintenance — proposal + rooms + room tax.
+ * Payable before discounts and before maintenance — proposal + rooms + room tax (5% or 18%).
  *
  * Deliberately excludes maintenance: this is the figure the 25% and the wedding 50% are owed
  * against, and both fall due before a single maintenance entry exists.

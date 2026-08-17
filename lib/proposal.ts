@@ -5,7 +5,7 @@ import { notFound } from '@/lib/api'
 import { effectiveDiscountPaise, listDiscounts, type DiscountRow } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
 import { ADVANCE_PCT, WEDDING_MILESTONE_PCT } from '@/lib/payment-schedule'
-import { ROOM_GST_BP, STANDARD_GST_BP, taxOf } from '@/lib/tax'
+import { ROOM_GST_HIGH_BP, STANDARD_GST_BP, roomGstBp, taxOf } from '@/lib/tax'
 
 /**
  * The guest-facing proposal, shaped exactly like `Hotel-Dipali-Proposal-TEMPLATE_1.html`.
@@ -17,11 +17,15 @@ import { ROOM_GST_BP, STANDARD_GST_BP, taxOf } from '@/lib/tax'
  * same snapshots and returns them assembled rather than flattened.
  *
  * Money follows the rules the rest of the system already enforces:
- *  • Two taxes, two behaviours (client's lead, 4 Aug 2026). Rooms carry 5% and it is real —
+ *  • Two taxes, two behaviours (client's lead, 4 Aug 2026). Rooms carry GST that is real —
  *    inside the payable amount, inside the advance base. Venue, food, add-ons and extras carry
  *    18% which is printed and collected from nobody. Both are rounded PER LINE then summed, the
  *    same order of operations as lib/invoice.ts, so this document and the Draft cannot differ
  *    by a rounding paisa.
+ *  • A room's own rate decides its band — 18% above ₹7,500 a night, 5% at or under it (client,
+ *    17 Aug 2026), and BOTH are collected. `totals.roomTaxSplit` carries the two halves with
+ *    the money each was charged on, because the guest has to be able to see WHICH rooms took
+ *    18% rather than read one blended figure and wonder.
  *  • Because the 18% is never taken, the document carries TWO totals: `displayTotalPaise`, the
  *    "Total" with all tax on it, and `totalPaise`, the amount actually payable. Printing one
  *    number would have staff collecting the wrong one.
@@ -118,6 +122,12 @@ export type ProposalRoomLine = {
   nights: number
   ratePaise: number
   amountPaise: number
+  /**
+   * 500 or 1800 — the band this line's nightly rate and category put it in. Derived here so the
+   * printed document can mark the 18% rooms without carrying its own copy of the threshold and
+   * the dormitory carve-out, which is how the page and the bill would drift apart.
+   */
+  gstRateBp: number
 }
 
 export type ProposalLodge = {
@@ -127,6 +137,19 @@ export type ProposalLodge = {
   roomNights: number
   subtotalPaise: number
 }
+
+/** One side of the room-tax bifurcation: what was charged, and the tax it drew. */
+export type RoomTaxBand = { basePaise: number; taxPaise: number }
+
+/**
+ * Room GST split by the ₹7,500-a-night threshold (client, 17 Aug 2026), booked rooms and the
+ * Lodge Manager's extras together — one pair of lines, as the document prints them.
+ *
+ * Both halves are COLLECTED and both are already inside `roomsTaxPaise` / `extraRoomsTaxPaise`;
+ * this exists so the document can say which is which. `high.basePaise` is zero on the ordinary
+ * booking, and the 18% line is then simply not printed.
+ */
+export type RoomTaxSplit = { low: RoomTaxBand; high: RoomTaxBand }
 
 export type ProposalPayment = {
   id: string
@@ -170,11 +193,18 @@ export type ProposalDocument = {
     /** Venue + food + add-ons — the "proposal total" the glance tile and BR-D2 both mean. */
     proposalPaise: number
     roomsPaise: number
+    /** GST on the booked rooms — 5% or 18% per line by the nightly rate. Collected either way. */
     roomsTaxPaise: number
     /** Extra rooms given during the event. A subset of `extrasPaise`, kept apart for its tax. */
     extraRoomsPaise: number
-    /** 5% on those — collected, like any room tax, and outside the advance base. */
+    /** GST on those — collected, like any room tax, and outside the advance base. */
     extraRoomsTaxPaise: number
+    /**
+     * `roomsTaxPaise + extraRoomsTaxPaise` bifurcated by the ₹7,500 band, so the document can
+     * print "GST 5% — rooms" and "GST 18% — rooms over ₹7,500" as separate lines. A view of
+     * the two figures above, never an addition to them.
+     */
+    roomTaxSplit: RoomTaxSplit
     extrasPaise: number
     discountPaise: number
     /** proposal + rooms + extras − discount, before tax. */
@@ -412,6 +442,22 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   const lodges: ProposalLodge[] = []
   let roomsPaise = 0
   let roomsTaxPaise = 0
+  // The bifurcation the guest reads. Booked rooms and the lodge's extras both land here,
+  // because the statement prints one 5% line and one 18% line over the two of them.
+  const roomTaxSplit: RoomTaxSplit = {
+    low: { basePaise: 0, taxPaise: 0 },
+    high: { basePaise: 0, taxPaise: 0 },
+  }
+  /** Adds one room line to the band its nightly rate and category put it in; returns its tax. */
+  const bandRoomTax = (ratePaise: number, amountPaise: number, roomType: string): number => {
+    const bp = roomGstBp(ratePaise, roomType)
+    const taxPaise = taxOf(amountPaise, bp)
+    const band = bp === ROOM_GST_HIGH_BP ? roomTaxSplit.high : roomTaxSplit.low
+    band.basePaise += amountPaise
+    band.taxPaise += taxPaise
+    return taxPaise
+  }
+
   for (const r of roomRows) {
     const count = num(r.count)
     const nights = num(r.nights)
@@ -419,7 +465,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     const amountPaise = count * nights * ratePaise
     roomsPaise += amountPaise
     // Per line, then summed — matches lib/pricing.ts and lib/invoice.ts exactly.
-    roomsTaxPaise += Math.round((amountPaise * ROOM_GST_BP) / 10000)
+    roomsTaxPaise += bandRoomTax(ratePaise, amountPaise, r.roomType as string)
 
     const name = r.lodge as string
     let lodge = lodges.find((l) => l.name === name)
@@ -437,6 +483,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       nights,
       ratePaise,
       amountPaise,
+      gstRateBp: roomGstBp(ratePaise, r.roomType as string),
     })
     lodge.rooms += count
     lodge.roomNights += count * nights
@@ -447,7 +494,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   // The template has no row for any of them, so the block stays blank until the app has some.
   //
   // The Lodge Manager's extras are CLOSED-only, exactly as maintenance is (migration 0034), and
-  // they are the one kind of extra whose tax is COLLECTED: an extra room is a room, so its 5%
+  // they are the one kind of extra whose tax is COLLECTED: an extra room is a room, so its GST
   // is money and belongs beside `roomsTaxPaise` in the payable, not in the 18% nobody pays.
   // It is kept in its own total rather than folded into `roomsTaxPaise` because that figure
   // feeds `thresholdBasePaise` below, and a room given out in September must not move the
@@ -455,6 +502,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   const extraRoomRows = (await db.execute(sql`
     SELECT COALESCE(u.name, 'Lodging') || ' — extra ' || replace(a.room_type, '_', ' ')
              || ' × ' || a.count || ' room(s) × ' || a.nights || ' night(s)' AS description,
+           a.room_type AS "roomType",
            (a.count * a.nights)::int AS qty, a.rate_paise AS "ratePaise", a.amount_paise AS "amountPaise"
     FROM additional_rooms a
     LEFT JOIN lodging_units u ON u.id = a.unit_id
@@ -463,9 +511,10 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     ORDER BY u.name, a.room_type, a.created_at
   `)) as unknown as Row[]
   const extraRoomsPaise = extraRoomRows.reduce((n, r) => n + num(r.amountPaise), 0)
-  // Per line, then summed — matches lib/invoice.ts and lib/payment-schedule.ts to the paisa.
+  // Per line, then summed — matches lib/invoice.ts and lib/payment-schedule.ts to the paisa,
+  // and banded by the same nightly rate a booked room is banded by.
   const extraRoomsTaxPaise = extraRoomRows.reduce(
-    (n, r) => n + Math.round((num(r.amountPaise) * ROOM_GST_BP) / 10000),
+    (n, r) => n + bandRoomTax(num(r.ratePaise), num(r.amountPaise), r.roomType as string),
     0,
   )
 
@@ -586,6 +635,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       roomsTaxPaise,
       extraRoomsPaise,
       extraRoomsTaxPaise,
+      roomTaxSplit,
       extrasPaise,
       discountPaise,
       subtotalPaise,
