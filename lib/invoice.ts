@@ -5,7 +5,7 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
 import { effectiveDiscountPaise } from '@/lib/discounts'
 import { transitionEvent } from '@/lib/events'
-import { GST_BP, isCollectedSection, taxOf } from '@/lib/tax'
+import { GST_BP, isCollectedSection, roomGstBp, taxOf } from '@/lib/tax'
 
 /**
  * Consolidated invoice (M9, FR-7.3/7.4). Drafted from LOCKED data — venue rate-card
@@ -14,15 +14,18 @@ import { GST_BP, isCollectedSection, taxOf } from '@/lib/tax'
  *
  * TAX comes in two kinds now (client's lead, 4 Aug 2026) and they do not behave alike:
  *
- *   rooms 5%      printed AND collected. It is inside `taxPaise`, inside `netPaise`, and so
- *                 inside the balance the guest is chased for.
+ *   rooms         printed AND collected. It is inside `taxPaise`, inside `netPaise`, and so
+ *   5% or 18%     inside the balance the guest is chased for. Which of the two a room line
+ *                 carries is decided by its NIGHTLY rate — 18% above ₹7,500, 5% at or under
+ *                 it (client, 17 Aug 2026) — never by the line total.
  *   everything    printed and collected from nobody — "at the end we are just showing we are
  *   else 18%      taking 18% gst but we wont be taking it". It lands in `shownTaxPaise`, which
  *                 enters exactly one figure: `displayTotalPaise`, the "Total" on the document.
  *
- * Folding the 18% into `netPaise` would leave `balancePaise` permanently 18% short of zero and
- * no booking could ever be settled. The split lives in lib/tax.ts so every screen agrees, and
- * it is by SECTION — rooms collected, all else shown — not by rate.
+ * Folding the shown 18% into `netPaise` would leave `balancePaise` permanently 18% short of
+ * zero and no booking could ever be settled. The split lives in lib/tax.ts so every screen
+ * agrees, and it is by SECTION — rooms collected, all else shown — NOT by rate: a room over
+ * ₹7,500 and a food line both read 1800 bp, and only one of them is money.
  *
  * Tax is charged per line on the GROSS line amount and rounded per line, so the sum of the
  * line taxes is the authoritative figure (not a percentage of a subtotal, which can differ by
@@ -73,6 +76,9 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   // `functionLabel` groups the printed bill the way the hotel counts — venue, menu and any
   // extras under each function in turn. `section` still decides the tax rate, so the
   // arithmetic is untouched by the grouping.
+  //
+  // `gstBp` overrides the section default, and only rooms use it: their band depends on the
+  // nightly rate, which the section alone cannot know.
   const push = (
     section: string,
     description: string,
@@ -80,8 +86,9 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     ratePaise: number,
     amountPaise: number,
     functionLabel: string | null = null,
+    gstBp?: number,
   ) => {
-    const bp = GST_BP[section] ?? 0
+    const bp = gstBp ?? GST_BP[section] ?? 0
     lines.push({ section, description, qty, ratePaise, gstRateBp: bp, amountPaise, taxPaise: taxOf(amountPaise, bp), functionLabel })
   }
 
@@ -197,10 +204,15 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     WHERE rr.event_id = ${eventId}
     ORDER BY u.name, rr.room_type
   `)) as unknown as { unitName: string | null; roomType: string; count: number; nights: number; ratePaise: number }[]
+  //
+  // The band is read off the NIGHTLY rate, so a ₹11,000 Presidential Suite carries 18% and a
+  // ₹4,500 Deluxe carries 5% on the same bill — and a week of the Deluxe stays at 5% however
+  // large the line total grows. A dormitory is exempt whatever it costs: its rate buys a room
+  // of 18–30 beds, not a bed (client, 17 Aug 2026).
   for (const rm of rooms) {
     const qty = rm.count * rm.nights
     const label = `${rm.unitName ?? 'Lodging'} — ${rm.roomType.replace(/_/g, ' ')} × ${rm.count} room(s) × ${rm.nights} night(s)`
-    push('rooms', label, qty, Number(rm.ratePaise), qty * Number(rm.ratePaise))
+    push('rooms', label, qty, Number(rm.ratePaise), qty * Number(rm.ratePaise), null, roomGstBp(Number(rm.ratePaise), rm.roomType))
   }
 
   // Plates issued beyond the pax a function was catered for (migration 0035) — closed entries
@@ -221,9 +233,10 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
 
   // Extra rooms the Lodge Manager handed out during the event (migration 0034) — closed lines
   // only, exactly as maintenance is charged. They are `rooms` lines because that is what they
-  // are: the guest slept in them and the 5% on them is money the hotel collects. What keeps
-  // them apart from the booking is the description and the fact that they are OUTSIDE the
-  // pre-event base — see lib/payment-schedule.ts.
+  // are: the guest slept in them and the GST on them is money the hotel collects — at the same
+  // 5%/18% band a booked room of that price would carry. What keeps them apart from the booking
+  // is the description and the fact that they are OUTSIDE the pre-event base — see
+  // lib/payment-schedule.ts.
   const extraRooms = (await exec.execute(sql`
     SELECT u.name AS "unitName", a.room_type AS "roomType", a.count::int AS count,
            a.nights::int AS nights, a.rate_paise AS "ratePaise", a.amount_paise AS "amountPaise"
@@ -235,7 +248,7 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
   `)) as unknown as { unitName: string | null; roomType: string; count: number; nights: number; ratePaise: number; amountPaise: number }[]
   for (const rm of extraRooms) {
     const label = `${rm.unitName ?? 'Lodging'} — extra ${rm.roomType.replace(/_/g, ' ')} × ${rm.count} room(s) × ${rm.nights} night(s)`
-    push('rooms', label, rm.count * rm.nights, Number(rm.ratePaise), Number(rm.amountPaise))
+    push('rooms', label, rm.count * rm.nights, Number(rm.ratePaise), Number(rm.amountPaise), null, roomGstBp(Number(rm.ratePaise), rm.roomType))
   }
 
   // In-room dining — one figure for the whole stay (client, 15 Aug 2026). A `food` line, so it
@@ -337,7 +350,7 @@ export type InvoiceView = {
    */
   version: number; supersedesNo: string | null
   grossPaise: number; discountPaise: number
-  /** Tax that is COLLECTED — the 5% on rooms. Part of netPaise, and so of the balance. */
+  /** Tax that is COLLECTED — room GST at 5% or 18%. Part of netPaise, and so of the balance. */
   taxPaise: number
   /** Tax that is SHOWN and never collected — the 18%. In displayTotalPaise and nothing else. */
   shownTaxPaise: number

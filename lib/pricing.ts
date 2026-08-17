@@ -1,7 +1,7 @@
 import 'server-only'
 import { and, desc, eq, lte, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
-import { ROOM_GST_BP } from '@/lib/tax'
+import { roomGstBp, taxOf } from '@/lib/tax'
 
 /** A db handle or a transaction handle — pricing reads must run inside the confirm tx. */
 type Exec = Pick<typeof db, 'select' | 'execute'>
@@ -179,12 +179,15 @@ export async function foodAndAddonTotal(
 
 /**
  * The promised-rooms estimate for an event: per `room_requirements` line,
- * count × nights × the cheapest active rack rate for that type, plus 5% tax.
+ * count × nights × the cheapest active rack rate for that type, plus its room tax.
  *
  * Two things to know about the rate. It is the chosen lodge's rate for that category —
  * Regency deluxe is Rs. 4,500 where Palace deluxe is Rs. 5,000, so the lodge matters. And the
  * tax is rounded PER LINE and summed, matching lib/invoice.ts, so the number quoted here and
  * the number on the Draft cannot differ by a rounding paisa.
+ *
+ * The tax rate is the line's own: 5% at or under ₹7,500 a night, 18% above it (client, 17 Aug
+ * 2026). Both are collected, so both belong in this figure and in the advance base it feeds.
  *
  * Kept separate from `proposal_total_paise` on purpose: that column feeds BR-D2's 10%
  * discount cap, and folding rooms into it would quietly raise the discount ceiling. Rooms
@@ -197,6 +200,9 @@ export async function roomEstimatePaise(
   const rows = (await exec(e).execute(sql`
     SELECT rr.count::int AS count,
            (rr.check_out - rr.check_in)::int AS nights,
+           -- The category decides whether the ₹7,500 threshold applies at all: a dormitory is
+           -- one room of 18–30 beds and stays at 5% however much it costs (client, 17 Aug 2026).
+           rr.room_type AS "roomType",
            -- The proposal now names the lodge (21 Jul 2026), so price at THAT lodge's rate.
            -- The cheapest-across-lodges fallback only applies to rows captured before the
            -- proposal asked, where no unit is recorded and none may be invented.
@@ -212,16 +218,17 @@ export async function roomEstimatePaise(
            )::bigint AS rate
     FROM room_requirements rr
     WHERE rr.event_id = ${eventId}
-  `)) as unknown as { count: number; nights: number; rate: number }[]
+  `)) as unknown as { count: number; nights: number; rate: number; roomType: string }[]
 
   let roomsPaise = 0
   let roomsTaxPaise = 0
   for (const r of rows) {
     const amount = Number(r.rate) * Math.max(0, r.count) * Math.max(0, r.nights)
     roomsPaise += amount
-    // 5%, and the only tax the hotel actually collects — the 18% added on 4 Aug 2026 is
-    // printed on the document and enters no threshold, so it is absent here by design.
-    roomsTaxPaise += Math.round((amount * ROOM_GST_BP) / 10000)
+    // The room's own rate, decided by what ONE night costs — not by the line total, or four
+    // nights of a cheap room would tip itself into the higher band. Collected either way; the
+    // 18% added on 4 Aug 2026 on everything BUT rooms enters no threshold and is absent here.
+    roomsTaxPaise += taxOf(amount, roomGstBp(Number(r.rate), r.roomType))
   }
   return { roomsPaise, roomsTaxPaise }
 }

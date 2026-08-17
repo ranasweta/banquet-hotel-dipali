@@ -4,6 +4,7 @@ import { db } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { assertPaise } from '@/lib/money'
+import { roomGstBp } from '@/lib/tax'
 
 /**
  * The lodge master (client, 13 Aug 2026) — the venue master's counterpart for rooms: lodges,
@@ -23,11 +24,17 @@ import { assertPaise } from '@/lib/money'
  * reduction is refused with the number that blocks it, and the Auditor is told which night.
  * Adding rooms can hurt nobody and is free.
  *
- * **RATES ARE NOT DATED HERE**, unlike venues and menu tiers. A room's rate is snapshotted
- * nowhere: `computeBillLines` and the payable read `min(rack_rate_paise)` live. Dating the
- * rack rate without also snapshotting it onto the booking would be a false promise — the
- * change would still reach every existing bill. Re-pricing therefore moves unbilled bookings,
- * and the screen says so out loud rather than implying a protection that is not there.
+ * **RATES ARE NOT DATED HERE**, unlike venues and menu tiers — they are FROZEN AT CONFIRM
+ * instead (migration 0032). `room_requirements.rate_paise` is written when a booking is
+ * confirmed, and every reader is `COALESCE(rr.rate_paise, <live min>)`. So re-pricing a
+ * category reaches enquiries, which are still quotes, and leaves confirmed bookings on the
+ * rate they were promised. That is what dating the rack rate would have been for, done at the
+ * point where it matters — and it is why the screen no longer warns that a new rate moves
+ * everything unbilled. It does not.
+ *
+ * The one thing to know is the other direction: a post-confirm edit to a booking's rooms
+ * re-freezes at TODAY's rate (`freezeRoomRates`), exactly as a post-confirm venue edit
+ * re-prices. Changing a rate here and then editing that booking's rooms does move it.
  */
 
 /** How the seed numbers rooms: a per-lodge letter and a running number (P101, C101, DORM-A). */
@@ -45,6 +52,14 @@ export type LodgeCategory = {
   beds: number
   /** The most this category is committed to on any single night; a floor under `rooms`. */
   committedPeak: number
+  /**
+   * 500 or 1800 — the GST this category's guests are charged, from `lib/tax.ts` (rule 11).
+   *
+   * Shown on this screen because this screen is where it is DECIDED: the rate typed here is
+   * what puts a category over ₹7,500 and into the 18% band, and the dormitory carve-out is
+   * keyed on the name typed here. Both are invisible otherwise until a guest reads a bill.
+   */
+  gstRateBp: number
 }
 export type Lodge = { id: string; name: string; categories: LodgeCategory[] }
 
@@ -83,16 +98,22 @@ export async function getLodgeCatalog(): Promise<Lodge[]> {
       FROM rooms WHERE is_active
       GROUP BY unit_id, room_type
       ORDER BY room_type
-    `) as unknown as Promise<(Omit<LodgeCategory, 'committedPeak'> & { unitId: string })[]>,
+    `) as unknown as Promise<(Omit<LodgeCategory, 'committedPeak' | 'gstRateBp'> & { unitId: string })[]>,
     committedPeaks(),
   ])
 
   const byUnit = new Map<string, LodgeCategory[]>()
   for (const c of cats) {
     const { unitId, ...rest } = c
+    const ratePaise = Number(rest.ratePaise)
     byUnit.set(unitId, [
       ...(byUnit.get(unitId) ?? []),
-      { ...rest, ratePaise: Number(rest.ratePaise), committedPeak: peaks.get(`${unitId}|${c.roomType}`) ?? 0 },
+      {
+        ...rest,
+        ratePaise,
+        committedPeak: peaks.get(`${unitId}|${c.roomType}`) ?? 0,
+        gstRateBp: roomGstBp(ratePaise, c.roomType),
+      },
     ])
   }
   return lodges.map((l) => ({ ...l, categories: byUnit.get(l.id) ?? [] }))
@@ -242,10 +263,11 @@ export async function setCategoryCount(
 /**
  * Re-prices every room of a category.
  *
- * This DOES move unbilled bookings. Room charges are read live from `min(rack_rate_paise)` —
- * nothing snapshots them onto the event the way a menu or a venue rate is snapshotted — so a
- * change here reaches every proposal and every unissued Draft for that category. Issued
- * documents are safe: an invoice keeps the lines it was issued with.
+ * **This moves ENQUIRIES, not confirmed bookings.** A room's rate is snapshotted onto
+ * `room_requirements` at confirmation (migration 0032) and every reader is
+ * `COALESCE(rr.rate_paise, <live min>)`, so a booking that has been promised a price keeps it.
+ * An enquiry has no snapshot and is still a quote, so it re-prices — which is the point.
+ * Issued documents are safe twice over: an invoice keeps the lines it was issued with.
  */
 export async function setCategoryRate(
   actor: Actor,
@@ -272,6 +294,100 @@ export async function setCategoryRate(
       oldValue: String(before.rate), newValue: String(ratePaise),
     })
   })
+}
+
+/**
+ * Renames a category — the same rooms under a different label (client, 17 Aug 2026).
+ *
+ * **THE NAME IS THE KEY, SO THE RENAME HAS TO CASCADE.** `room_type` is plain text with no
+ * foreign key: pricing, the availability check and the bill all join `rooms` to a booking on
+ * the string. Renaming `rooms` alone would leave every requirement pointing at a category that
+ * no longer exists, and `min(rack_rate_paise)` would find nothing — a confirmed booking would
+ * survive on its frozen rate (migration 0032) while every enquiry quietly re-priced to ZERO,
+ * which is the one thing a missing rate must never do (docs/SEED_ASSUMPTIONS.md).
+ *
+ * **THREE TABLES HOLD A LIVE CATEGORY NAME AND ALL THREE MOVE** — `rooms` (retired rows
+ * included: they are the same category, and one that shrank and grew again must not come back
+ * under its old name), `room_requirements` (what was sold) and `additional_rooms` (what the
+ * desk handed over). Nothing else in the schema stores one. What deliberately does NOT move:
+ *
+ *   invoice_lines.description   a document the guest holds. It says what it said when it was
+ *                               issued, and a redraft rebuilds it from the booking anyway.
+ *   audit_log                   append-only by construction, and the record of the rename is
+ *                               itself one of its rows.
+ *   exceptions.payload          the 35+ rooms request records what was ASKED FOR at the time;
+ *                               it is read for display only (lib/approvals.ts) and inserts
+ *                               nothing, so a stale name there breaks no lookup.
+ *
+ * **ROWS THAT NAME NO LODGE.** `room_requirements.unit_id` is nullable — rows captured before
+ * the proposal asked which lodge (migration 0009) — and they price off `min(rack_rate_paise)`
+ * across every lodge carrying the name. Renaming one lodge's category leaves them alone while
+ * ANOTHER lodge still has the old name, because they may well have meant that one. Once no
+ * lodge anywhere has it, they would resolve to nothing and price at zero, so at that point
+ * they follow the rename too. That is the only reading under which they are not orphaned.
+ */
+export async function renameCategory(
+  actor: Actor,
+  unitId: string,
+  roomType: string,
+  nextRoomType: string,
+): Promise<string> {
+  const from = assertRoomType(roomType)
+  const to = assertRoomType(nextRoomType)
+  if (from === to) return to
+
+  await db.transaction(async (tx) => {
+    const lodge = await loadLodge(tx, unitId)
+    const [{ n }] = (await tx.execute(sql`
+      SELECT count(*)::int AS n FROM rooms WHERE unit_id = ${unitId} AND room_type = ${from}
+    `)) as unknown as { n: number }[]
+    if (n === 0) throw notFound('That category is not in this lodge.')
+
+    // Retired rows count: renaming onto them would merge two categories into one and there
+    // would be no way back to the pair.
+    const [{ n: clash }] = (await tx.execute(sql`
+      SELECT count(*)::int AS n FROM rooms WHERE unit_id = ${unitId} AND room_type = ${to}
+    `)) as unknown as { n: number }[]
+    if (clash > 0) throw conflict(`${lodge.name} already has a ${to.replace(/_/g, ' ')} category.`)
+
+    await tx.execute(sql`
+      UPDATE rooms SET room_type = ${to} WHERE unit_id = ${unitId} AND room_type = ${from}
+    `)
+    await tx.execute(sql`
+      UPDATE room_requirements SET room_type = ${to}
+       WHERE unit_id = ${unitId} AND room_type = ${from}
+    `)
+    await tx.execute(sql`
+      UPDATE additional_rooms SET room_type = ${to}
+       WHERE unit_id = ${unitId} AND room_type = ${from}
+    `)
+
+    // The lodge-less rows, once — and only once — no lodge anywhere still answers to the old
+    // name. Run AFTER the `rooms` update above, so "anywhere" means after this rename.
+    const [{ n: elsewhere }] = (await tx.execute(sql`
+      SELECT count(*)::int AS n FROM rooms WHERE room_type = ${from}
+    `)) as unknown as { n: number }[]
+    // The NAME only. `unit_id` stays NULL: which lodge those rooms came from was never
+    // recorded and must not be invented here (migration 0009's note). Renaming is enough —
+    // their `unit_id IS NULL` lookup matches whichever lodge carries the name, which after
+    // this rename is this one.
+    if (elsewhere === 0) {
+      await tx.execute(sql`
+        UPDATE room_requirements SET room_type = ${to} WHERE unit_id IS NULL AND room_type = ${from}
+      `)
+      await tx.execute(sql`
+        UPDATE additional_rooms SET room_type = ${to} WHERE unit_id IS NULL AND room_type = ${from}
+      `)
+    }
+
+    await audit(tx, actor, {
+      entity: 'rooms', entityId: unitId, action: 'update', field: 'category name',
+      oldValue: `${lodge.name} · ${from}`, newValue: `${lodge.name} · ${to}`,
+    })
+  })
+  // The normalised name, so a caller that goes on to re-price or resize the same category in
+  // the same request addresses it by the name it now has.
+  return to
 }
 
 /** Adds a category to a lodge: a name, a nightly rate, and how many rooms of it there are. */

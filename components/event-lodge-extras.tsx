@@ -36,6 +36,8 @@ type RoomLine = {
   ratePaise: number
   amountPaise: number
   remarks: string | null
+  /** 500 or 1800 — the band this room's nightly rate puts it in. Both are collected. */
+  gstRateBp: number
 }
 type Option = { unitId: string; unitName: string; roomType: string; ratePaise: number }
 type View = {
@@ -81,8 +83,10 @@ export function EventLodgeExtras({ eventId, editable }: { eventId: string; edita
         <div className="text-sm text-muted-foreground">
           Extras total:{' '}
           <span className="font-medium tabular-nums text-foreground">{formatPaise(view.totalPaise)}</span>
+          {/* 5% at or under ₹7,500 a night, 18% above it — both collected (client, 17 Aug
+              2026). The GST column in the table below says which room took which. */}
           {view.roomsTaxPaise > 0 && (
-            <span className="ml-1">(incl. {formatPaise(view.roomsTaxPaise)} GST 5% on rooms)</span>
+            <span className="ml-1">(incl. {formatPaise(view.roomsTaxPaise)} GST on rooms)</span>
           )}
           {view.closed && (
             <Badge variant="outline" className="ml-2 text-muted-foreground">
@@ -102,6 +106,9 @@ export function EventLodgeExtras({ eventId, editable }: { eventId: string; edita
                 <TableHead className="text-right">Rooms</TableHead>
                 <TableHead className="text-right">Nights</TableHead>
                 <TableHead className="text-right">Rate / night</TableHead>
+                {/* The band, per line — a room over ₹7,500 a night is charged 18% and the
+                    rest 5%, and the desk has to be able to see which is which. */}
+                <TableHead className="text-right">GST</TableHead>
                 <TableHead className="text-right">Amount</TableHead>
                 {canEdit && <TableHead />}
               </TableRow>
@@ -116,6 +123,9 @@ export function EventLodgeExtras({ eventId, editable }: { eventId: string; edita
                   <TableCell className="text-right tabular-nums">{r.count}</TableCell>
                   <TableCell className="text-right tabular-nums">{r.nights}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatPaise(r.ratePaise)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {(r.gstRateBp / 100).toFixed(0)}%
+                  </TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{formatPaise(r.amountPaise)}</TableCell>
                   {canEdit && (
                     <TableCell className="text-right">

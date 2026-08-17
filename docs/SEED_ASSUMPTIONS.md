@@ -773,12 +773,48 @@ charged at **18% on venue, food, add-ons and maintenance** and **5% on rooms** �
 5% is money. The 18% is printed on the document and taken from nobody: *"at the end we are
 just showing we are taking 18% gst but we wont be taking it."*
 
+**Amended again 17 Aug 2026 (client): a room over ₹7,500 a night is taxed at 18%, not 5% —
+and that 18% IS collected.** *"if the room price is greater then 7500 then on it we will take
+18% rather then 5% tax but that 18% tax will be added to payable."* Strictly above, so a room
+at exactly ₹7,500 stays at 5%. In the seed that puts Palace and Residency **Suite** (₹8,000) and
+Regency's **Presidential Suite** (₹11,000) in the higher band, and every Deluxe (₹4,500–5,000),
+Semi Suite and Semi Deluxe in the lower one.
+
+**Dormitories are excluded** (client, same instruction). Palace's is ₹35,000 a night and
+Regency's ₹50,000, so a rate test alone would put both in the top band — but that rate buys a
+room of 18–30 beds, roughly ₹1,900 a head, and the threshold is written for a room one party
+sleeps in. A dormitory stays at 5% whatever it costs.
+
+The carve-out is keyed on the **category name** — anything containing `dorm`, case-insensitive —
+because `room_type` is free text and each lodge names its own categories (there is no enum to
+hang it on, and adding one would fight the rename feature added the same day). **A consequence
+to know:** renaming a dormitory category to something without "dorm" in it moves it into the 18%
+band. The lodge master shows each category's GST band beside its rate and says so on the screen,
+so the input and its consequence are in the same place.
+
 That distinction is the whole of the design:
 
 | | Rate | Printed | Collected | In the 25% / 50% / cap bases |
 |---|---|---|---|---|
-| Rooms | 5% | yes | **yes** | **yes** (the 5%; see §F10) |
+| Rooms ≤ ₹7,500 / night | 5% | yes | **yes** | **yes** (see §F10) |
+| Rooms > ₹7,500 / night | **18%** | yes | **yes** | **yes** (see §F10) |
+| Dormitories, any rate | 5% | yes | **yes** | **yes** (see §F10) |
 | Venue, food, add-ons, maintenance | 18% | yes | **no** | no |
+
+**The two 18%s are different money and must never be summed.** A room's is collected and a
+food line's is not, which is why the collected/shown split stays keyed on the **section**
+(`isCollectedSection`) and only the RATE is decided per line, by `roomGstBp(nightlyRatePaise)`.
+A rate-based test would drop every expensive room into the shown bucket and silently stop
+charging the tax this rule exists to charge.
+
+**The band is the NIGHTLY rate, not the line total.** Ten Deluxe for six nights is ₹3,00,000 of
+accommodation and still 5%. Reading the amount instead would tax half the hotel at 18%.
+
+**The bifurcation is printed.** `lib/proposal.ts` returns `totals.roomTaxSplit` — the two bands
+with the money each was charged on, booked rooms and the Lodge Manager's day-of extras together
+— and `components/invoice-print.tsx` prints them as separate GST lines, marking the accommodation
+lines that are in the higher band. One blended figure would leave a guest unable to check it.
+`tests/room-gst-band.integration.test.ts` pins the whole rule down.
 
 So every money view carries **two** totals — `Total` and `Amount payable` — and shows both.
 A single headline figure is how a counter collects 18% too much. In the data:
@@ -796,6 +832,16 @@ implemented as instructed. **One sample bill should go in front of the hotel's A
 real guest sees one.** If the answer comes back differently, the fix is small and local: either
 drop `STANDARD_GST_BP` to 0 in `lib/tax.ts`, or keep the figure on internal views and omit the
 line from `components/invoice-print.tsx`.
+
+**And the document no longer explains it** (client, 17 Aug 2026). The proposal used to carry
+two notes saying the 18% was shown for the guest's records and not collected — under the
+Amount Payable, and again in Inclusions. Both are struck out: *"only officials should be
+knowing that we are not taking 18% tax, it should not be on paper."* The two totals still
+print, and every instalment is still measured against the payable one; only the explanation is
+gone. The staff-facing views — the wizard's Payment review, the lock/billing panel, the
+reports — keep saying it plainly, and should, since a counter reading one figure is exactly the
+failure §F8 exists to prevent. Note that this makes the sample-bill review above **more**
+important, not less: the printed document now shows a tax line with nothing beside it.
 
 *Superseded, kept for the record:* on 20 Jul 2026 the client instructed that **only rooms are
 taxed, at 5%**, with venue, food and maintenance zero-rated — replacing the placeholder rates

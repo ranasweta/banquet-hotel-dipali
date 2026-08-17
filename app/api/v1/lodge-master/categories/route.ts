@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
-import { addCategory, removeCategory, setCategoryCount, setCategoryRate } from '@/lib/lodge-master'
+import { addCategory, removeCategory, renameCategory, setCategoryCount, setCategoryRate } from '@/lib/lodge-master'
 
 const target = z.object({ unit_id: z.uuid(), room_type: z.string().min(1).max(60) })
 
@@ -28,7 +28,8 @@ export const POST = route(async (req: NextRequest) => {
 })
 
 /**
- * PUT /lodge-master/categories — change a category's nightly rate, its room count, or both.
+ * PUT /lodge-master/categories — change a category's name, its nightly rate, its room count,
+ * or any combination.
  *
  * A REDUCTION IS GUARDED: rooms already promised to confirmed bookings are counted per night,
  * and dropping below the busiest of those is refused with the number that blocks it (409).
@@ -36,6 +37,7 @@ export const POST = route(async (req: NextRequest) => {
  */
 const putSchema = target.and(
   z.object({
+    next_room_type: z.string().min(1).max(60).optional(),
     rate_paise: z.number().int().positive().optional(),
     rooms: z.number().int().nonnegative().optional(),
   }),
@@ -44,10 +46,17 @@ const putSchema = target.and(
 export const PUT = route(async (req: NextRequest) => {
   const actor = await requirePermission('lodge_master', 'create_edit')
   const b = putSchema.parse(await req.json())
-  // Rate first: adding rooms copies the category's rate onto the new rows, so re-pricing and
-  // growing in one call should put the NEW price on them.
-  if (b.rate_paise != null) await setCategoryRate(actor, b.unit_id, b.room_type, b.rate_paise)
-  if (b.rooms != null) await setCategoryCount(actor, b.unit_id, b.room_type, b.rooms)
+  // The rename runs FIRST and everything after it addresses the new name — otherwise a form
+  // that renames and re-prices in one press would look the category up under a name that no
+  // longer exists. `renameCategory` returns the normalised name for exactly that.
+  const roomType =
+    b.next_room_type != null
+      ? await renameCategory(actor, b.unit_id, b.room_type, b.next_room_type)
+      : b.room_type
+  // Rate before count: adding rooms copies the category's rate onto the new rows, so re-pricing
+  // and growing in one call should put the NEW price on them.
+  if (b.rate_paise != null) await setCategoryRate(actor, b.unit_id, roomType, b.rate_paise)
+  if (b.rooms != null) await setCategoryCount(actor, b.unit_id, roomType, b.rooms)
   return ok({ ok: true })
 })
 

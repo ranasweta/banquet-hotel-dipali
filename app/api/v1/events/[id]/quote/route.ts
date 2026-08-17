@@ -44,12 +44,13 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
     roomsPaise: bill.roomsPaise,
     roomsTaxPaise: bill.roomsTaxPaise,
     discountPaise: bill.discountPaise,
-    // Everything the guest actually pays: venue + food + rooms + the 5%, less discounts.
+    // Everything the guest actually pays: venue + food + rooms + their GST (5%, or 18% on a
+    // room over ₹7,500 a night — client, 17 Aug 2026), less discounts.
     payablePaise: bill.payablePaise,
     shownGstPaise,
     displayTotalPaise: bill.payablePaise + shownGstPaise,
     paidPaise: bill.paidPaise,
-    // The 25% is measured on the payable amount, rooms and their 5% included (client,
+    // The 25% is measured on the payable amount, rooms and their GST included (client,
     // 20/25 Jul 2026 — see SEED_ASSUMPTIONS §F10). The 18% is not in it, and neither is
     // maintenance: both of these fall due before the event runs (client, 11 Aug 2026).
     advanceRequiredPaise: percentOfPaise(bill.preEventPayablePaise, ADVANCE_PCT),

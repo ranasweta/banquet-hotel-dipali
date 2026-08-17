@@ -26,7 +26,7 @@ type Invoice = {
   /** >1 once the Higher Authority has changed a billed booking and it was re-issued. */
   version: number; supersedesNo: string | null
   grossPaise: number; discountPaise: number
-  /** Collected — the 5% on rooms. Inside netPaise. */
+  /** Collected — the GST on rooms, 5% or 18% by nightly rate. Inside netPaise. */
   taxPaise: number
   /** Shown and never collected — the 18%. Inside displayTotalPaise only. */
   shownTaxPaise: number
@@ -163,8 +163,11 @@ export function EventLockInvoice({ eventId, role, isAuditor }: { eventId: string
           <dl className="mt-3 ml-auto max-w-xs space-y-1 text-sm">
             <Row label="Sub-total" value={formatPaise(invoice.grossPaise)} />
             {invoice.discountPaise > 0 && <Row label="Less discounts" value={`− ${formatPaise(invoice.discountPaise)}`} />}
-            <Row label="GST 5% — rooms" value={`+ ${formatPaise(invoice.taxPaise)}`} />
-            <Row label="GST 18%" value={`+ ${formatPaise(invoice.shownTaxPaise)}`} />
+            {/* Room GST at both bands: 5% at or under ₹7,500 a night, 18% above it (client,
+                17 Aug 2026). Both are collected, so both are in this one figure — the per-line
+                rate above says which room took which. The 18% BELOW it is the other kind. */}
+            <Row label="GST on rooms — 5% / 18%" value={`+ ${formatPaise(invoice.taxPaise)}`} />
+            <Row label="GST 18% — venue, food, add-ons" value={`+ ${formatPaise(invoice.shownTaxPaise)}`} />
             <Row label="Total" value={formatPaise(invoice.displayTotalPaise)} bold />
             {/* Two totals, deliberately. The 18% is printed and collected from nobody (client,
                 4 Aug 2026), so what the guest settles against is the smaller figure — and a
