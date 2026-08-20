@@ -2,6 +2,7 @@ import 'server-only'
 import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { listExceptions, type ExceptionRow } from '@/lib/approvals'
+import { balancesByEvent } from '@/lib/payment-schedule'
 
 /**
  * Role home dashboards. Every signed-in user lands on `/`, which dispatches to the board for
@@ -158,15 +159,14 @@ export async function getBookingDashboard(asOf: string = todayLocal()): Promise<
              (ev.event_date - ${asOf}::date) AS "daysToEvent",
              (ev.event_date - 30)::text AS "balanceDueOn",
              ev."proposalTotalPaise",
-             ev."proposalTotalPaise"
-               - COALESCE((SELECT sum(discount_paise) FROM room_allocations WHERE event_id = ev.id), 0)
-               - COALESCE((SELECT sum(d.amount_paise) FROM discounts d
-                           LEFT JOIN exceptions x ON x.id = d.exception_id
-                           WHERE d.event_id = ev.id
-                             AND (d.exception_id IS NULL OR x.status IN ('approved','approved_modified'))), 0)
-               - COALESCE((SELECT sum(CASE WHEN kind = 'refund' THEN -amount_paise ELSE amount_paise END)
-                           FROM payments WHERE event_id = ev.id), 0)
-               AS "outstandingPaise"
+             -- Filled in below by lib/payment-schedule.ts. This query no longer prices anything:
+             -- it used to compute the outstanding figure itself, from the proposal total less
+             -- every discount less payments, and that base is venue + food ALONE. It carried no
+             -- rooms, no room tax, no maintenance and none of the lodge's or kitchen's extras,
+             -- so the tile disagreed with the Billing panel on any booking with rooms — and a
+             -- ROOM discount subtracted money the base had never included, understating what
+             -- the guest owed. One arithmetic, in one place (20 Aug 2026).
+             0::bigint AS "outstandingPaise"
       FROM ev
       WHERE ev.event_date IS NOT NULL
         AND ev.event_date >= ${asOf}::date
@@ -176,6 +176,11 @@ export async function getBookingDashboard(asOf: string = todayLocal()): Promise<
 
     listExceptions({ status: 'pending' }),
   ])
+
+  // What each of these bookings actually owes, from the module that owns the arithmetic —
+  // rooms, room tax, closed maintenance, the lodge's extras and the kitchen's plates included,
+  // less discounts, less what has been paid. The query above no longer prices anything.
+  const balances = await balancesByEvent(paymentsDue.map((p) => p.eventId as string))
 
   return {
     asOf,
@@ -187,7 +192,7 @@ export async function getBookingDashboard(asOf: string = todayLocal()): Promise<
       .map((p) => ({
         ...p,
         daysToEvent: Number(p.daysToEvent),
-        outstandingPaise: Number(p.outstandingPaise),
+        outstandingPaise: balances.get(p.eventId as string)?.balancePaise ?? 0,
         proposalTotalPaise: Number(p.proposalTotalPaise),
       }))
       .filter((p) => p.outstandingPaise > 0),

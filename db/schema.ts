@@ -540,6 +540,9 @@ export const discounts = pgTable("discounts", {
 	exceptionId: uuid("exception_id"),
 	givenBy: uuid("given_by").notNull(),
 	givenAt: timestamp("given_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	// The line this discount prices — migration 0036. NULL = a pre-20-Aug-2026 lump discount,
+	// subtracted at the end of the bill instead of off a line.
+	lineKey: text("line_key"),
 }, (table) => [
 	foreignKey({
 			columns: [table.eventId],
@@ -728,6 +731,9 @@ export const invoiceLines = pgTable("invoice_lines", {
 	gstRateBp: integer("gst_rate_bp").default(0).notNull(),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	amountPaise: bigint("amount_paise", { mode: "number" }).notNull(),
+	// The undiscounted price, printed in the Actual column (migration 0036). NULL = never
+	// discounted, read as equal to amountPaise.
+	grossAmountPaise: bigint("gross_amount_paise", { mode: "number" }),
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	taxPaise: bigint("tax_paise", { mode: "number" }).default(0).notNull(),
 }, (table) => [

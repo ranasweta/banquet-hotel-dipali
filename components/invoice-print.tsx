@@ -184,6 +184,11 @@ function useFitToPane() {
 export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
   const ref = useFitToPane()
   const { event, contacts, functions, lodges, extras, totals, counts } = doc
+  // The Actual column appears only when something was actually given (client, 20 Aug 2026:
+  // "you can add the discounted column while also keeping the actual column to show the client
+  // we have given them discount"). On a proposal at list price it would be two identical
+  // columns of figures, which reads as a mistake rather than as a courtesy.
+  const showActual = totals.lineDiscountPaise > 0
   const docName = doc.doc.isDraft2 ? 'DRAFT 2' : 'DRAFT'
   const words = paiseToWords(totals.totalPaise)
   const runFrom = event.plannedFrom ?? event.firstDate
@@ -381,7 +386,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                   )}
 
                   {functions.map((f) => (
-                    <FunctionBlock key={`${f.name}-${f.date}-${f.startTime}`} fn={f} />
+                    <FunctionBlock key={`${f.name}-${f.date}-${f.startTime}`} fn={f} showActual={showActual} />
                   ))}
 
                   {/* ══════════ ROOMS ══════════ */}
@@ -410,26 +415,32 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         <table>
                           <thead>
                             <tr>
-                              <th style={{ width: '46%' }}>Lodge / Category</th>
-                              <th className="c" style={{ width: '12%' }}>
+                              <th style={{ width: showActual ? '40%' : '46%' }}>Lodge / Category</th>
+                              <th className="c" style={{ width: showActual ? '10%' : '12%' }}>
                                 Rooms
                               </th>
-                              <th className="n" style={{ width: '18%' }}>
+                              <th className="n" style={{ width: showActual ? '16%' : '18%' }}>
                                 Nights × Rate
                               </th>
-                              <th className="n" style={{ width: '24%' }}>
-                                Amount (₹)
+                              {showActual && (
+                                <th className="n" style={{ width: '17%' }}>
+                                  Actual (₹)
+                                </th>
+                              )}
+                              <th className="n" style={{ width: showActual ? '17%' : '24%' }}>
+                                {showActual ? 'Payable (₹)' : 'Amount (₹)'}
                               </th>
                             </tr>
                           </thead>
                           <tbody>
                             {lodges.map((l) => (
-                              <Lodge key={l.name} lodge={l} multi={lodges.length > 1} />
+                              <Lodge key={l.name} lodge={l} multi={lodges.length > 1} showActual={showActual} />
                             ))}
                             <tr className="sub">
                               <td colSpan={3} className="lbl">
                                 Accommodation sub-total &nbsp;·&nbsp; {roomsAndNights(counts.rooms, counts.roomNights)}
                               </td>
+                              {showActual && <td className="n val was">{formatPaise(totals.actualRoomsPaise)}</td>}
                               <td className="n val">{formatPaise(totals.roomsPaise)}</td>
                             </tr>
                           </tbody>
@@ -454,15 +465,20 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                         <table>
                           <thead>
                             <tr>
-                              <th style={{ width: '46%' }}>Particulars</th>
-                              <th className="c" style={{ width: '12%' }}>
+                              <th style={{ width: showActual ? '40%' : '46%' }}>Particulars</th>
+                              <th className="c" style={{ width: showActual ? '10%' : '12%' }}>
                                 Qty
                               </th>
-                              <th className="n" style={{ width: '18%' }}>
+                              <th className="n" style={{ width: showActual ? '16%' : '18%' }}>
                                 Rate
                               </th>
-                              <th className="n" style={{ width: '24%' }}>
-                                Amount (₹)
+                              {showActual && (
+                                <th className="n" style={{ width: '17%' }}>
+                                  Actual (₹)
+                                </th>
+                              )}
+                              <th className="n" style={{ width: showActual ? '17%' : '24%' }}>
+                                {showActual ? 'Payable (₹)' : 'Amount (₹)'}
                               </th>
                             </tr>
                           </thead>
@@ -476,6 +492,9 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                                 </td>
                                 <td className="c calc">{x.qty}</td>
                                 <td className="n calc">{formatPaise(x.ratePaise)}</td>
+                                {/* Extras are logged after the event on actuals — there is no
+                                    quoted price to discount, so both columns read the same. */}
+                                {showActual && <td className="n amt">{formatPaise(x.amountPaise)}</td>}
                                 <td className="n amt">{formatPaise(x.amountPaise)}</td>
                               </tr>
                             ))}
@@ -483,6 +502,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                               <td colSpan={3} className="lbl">
                                 Extras sub-total
                               </td>
+                              {showActual && <td className="n val">{formatPaise(totals.extrasPaise)}</td>}
                               <td className="n val">{formatPaise(totals.extrasPaise)}</td>
                             </tr>
                           </tbody>
@@ -519,6 +539,18 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                               Extras <small>billed on actuals</small>
                             </div>
                             <div className="v">{formatPaise(totals.extrasPaise)}</div>
+                          </div>
+                        )}
+                        {/* What the two columns above come to. Not a deduction — the figures
+                            above are already net of it — so it is labelled as what it is and
+                            the arithmetic does not touch it. Without this the guest can see
+                            each line's saving and nowhere the total of them. */}
+                        {showActual && (
+                          <div className="sline">
+                            <div className="l">
+                              Discount given <small>included in the figures above</small>
+                            </div>
+                            <div className="v">— {formatPaise(totals.lineDiscountPaise)}</div>
                           </div>
                         )}
                         <div className="sline">
@@ -852,7 +884,7 @@ function PillRow({ title, tag }: { title: string; tag: string }) {
  * or chef line broken out of it. Those are the rules the hotel prices BY, not terms the guest
  * is party to, and the same figures reach them either way (client, 5 Aug 2026).
  */
-function FunctionBlock({ fn }: { fn: ProposalFunction }) {
+function FunctionBlock({ fn, showActual }: { fn: ProposalFunction; showActual: boolean }) {
   return (
     <div className="fn avoid">
       <div className="fn-bar">
@@ -869,15 +901,20 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
       <table>
         <thead>
           <tr>
-            <th style={{ width: '46%' }}>Particulars</th>
-            <th className="c" style={{ width: '12%' }}>
+            <th style={{ width: showActual ? '40%' : '46%' }}>Particulars</th>
+            <th className="c" style={{ width: showActual ? '10%' : '12%' }}>
               Qty
             </th>
-            <th className="n" style={{ width: '18%' }}>
+            <th className="n" style={{ width: showActual ? '16%' : '18%' }}>
               Rate
             </th>
-            <th className="n" style={{ width: '24%' }}>
-              Amount (₹)
+            {showActual && (
+              <th className="n" style={{ width: '17%' }}>
+                Actual (₹)
+              </th>
+            )}
+            <th className="n" style={{ width: showActual ? '17%' : '24%' }}>
+              {showActual ? 'Payable (₹)' : 'Amount (₹)'}
             </th>
           </tr>
         </thead>
@@ -920,6 +957,15 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
                   formatPaise(fn.venueRatePaise)
                 )}
               </td>
+              {showActual && (
+                <td className="n amt was">
+                  {fn.venueCoveredBy
+                    ? formatPaise(0)
+                    : fn.venueActualPaise == null
+                      ? '—'
+                      : formatPaise(fn.venueActualPaise)}
+                </td>
+              )}
               <td className="n amt">
                 {fn.venueCoveredBy
                   ? formatPaise(0)
@@ -943,6 +989,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
               </td>
               <td className="c calc">{fn.pax} pax</td>
               <td className="n calc">{formatPaise(fn.menu.perPlatePaise)} / plate</td>
+              {showActual && <td className="n amt was">{formatPaise(fn.foodActualPaise)}</td>}
               <td className="n amt">{formatPaise(fn.foodAmountPaise)}</td>
             </tr>
           )}
@@ -957,6 +1004,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
                 <td className="n calc">
                   <span className="free">COMPLIMENTARY</span>
                 </td>
+                {showActual && <td className="n amt">{formatPaise(0)}</td>}
                 <td className="n amt">{formatPaise(0)}</td>
               </tr>
             ) : (
@@ -966,6 +1014,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
                 </td>
                 <td className="c calc">{a.qty}</td>
                 <td className="n calc">{formatPaise(a.ratePaise)}</td>
+                {showActual && <td className="n amt">{formatPaise(a.amountPaise)}</td>}
                 <td className="n amt">{formatPaise(a.amountPaise)}</td>
               </tr>
             ),
@@ -981,6 +1030,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
               </td>
               <td className="c calc">{b.bottles}</td>
               <td className="n calc">{formatPaise(b.ratePaise)}</td>
+              {showActual && <td className="n amt">{formatPaise(b.amountPaise)}</td>}
               <td className="n amt">{formatPaise(b.amountPaise)}</td>
             </tr>
           ))}
@@ -988,6 +1038,7 @@ function FunctionBlock({ fn }: { fn: ProposalFunction }) {
             <td colSpan={3} className="lbl">
               {titleCase(fn.name)} sub-total
             </td>
+            {showActual && <td className="n val was">{formatPaise(fn.actualSubtotalPaise)}</td>}
             <td className="n val">{formatPaise(fn.subtotalPaise)}</td>
           </tr>
         </tbody>
@@ -1099,11 +1150,11 @@ function MenuPages({ doc }: { doc: ProposalDocument }) {
 }
 
 /** One lodge: its group header, its stay lines, then its own sub-total. */
-function Lodge({ lodge, multi }: { lodge: ProposalDocument['lodges'][number]; multi: boolean }) {
+function Lodge({ lodge, multi, showActual }: { lodge: ProposalDocument['lodges'][number]; multi: boolean; showActual: boolean }) {
   return (
     <>
       <tr className="grp">
-        <td colSpan={3}>
+        <td colSpan={showActual ? 4 : 3}>
           <span className="gname">{lodge.name}</span>
         </td>
         <td className="n">
@@ -1129,6 +1180,7 @@ function Lodge({ lodge, multi }: { lodge: ProposalDocument['lodges'][number]; mu
           <td className="n calc">
             {l.nights} × {formatPaise(l.ratePaise)}
           </td>
+          {showActual && <td className="n amt was">{formatPaise(l.actualAmountPaise)}</td>}
           <td className="n amt">{formatPaise(l.amountPaise)}</td>
         </tr>
       ))}
@@ -1137,6 +1189,7 @@ function Lodge({ lodge, multi }: { lodge: ProposalDocument['lodges'][number]; mu
           <td colSpan={3} className="lbl">
             {lodge.name} sub-total
           </td>
+          {showActual && <td className="n val was">{formatPaise(lodge.actualSubtotalPaise)}</td>}
           <td className="n val">{formatPaise(lodge.subtotalPaise)}</td>
         </tr>
       )}
@@ -1376,6 +1429,10 @@ const CSS = `
 .pd .calc{font-size:8pt; color:var(--soft); white-space:nowrap}
 .pd .amt{font-weight:600; color:var(--ink); white-space:nowrap; font-size:9.6pt}
 .pd .free{color:var(--gold-deep); font-weight:700; font-size:7.6pt; letter-spacing:.1em}
+/* The Actual column when a discount was given: quiet, so the eye lands on what is payable —
+   but NOT struck through (client, 20 Aug 2026). A crossed-out figure reads as cancelled, and
+   the list price is not cancelled: it is what the line costs and what the guest was let off. */
+.pd .was{color:var(--soft); font-weight:400}
 
 /* group + sub-total rows — gold, not black */
 .pd .grp td{background:linear-gradient(90deg,var(--champagne-2),#FCF7EA);

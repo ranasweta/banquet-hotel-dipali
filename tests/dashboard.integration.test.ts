@@ -15,6 +15,7 @@ import { eq, sql } from 'drizzle-orm'
 const { getBookingDashboard, getBanquetDashboard, getLodgeDashboard, getMaintenanceDashboard, getDashboardForRole } =
   await import('@/lib/dashboard')
 const lock = await import('@/lib/lock')
+const { payableBreakdown } = await import('@/lib/payment-schedule')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -77,7 +78,11 @@ async function makeConfirmedSub(
   const vId = await venueId(venue)
   const [sub] = await db
     .insert(schema.subEvents)
-    .values({ eventId, name: 'Function', eventDate: date, startTime: start, endTime: end, venueId: vId, pax: 200 })
+    // The venue snapshot matches the proposal total the event carries, as a real confirmed
+    // booking's does. It used to be left at 0 while `proposal_total_paise` said something else
+    // entirely, and the dashboard tile — which trusted that column rather than pricing the
+    // booking — agreed with the fixture and with nothing else (20 Aug 2026).
+    .values({ eventId, name: 'Function', eventDate: date, startTime: start, endTime: end, venueId: vId, pax: 200, venueRatePaise: proposalPaise })
     .returning({ id: schema.subEvents.id })
   await db.execute(sql`
     INSERT INTO venue_bookings (venue_id, sub_event_id, event_id, occupancy)
@@ -129,6 +134,20 @@ d('getBookingDashboard', () => {
       requestedBy: bm.id,
     })
 
+    // A SETTLED booking, so the "nothing outstanding never appears" assertion below means what
+    // it says. It used to lean on `proposal_total_paise = 0` — but the tile prices the booking
+    // now, and that fixture is a confirmed function in a real hall with nothing paid against it,
+    // which is a debt however the cached column reads (20 Aug 2026).
+    await db.insert(schema.payments).values({
+      eventId: todayFx.eventId,
+      kind: 'settlement',
+      amountPaise: (await payableBreakdown(todayFx.eventId)).payablePaise,
+      mode: 'bank',
+      receiptNo: `DASH-SETTLED-${Date.now()}`,
+      receivedOn: '2027-03-01',
+      recordedBy: bm.id,
+    })
+
     const dash = await getBookingDashboard(ASOF)
 
     // Today: the today function, with its venue; tomorrow's is not here.
@@ -152,10 +171,14 @@ d('getBookingDashboard', () => {
     expect(dash.approvals.changeRequests.some((c) => c.eventId === todayFx.eventId)).toBe(true)
 
     // Payments due: the +10 balance, exact outstanding & day count; the +47 is out of window,
-    // and the zero-balance confirmed events never appear.
+    // and a booking that has been paid in full never appears.
     const due = dash.paymentsDue.find((p) => p.eventId === payFx.eventId)
     expect(due).toBeTruthy()
     expect(due!.outstandingPaise).toBe(1_000_000)
+    // And it is the SAME arithmetic the booking's own Billing panel runs — rooms, room tax and
+    // the post-event extras included. The tile used to roll its own from the proposal total,
+    // which has none of those in it.
+    expect(due!.outstandingPaise).toBe((await payableBreakdown(payFx.eventId)).balancePaise)
     expect(due!.daysToEvent).toBe(10)
     expect(dash.paymentsDue.map((p) => p.eventId)).not.toContain(farFx.eventId)
     expect(dash.paymentsDue.map((p) => p.eventId)).not.toContain(todayFx.eventId)

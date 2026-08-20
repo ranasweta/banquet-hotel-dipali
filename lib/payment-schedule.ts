@@ -1,7 +1,7 @@
 import 'server-only'
 import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
-import { effectiveDiscountPaise } from '@/lib/discounts'
+import { effectiveGapSql, givenDiscountPaise, lumpDiscountPaise, roomLineKeySql } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
 import { roomGstBpSql } from '@/lib/tax'
 
@@ -77,7 +77,19 @@ export type PayableBreakdown = {
   roomsPaise: number
   /** Room GST, rounded per line — 5% or 18% by the nightly rate. Collected either way. */
   roomsTaxPaise: number
+  /**
+   * What still comes OFF at the end: the pre-20-Aug-2026 lump discounts only. A line discount
+   * is already inside `proposalPaise` and `roomsPaise`, because it is a price rather than a
+   * deduction — subtracting it here as well would take the same money off twice.
+   */
   discountPaise: number
+  /**
+   * What the guest was actually GIVEN — every line discount plus any lump. For display only:
+   * it enters no arithmetic here. Without it a screen reading `discountPaise` would show "—"
+   * on a booking that had just been discounted ₹85,000, because that money is off the lines
+   * rather than off the end.
+   */
+  givenDiscountPaise: number
   /** Closed maintenance entries. Zero until the Maintenance team closes the event's log. */
   maintenancePaise: number
   /** Extra rooms given during the event. Zero until the Lodge Manager closes the extras log. */
@@ -158,19 +170,63 @@ async function payableRows(
   // the NIGHTLY rate — not the line total — and by the category: 5% at or under ₹7,500, 18%
   // above it, and 5% for a dormitory whatever it costs (client, 17 Aug 2026). Both bands are
   // collected, so both stay inside `roomsTax` and the thresholds it feeds.
+  //
+  // The rate the band is read off is the DISCOUNTED one (client, 20 Aug 2026: "the money we
+  // will be collecting is what will be taxed"). `rate` below is therefore what one night is
+  // being charged at after the Discounted column, not the rack rate — an ₹11,000 suite given
+  // for ₹7,000 a night is a 5% room. `gross` keeps the undiscounted line so a document can
+  // still print the Actual column beside it.
   const rows = (await exec.execute(sql`
-    WITH room_lines AS (
-      SELECT rr.event_id, rr.room_type,
-             COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
-                          WHERE r.room_type = rr.room_type AND r.is_active
-                            AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0) AS rate,
-             (GREATEST(rr.count, 0)::bigint
-              * GREATEST(rr.check_out - rr.check_in, 0)
-              * COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
-                           WHERE r.room_type = rr.room_type AND r.is_active
-                             AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)) AS amount
-      FROM room_requirements rr
-      WHERE rr.event_id IN (${ids})
+    WITH venue_lines AS (
+      -- ONE LINE PER VENUE-DAY, not per function (client, 12 Aug 2026, rule 3). This module
+      -- used to sum the hire straight over every sub_event, so two functions in one hall on one
+      -- day charged the day twice HERE while lib/pricing.ts, lib/invoice.ts and lib/proposal.ts
+      -- each charged it once. That is the figure money is collected against — the amount
+      -- payable, the 25%, the wedding 50% and the balance (payable − paid) — so a booking settled
+      -- in full against its own printed proposal could never reach zero, and the screen asked
+      -- for more than the document in the guest's hand said.
+      --
+      -- DISTINCT ON picks the day's FIRST function, matching lib/invoice.ts exactly, so the bill
+      -- and the balance name the same carrier as well as the same money.
+      --
+      -- The NULLIF is why the snapshot alone could not be trusted to fix this: confirmEvent
+      -- writes 0 onto the covered functions, and NULLIF reads that 0 as "never snapshotted" and
+      -- falls back to the rate card — putting the charge straight back on the function it was
+      -- just taken off. The dedupe has to happen here, before the COALESCE.
+      SELECT event_id, GREATEST(0, rate - gap) AS amount
+      FROM (
+        SELECT DISTINCT ON (se.event_id, COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date)
+               se.event_id,
+               COALESCE(NULLIF(se.venue_rate_paise, 0),
+                 (SELECT rc.rate_paise FROM venue_rate_cards rc
+                   WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
+                       OR (se.bundle_id IS NOT NULL AND rc.bundle_id = se.bundle_id))
+                     AND rc.event_type = ev.event_type
+                     AND rc.effective_from <= se.event_date
+                   ORDER BY rc.effective_from DESC LIMIT 1), 0) AS rate,
+               ${effectiveGapSql(sql.raw('se.event_id'), sql.raw("('venue:' || se.id::text)"))} AS gap
+        FROM sub_events se
+        JOIN events ev ON ev.id = se.event_id
+        WHERE se.event_id IN (${ids})
+        ORDER BY se.event_id, COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date, se.start_time
+      ) vl
+    ),
+    room_lines AS (
+      SELECT event_id, room_type, gross, qty,
+             GREATEST(0, gross - gap) AS amount,
+             (CASE WHEN qty > 0 THEN round(GREATEST(0, gross - gap)::numeric / qty) ELSE 0 END)::bigint AS rate
+      FROM (
+        SELECT rr.event_id, rr.room_type,
+               (GREATEST(rr.count, 0)::bigint * GREATEST(rr.check_out - rr.check_in, 0)) AS qty,
+               (GREATEST(rr.count, 0)::bigint
+                * GREATEST(rr.check_out - rr.check_in, 0)
+                * COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
+                             WHERE r.room_type = rr.room_type AND r.is_active
+                               AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)) AS gross,
+               ${effectiveGapSql(sql.raw('rr.event_id'), roomLineKeySql('rr'))} AS gap
+        FROM room_requirements rr
+        WHERE rr.event_id IN (${ids})
+      ) rl
     ),
     -- Rooms handed out during the event (migration 0034). CLOSED lines only, as maintenance:
     -- an open log is still being typed. No COALESCE — the rate is snapshotted at entry and
@@ -184,17 +240,11 @@ async function payableRows(
     SELECT e.id AS "eventId",
            t.is_wedding AS "isWedding",
            (SELECT min(se.event_date)::text FROM sub_events se WHERE se.event_id = e.id) AS "firstDate",
-           COALESCE((SELECT sum(COALESCE(NULLIF(se.venue_rate_paise, 0),
-                      (SELECT rc.rate_paise FROM venue_rate_cards rc
-                        WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
-                            OR (se.bundle_id IS NOT NULL AND rc.bundle_id = se.bundle_id))
-                          AND rc.event_type = e.event_type
-                          AND rc.effective_from <= se.event_date
-                        ORDER BY rc.effective_from DESC LIMIT 1), 0))
-                      FROM sub_events se WHERE se.event_id = e.id), 0)::bigint AS venue,
-           COALESCE((SELECT sum(se.pax::bigint * (m.base_rate_paise + m.surcharge_paise
+           COALESCE((SELECT sum(vl.amount) FROM venue_lines vl WHERE vl.event_id = e.id), 0)::bigint AS venue,
+           COALESCE((SELECT sum(GREATEST(0, se.pax::bigint * (m.base_rate_paise + m.surcharge_paise
                       + COALESCE((SELECT sum(c.charge_paise) FROM chef_requests c
-                                   WHERE c.sub_event_id = se.id AND c.status = 'priced'), 0)))
+                                   WHERE c.sub_event_id = se.id AND c.status = 'priced'), 0))
+                      - ${effectiveGapSql(sql.raw('se.event_id'), sql.raw("('food:' || se.id::text)"))}))
                       FROM sub_event_menus m JOIN sub_events se ON se.id = m.sub_event_id
                      WHERE se.event_id = e.id), 0)::bigint AS food,
            COALESCE((SELECT sum(a.qty::bigint * a.rate_paise)
@@ -260,7 +310,8 @@ export async function payableBreakdown(
 ): Promise<PayableBreakdown> {
   const [row] = await payableRows([eventId], exec)
   if (!row) throw new Error(`payableBreakdown: event ${eventId} not found`)
-  const discountPaise = await effectiveDiscountPaise(eventId, exec)
+  const discountPaise = await lumpDiscountPaise(eventId, exec)
+  const givenPaise = await givenDiscountPaise(eventId, exec as Parameters<typeof givenDiscountPaise>[1])
   const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
   const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row) + utensilExtras(row)
   return {
@@ -268,6 +319,7 @@ export async function payableBreakdown(
     roomsPaise: row.rooms,
     roomsTaxPaise: row.roomsTax,
     discountPaise,
+    givenDiscountPaise: givenPaise,
     maintenancePaise: row.maintenance,
     extraRoomsPaise: row.extraRooms,
     extraRoomsTaxPaise: row.extraRoomsTax,
@@ -314,7 +366,8 @@ function minusDays(date: string, days: number): string {
 export async function paymentSchedule(eventId: string, asOf?: string): Promise<PaymentSchedule> {
   const [row] = await payableRows([eventId])
   if (!row) throw new Error(`paymentSchedule: event ${eventId} not found`)
-  const discountPaise = await effectiveDiscountPaise(eventId)
+  const discountPaise = await lumpDiscountPaise(eventId)
+  const givenPaise = await givenDiscountPaise(eventId)
   const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
   const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row) + utensilExtras(row)
   const paid = row.paid
@@ -365,6 +418,7 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
     roomsPaise: row.rooms,
     roomsTaxPaise: row.roomsTax,
     discountPaise,
+    givenDiscountPaise: givenPaise,
     maintenancePaise: row.maintenance,
     extraRoomsPaise: row.extraRooms,
     extraRoomsTaxPaise: row.extraRoomsTax,
@@ -377,6 +431,55 @@ export async function paymentSchedule(eventId: string, asOf?: string): Promise<P
     milestones,
     advanceShortfallPaise: milestones[0]!.shortfallPaise,
   }
+}
+
+export type EventBalance = { payablePaise: number; paidPaise: number; balancePaise: number }
+
+/**
+ * The payable amount and the balance for MANY events at once — the same arithmetic
+ * `payableBreakdown` does for one, so a list and a booking page cannot disagree about what a
+ * guest owes.
+ *
+ * It exists because the dashboard's "Payments due" tile used to roll its own: proposal total,
+ * less every discount, less payments. That base is venue + food only — it had no rooms, no room
+ * tax, no maintenance and none of the lodge's or the kitchen's extras in it — so the figure was
+ * wrong on any booking with rooms, and a ROOM discount subtracted money that had never been
+ * added. Any screen showing what is owed reads this now (20 Aug 2026).
+ *
+ * The lump lookup runs only for events that actually carry one. Nothing has written a lump
+ * discount since 20 Aug 2026, so on a modern booking list this is a single extra query that
+ * returns nothing, and only genuinely old bookings pay for the exact figure.
+ */
+export async function balancesByEvent(eventIds: string[]): Promise<Map<string, EventBalance>> {
+  const out = new Map<string, EventBalance>()
+  if (eventIds.length === 0) return out
+  const rows = await payableRows(eventIds)
+
+  const ids = sql.join(
+    rows.map((r) => sql`${r.eventId}::uuid`),
+    sql`, `,
+  )
+  const withLump = (await db.execute(sql`
+    SELECT DISTINCT event_id AS "eventId" FROM discounts
+     WHERE event_id IN (${ids}) AND line_key IS NULL
+    UNION
+    SELECT DISTINCT event_id AS "eventId" FROM room_allocations
+     WHERE event_id IN (${ids}) AND discount_paise > 0
+  `)) as unknown as { eventId: string }[]
+  const needsLump = new Set(withLump.map((r) => r.eventId))
+
+  // Priced together, not one after another — the same reason `advanceShortfallByEvent` batches:
+  // awaiting them in a loop is a network round trip per booking, on a screen that draws a month.
+  const lumpIds = rows.filter((r) => needsLump.has(r.eventId)).map((r) => r.eventId)
+  const lumps = await Promise.all(lumpIds.map((id) => lumpDiscountPaise(id)))
+  const lumpOf = new Map(lumpIds.map((id, i) => [id, lumps[i]!]))
+
+  for (const r of rows) {
+    const preEvent = Math.max(0, grossPayable(r) - (lumpOf.get(r.eventId) ?? 0))
+    const payablePaise = preEvent + r.maintenance + lodgeExtras(r) + utensilExtras(r)
+    out.set(r.eventId, { payablePaise, paidPaise: r.paid, balancePaise: payablePaise - r.paid })
+  }
+  return out
 }
 
 /**
@@ -394,11 +497,11 @@ export async function advanceShortfallByEvent(eventIds: string[]): Promise<Map<s
   // lowers the requirement — so it never needs its discounts priced at all.
   const candidates = rows.filter((r) => r.paid < percentOfPaise(grossPayable(r), ADVANCE_PCT))
 
-  // Priced together, not one after another. Each `effectiveDiscountPaise` is three queries,
+  // Priced together, not one after another. Each `lumpDiscountPaise` is three queries,
   // and awaiting them in a loop cost three network round trips PER short booking — about
   // three quarters of a second each against a remote database, on a screen that draws a whole
   // month at once. The candidate list is short by construction, so one batch covers it.
-  const discounts = await Promise.all(candidates.map((r) => effectiveDiscountPaise(r.eventId)))
+  const discounts = await Promise.all(candidates.map((r) => lumpDiscountPaise(r.eventId)))
 
   const out = new Map<string, number>()
   candidates.forEach((r, i) => {

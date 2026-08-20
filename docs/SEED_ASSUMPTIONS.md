@@ -1292,6 +1292,25 @@ is right; the board is simply no longer showing that tail. If staff report being
 refusal on a morning that looked free, this is why, and the answer is a hint on the day panel
 rather than bringing the tail back.
 
+**Three screens that were reading the wrong figure** (20 Aug 2026, found while auditing the
+Discounted column). None was caused by the column itself; two were exposed by it.
+
+- **The Billing panel's Discounts tile** read the end-of-bill deduction, which is now the lump
+  discounts alone. A booking discounted ₹85,000 a moment earlier showed "—". `payableBreakdown`
+  carries `givenDiscountPaise` beside `discountPaise` now: what was *given*, for display, next to
+  what still *deducts*, for the arithmetic.
+- **The revenue report** summed `invoices.discount_paise` and so reported ₹0 given, understating
+  gross by the same amount. `netPaise` was always right. It recovers the figure from
+  `invoice_lines.gross_amount_paise` — from the issued document rather than the live table, so a
+  bill cannot re-report itself differently after somebody re-prices the booking.
+- **The dashboard's "Payments due" tile** computed what a guest owed itself: proposal total, less
+  every discount, less payments. That base is venue + food ALONE — no rooms, no room tax, no
+  maintenance, none of the lodge's or the kitchen's extras — so it disagreed with the Billing
+  panel on any booking with rooms, and a ROOM discount subtracted money the base had never
+  included, understating the debt. It reads `balancesByEvent` now, which is `payableBreakdown`
+  for many events at once. The fixture that pinned the old behaviour had been stamping a
+  `proposal_total_paise` its own function did not match, and agreed with nothing but itself.
+
 ### F26. The venue master, and the hall an "Other" booking is not charged for
 Client, 12 Aug 2026. Two instructions in one message; the second is expressed entirely as data
 the first lets the Auditor edit.
@@ -1422,6 +1441,67 @@ construction because that 18% is collected from no one, but the label is the hot
 **A function with no saved menu is refused, not zeroed** — the standing rule. Such a function is
 still *listed* in the panel, marked unpriced, so the screen explains the refusal rather than
 hiding the option.
+
+### F29. The Discounted column — a discount is a price, not a deduction
+Client, 20 Aug 2026, after the staff had the 4 Aug tool (§F21) in the field. They asked for the
+opposite shape of the same thing: *"the discount option just beside the actual price prefilled
+with actual prices… if he changes the prefilled discounted value then that will be considered as
+payable, no need to minus anything."*
+
+So every priced line now carries two figures — **Actual**, the rate card / menu snapshot / rack
+rate, which never moves, and **Discounted**, prefilled with the actual and typed over with what
+the guest is really paying. Nothing subtracts anywhere. One master toggle unlocks the whole
+column (a booking with three functions and four room categories has ten cells, and ten ticks to
+reach one price is not a counter tool). The **tax row has no cell** — the client struck it out by
+name — and add-ons, the bar and the post-event extras have none either: an extra logged on
+actuals has no quoted price to discount.
+
+**What is stored is the gap, not the typed price.** Asked and answered on the day: *"the Billing
+figure always follows the live feeding of pax, menu, everything as it is."* Food at 250 pax ×
+₹700 is ₹1,75,000; typed at ₹1,50,000 the row stores ₹25,000. Put the pax to 300 and the actual
+becomes ₹2,10,000 while the Discounted column reads ₹1,85,000. A **flat** gap, not a per-plate
+one — the client chose it explicitly, and it is the same rule §F21 settled. Every reader clamps
+at `max(0, actual − gap)`, so a line that later shrinks below what was given goes free rather
+than becoming a credit.
+
+**The key is text, not `ref_id`.** Saving room requirements deletes and re-inserts every row
+(rule 9), so a room discount pointing at a `room_requirements.id` would be orphaned the next time
+anybody touched the rooms. `discounts.line_key` (migration 0036) holds the line's natural
+identity — `venue:<sub_event>`, `food:<sub_event>`, `room:<unit>:<type>:<in>:<out>` — which
+survives the re-insert. Changing a room's dates orphans its discount deliberately: that is a
+different line and it is priced afresh.
+
+**Tax follows the money, and this is the change that reaches furthest.** *"The money we will be
+collecting — amount receivable — is what will be taxed."* Until now the 5%/18% on rooms was
+charged on the full room price and the discount came off afterwards, so a room discount cut the
+charge and not the tax. The tax base is the discounted line now, and the **band is re-read off
+the discounted nightly rate**: an ₹11,000 suite given for ₹7,000 a night is a 5% room. It is
+still the nightly figure and never the line total (rule 11). The shown-and-never-collected 18%
+on venue and food follows the discounted figure too, so the printed Total agrees with the columns
+above it. This is what closes **D9**: a discount is no longer a deduction hanging off the end of
+the bill, so there is nothing left to pro-rate into a line's taxable value.
+
+**The remark is no longer required**, which reverses FR-11.1 and the last line of CLAUDE.md
+rule 3. The client's words: *"one per save, but not mandatory."* One remark covers every cell
+that moved in that save, and an empty one is stored as `''`. Nothing becomes untraceable — the
+audit row still names who moved which line from what to what, in rupees, which is where the
+question *"why is this booking cheaper"* is actually answered. Flagged rather than argued: a
+money-off-the-bill decision with no stated reason is a control the hotel has chosen not to keep,
+and it is a one-line change to restore.
+
+**The old lump discounts survive.** *"Keep what we've already recorded as promised to our
+guests."* A row with `line_key IS NULL` is one of them: subtracted at the end of the bill exactly
+as it always was and, having no line to attach to, moving no tax. Nothing new writes one from a
+screen. They are shown on their own line in the grid, and can still be removed.
+
+**The cap is untouched** (BR-D2). It measures the same combined figure — every clamped gap plus
+any surviving lump — and a save that crosses it goes to the Authority as **one** request carrying
+every cell in it, rather than one per cell: a half-applied save would leave the booking at a
+price nobody quoted, and would put six rows in his queue for one conversation.
+
+**The document prints both columns**, on the client's instruction, and only when something was
+actually given — two identical columns of figures on a full-price proposal read as a mistake
+rather than as a courtesy.
 
 ---
 

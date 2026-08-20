@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/select'
 import { AadhaarCapture } from '@/components/aadhaar-capture'
 import { MenuPicker, type CatalogTier, type MenuPool } from '@/components/menu-picker'
-import { EventDiscounts } from '@/components/event-discounts'
+import { DiscountGrid } from '@/components/discount-grid'
 import { cn } from '@/lib/utils'
 
 type EventType = { code: string; displayName: string; contactNumbers: number; isWedding: boolean }
@@ -388,7 +388,6 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
     .map((t) => ({ value: t.code, label: eventTypeLabel(t.code, t.displayName) }))
 
   const datesOk = Boolean(fromDate && toDate && toDate >= fromDate)
-  const foodTotalPaise = subEvents.reduce((sum, s) => sum + (menuBySub[s.id]?.perPlatePaise ?? 0) * s.pax, 0)
 
   // Lodging estimate: rooms × nights × the type's rack rate. The exact charge is settled when
   // the Lodge Manager allocates real rooms, but the proposal has to show a number.
@@ -580,24 +579,6 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
         <ReviewStep
           eventId={eventId}
           quote={quote}
-          foodTotalPaise={foodTotalPaise}
-          roomsTotalPaise={roomsTotalPaise}
-          roomsTaxPaise={roomsTaxPaise}
-          functions={subEvents.map((s) => ({
-            id: s.id,
-            name: s.name,
-            eventDate: s.eventDate,
-            startTime: s.startTime.slice(0, 5),
-            endTime: s.endTime.slice(0, 5),
-            venueLabel: s.bundleId
-              ? options.bundles.find((b) => b.id === s.bundleId)?.name ?? 'Bundle'
-              : options.venues.find((v) => v.id === s.venueId)?.name ?? 'Venue',
-            pax: s.pax,
-            menu: menuBySub[s.id],
-          }))}
-          rooms={rooms}
-          roomRates={options.roomRates ?? []}
-          lodgingUnits={options.lodgingUnits ?? []}
           alreadyConfirmed={eventStatus !== 'enquiry'}
           onBack={() => setStep(3)}
           onConfirmed={(code, shortfallPaise) => {
@@ -1211,13 +1192,6 @@ function nightsBetween(checkIn: string, checkOut: string): number {
 function ReviewStep({
   eventId,
   quote,
-  foodTotalPaise,
-  roomsTotalPaise,
-  roomsTaxPaise,
-  functions,
-  rooms,
-  roomRates,
-  lodgingUnits,
   alreadyConfirmed,
   onBack,
   onConfirmed,
@@ -1226,13 +1200,6 @@ function ReviewStep({
 }: {
   eventId: string
   quote: Quote | null
-  foodTotalPaise: number
-  roomsTotalPaise: number
-  roomsTaxPaise: number
-  functions: FunctionRow[]
-  rooms: RoomReq[]
-  roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
-  lodgingUnits: { id: string; name: string }[]
   // An Authority editing an already-confirmed booking: edits save as they're made, so there's
   // no advance to collect and nothing to re-confirm — the step just closes.
   alreadyConfirmed: boolean
@@ -1283,35 +1250,6 @@ function ReviewStep({
     }
   }
 
-  // Rooms grouped by lodge so the estimate reads lodge-by-lodge, each with its own sub-total
-  // (client, 23 Jul 2026). First-appearance order is preserved so the review mirrors the editor.
-  const roomGroups = (() => {
-    const order: string[] = []
-    const byUnit: Record<string, { r: RoomReq; i: number }[]> = {}
-    rooms.forEach((r, i) => {
-      if (!byUnit[r.unit_id]) {
-        byUnit[r.unit_id] = []
-        order.push(r.unit_id)
-      }
-      byUnit[r.unit_id].push({ r, i })
-    })
-    return order.map((unitId) => ({
-      unitId,
-      lodgeName: lodgingUnits.find((u) => u.id === unitId)?.name,
-      lines: byUnit[unitId],
-    }))
-  })()
-
-  const grossPaise = quote ? quote.totalPaise + foodTotalPaise + roomsTotalPaise + roomsTaxPaise : 0
-  // Whether any room on this booking is over ₹7,500 a night and so carries 18% rather than 5%
-  // (client, 17 Aug 2026). Both are collected; the label only has to say which is in play.
-  const hasHighTaxRoom = rooms.some(
-    (r) =>
-      roomTaxBp(
-        roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0,
-        r.room_type,
-      ) === ROOM_TAX_HIGH_BP,
-  )
   // What is actually being collected right now, so the form can say how far short it falls.
   const amountPaise = Number.isFinite(Number(amount)) ? Math.round(Number(amount) * 100) : 0
 
@@ -1321,154 +1259,48 @@ function ReviewStep({
         <p className="text-sm text-muted-foreground">Pricing…</p>
       ) : (
         <>
-          {quote.missing.length > 0 && (
-            <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              No rate is defined for: {quote.missing.map((m) => m.name).join(', ')}. An
-              Authority-approved manual rate is needed before this can be confirmed (BR-R1).
-            </p>
-          )}
-          <div className="rounded-lg border">
-            <table className="w-full text-sm">
-              <tbody className="divide-y">
-                {/* Every function spelled out — venue, menu, pax and the arithmetic — so the
-                    total can be checked line by line rather than taken on trust. */}
-                {functions.map((f) => {
-                  const venuePaise = quote.lines.find((l) => l.subEventId === f.id)?.ratePaise ?? null
-                  const foodPaise = (f.menu?.perPlatePaise ?? 0) * f.pax
-                  return (
-                    <Fragment key={f.id}>
-                      <tr className="bg-muted/40">
-                        <td colSpan={2} className="px-3 py-1.5 text-xs font-semibold">
-                          {f.name}
-                          <span className="ml-2 font-normal tabular-nums text-muted-foreground">
-                            {f.eventDate} · {formatTimeRange(f.startTime, f.endTime)} · {f.pax} pax
-                          </span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="px-3 py-2">Venue — {f.venueLabel}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {venuePaise == null ? <span className="text-destructive">no rate</span> : formatPaise(venuePaise)}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td className="px-3 py-2">
-                          {/* Guard the per-plate rate: a menu whose price hasn't come back
-                              yet must degrade to "no menu", never crash the whole review
-                              step through formatPaise(undefined). */}
-                          {f.menu && Number.isFinite(f.menu.perPlatePaise)
-                            ? `Food — ${f.menu.tierName}, ${f.pax} pax × ${formatPaise(f.menu.perPlatePaise)}/plate`
-                            : `Food — no menu chosen yet (${f.pax} pax)`}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatPaise(foodPaise)}</td>
-                      </tr>
-                      <tr>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{f.name} sub-total</td>
-                        <td className="px-3 py-2 text-right text-xs tabular-nums text-muted-foreground">
-                          {formatPaise((venuePaise ?? 0) + foodPaise)}
-                        </td>
-                      </tr>
-                    </Fragment>
-                  )
-                })}
-
-                {rooms.length > 0 && (
-                  <>
-                    <tr className="bg-muted/40">
-                      <td colSpan={2} className="px-3 py-1.5 text-xs font-semibold">Rooms</td>
-                    </tr>
-                    {roomGroups.map((g) => {
-                      const groupSubtotal = g.lines.reduce((sum, { r }) => {
-                        const rate = roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
-                        return sum + rate * Math.max(0, r.count) * nightsBetween(r.check_in, r.check_out)
-                      }, 0)
-                      return (
-                        <Fragment key={g.unitId || 'no-lodge'}>
-                          <tr>
-                            <td colSpan={2} className="px-3 pt-2 pb-1 text-xs font-medium text-muted-foreground">
-                              {g.lodgeName ?? 'Lodge'}
-                            </td>
-                          </tr>
-                          {g.lines.map(({ r, i }) => {
-                            const rate = roomRates.find((x) => x.unitId === r.unit_id && x.roomType === r.room_type)?.rackRatePaise ?? 0
-                            const nights = nightsBetween(r.check_in, r.check_out)
-                            return (
-                              <tr key={`${r.room_type}-${i}`}>
-                                <td className="px-3 py-2 pl-6">
-                                  <span className="capitalize">{r.room_type.replace(/_/g, ' ')}</span>
-                                  {' — '}{r.count} room{r.count === 1 ? '' : 's'} × {nights} night{nights === 1 ? '' : 's'} × {formatPaise(rate)}
-                                  {/* Which band this line falls in, beside the rate that decides it. */}
-                                  {roomTaxBp(rate, r.room_type) === ROOM_TAX_HIGH_BP && (
-                                    <span className="ml-2 text-xs text-muted-foreground">GST 18%</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-right tabular-nums">
-                                  {formatPaise(rate * Math.max(0, r.count) * nights)}
-                                </td>
-                              </tr>
-                            )
-                          })}
-                          <tr>
-                            <td className="px-3 py-2 pl-6 text-xs text-muted-foreground">{g.lodgeName ?? 'Lodge'} sub-total</td>
-                            <td className="px-3 py-2 text-right text-xs tabular-nums text-muted-foreground">{formatPaise(groupSubtotal)}</td>
-                          </tr>
-                        </Fragment>
-                      )
-                    })}
-                    <tr>
-                      <td className="px-3 py-2 text-muted-foreground">
-                        {hasHighTaxRoom ? 'Tax on rooms — 5%, and 18% over ₹7,500 a night' : 'Tax — 5% on rooms'}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">+ {formatPaise(roomsTaxPaise)}</td>
-                    </tr>
-                  </>
-                )}
-                <tr>
-                  <td className="px-3 py-2">Estimated total</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(grossPaise)}</td>
-                </tr>
-                {quote.discountPaise > 0 && (
-                  <tr className="text-emerald-700 dark:text-emerald-400">
-                    <td className="px-3 py-2">Less discounts</td>
-                    <td className="px-3 py-2 text-right tabular-nums">− {formatPaise(quote.discountPaise)}</td>
-                  </tr>
-                )}
-                {/* The two totals, in the order they have to be read. The bold one is what we
-                    collect; the 18% below it is printed on the guest's proposal and charged to
-                    nobody (client, 4 Aug 2026). Showing only the bigger figure is how a
-                    counter ends up taking 18% too much. */}
-                <tr className="font-medium">
-                  <td className="px-3 py-2">Amount payable</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.payablePaise)}</td>
-                </tr>
-                <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">GST 18% — shown on the proposal, not collected</td>
-                  <td className="px-3 py-2 text-right tabular-nums">+ {formatPaise(quote.shownGstPaise)}</td>
-                </tr>
-                <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">Total printed on the proposal</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.displayTotalPaise)}</td>
-                </tr>
-                <tr className="text-muted-foreground">
-                  <td className="px-3 py-2">Advance required (25% of the amount payable)</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{formatPaise(quote.advanceRequiredPaise)}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          {/* The bill in two columns — what each line lists at, and what the guest is
+              actually being charged for it (client, 20 Aug 2026). The grid owns the line rows,
+              the room tax and the Estimated total; the rows below are the ones only the quote
+              knows. Nothing here is recomputed in the browser: the room GST band now depends on
+              the DISCOUNTED nightly rate, and a second copy of that sum would drift. */}
+          <DiscountGrid eventId={eventId} editable onChanged={onDiscountChanged} reloadKey={quote.payablePaise}>
+            {/* The two totals, in the order they have to be read. The bold one is what we
+                collect; the 18% below it is printed on the guest's proposal and charged to
+                nobody (client, 4 Aug 2026). Showing only the bigger figure is how a counter
+                ends up taking 18% too much. */}
+            <tr className="font-medium">
+              <td className="px-2 py-2 sm:px-3">Amount payable</td>
+              <td />
+              <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{formatPaise(quote.payablePaise)}</td>
+            </tr>
+            <tr className="text-muted-foreground">
+              {/* Just the rate (client, 20 Aug 2026). The 18% is still shown and collected from
+                  nobody — it enters no threshold and no balance (rule 11) — and the "Amount
+                  payable" row directly above is what the counter takes. The other staff screens
+                  (the Billing panel, the lock panel) still spell the split out in words. */}
+              <td className="px-2 py-2 sm:px-3">GST 18%</td>
+              <td />
+              <td className="px-2 py-2 sm:px-3 text-right tabular-nums">+ {formatPaise(quote.shownGstPaise)}</td>
+            </tr>
+            <tr className="text-muted-foreground">
+              <td className="px-2 py-2 sm:px-3">Total printed on the proposal</td>
+              <td />
+              <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{formatPaise(quote.displayTotalPaise)}</td>
+            </tr>
+            <tr className="text-muted-foreground">
+              <td className="px-2 py-2 sm:px-3">Advance required (25% of the amount payable)</td>
+              <td />
+              <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{formatPaise(quote.advanceRequiredPaise)}</td>
+            </tr>
+          </DiscountGrid>
           <p className="text-xs text-muted-foreground">
             Rooms are a rack-rate estimate until they are allocated. Every instalment is a
             percentage of the amount payable, never of the printed total.
           </p>
 
-          {/* Per-head percentage discounts — applied here so the total and the 25% advance
-              reflect them before you confirm (client, 25 Jul 2026). */}
-          <div className="rounded-lg border p-3">
-            <EventDiscounts eventId={eventId} editable onChanged={onDiscountChanged} />
-          </div>
-
           {alreadyConfirmed ? (
-            <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+            <p className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-2 sm:px-3 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
               Already confirmed. Edits save as you make them and the venue holds move with the
               functions. No advance is collected here.
             </p>
@@ -1499,7 +1331,7 @@ function ReviewStep({
                   4 Aug 2026). Said here, at the field, because this is where a manager decides
                   whether to argue with the guest or take what is on the table. */}
               {quote && amountPaise > 0 && amountPaise < quote.advanceRequiredPaise && (
-                <p className="sm:col-span-2 lg:col-span-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                <p className="sm:col-span-2 lg:col-span-4 rounded-md border border-amber-300 bg-amber-50 px-2 py-2 sm:px-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
                   This is {formatPaise(quote.advanceRequiredPaise - amountPaise)} short of the 25%
                   ({formatPaise(quote.advanceRequiredPaise)}). The dates will still be held — the
                   booking confirms and shows as <span className="font-medium">Downpayment due</span> on

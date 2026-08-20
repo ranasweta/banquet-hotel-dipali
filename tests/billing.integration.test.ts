@@ -97,12 +97,12 @@ d('discount cap (BR-D2)', () => {
     expect(r1.deferred).toBe(false)
     const r2 = await discounts.addDiscount(bm, e, { head: 'menu', amountPaise: 490_000, remark: '4.9% menu' })
     expect(r2.deferred).toBe(false) // combined 9.9% ≤ cap
-    expect(await discounts.effectiveDiscountPaise(e)).toBe(990_000)
+    expect(await discounts.givenDiscountPaise(e)).toBe(990_000)
 
     const r3 = await discounts.addDiscount(bm, e, { head: 'overall', amountPaise: 20_000, remark: 'push over' })
     expect(r3.deferred).toBe(true) // combined 10.1% > cap
     // The over-cap discount does NOT count until approved.
-    expect(await discounts.effectiveDiscountPaise(e)).toBe(990_000)
+    expect(await discounts.givenDiscountPaise(e)).toBe(990_000)
     const [exc] = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, e))
     expect(exc!.kind).toBe('discount_over_cap')
     expect(exc!.status).toBe('pending')
@@ -112,11 +112,11 @@ d('discount cap (BR-D2)', () => {
     const e = await makeEvent({ proposalPaise: 10_000_000 })
     const over = await discounts.addDiscount(bm, e, { head: 'overall', amountPaise: 1_500_000, remark: '15%' })
     expect(over.deferred).toBe(true)
-    expect(await discounts.effectiveDiscountPaise(e)).toBe(0)
+    expect(await discounts.givenDiscountPaise(e)).toBe(0)
 
     const approvals = await import('@/lib/approvals')
     await approvals.decideException(ha, (over as { exceptionId: string }).exceptionId, { action: 'approve' })
-    expect(await discounts.effectiveDiscountPaise(e)).toBe(1_500_000)
+    expect(await discounts.givenDiscountPaise(e)).toBe(1_500_000)
   })
 
   it('does not bind the Higher Authority, on any screen (FR-11.3a, 3 Aug 2026)', async () => {
@@ -126,7 +126,7 @@ d('discount cap (BR-D2)', () => {
     const e = await makeEvent({ proposalPaise: 10_000_000 }) // cap = 1,000,000 paise
     const big = await discounts.addDiscount(ha, e, { head: 'overall', amountPaise: 3_000_000, remark: 'Owner’s call — 30%' })
     expect(big.deferred).toBe(false)
-    expect(await discounts.effectiveDiscountPaise(e)).toBe(3_000_000)
+    expect(await discounts.givenDiscountPaise(e)).toBe(3_000_000)
     const excs = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, e))
     expect(excs).toHaveLength(0) // nothing was sent to a queue only he can clear
 
@@ -135,9 +135,13 @@ d('discount cap (BR-D2)', () => {
     expect((await discounts.addDiscount(bm, e2, { head: 'overall', amountPaise: 3_000_000, remark: '30%' })).deferred).toBe(true)
   })
 
-  it('requires a remark; room is a valid head now (client, 25 Jul 2026)', async () => {
+  it('takes a discount with no remark (client, 20 Aug 2026); room is a valid head', async () => {
     const e = await makeEvent()
-    await expect(discounts.addDiscount(bm, e, { head: 'venue', amountPaise: 1000, remark: '' })).rejects.toThrow(/remark/)
+    // The remark stopped being required on 20 Aug 2026, reversing FR-11.1: the client asked for
+    // one remark per save and said plainly it is not mandatory. The audit row still records who
+    // gave what, which is where the question "why is this booking cheaper" is actually answered.
+    const bare = await discounts.addDiscount(bm, e, { head: 'venue', amountPaise: 1000, remark: '' })
+    expect(bare.deferred).toBe(false)
     // Rooms are bulk-booked now, so a room discount is a normal head (it used to be refused).
     const r = await discounts.addDiscount(bm, e, { head: 'room', amountPaise: 1000, remark: 'room disc' })
     expect(r.deferred).toBe(false)
@@ -152,10 +156,10 @@ d('discount cap (BR-D2)', () => {
     // 20% of the ₹20,000 venue subtotal = ₹4,000.
     const r = await discounts.addDiscount(bm, e, { head: 'venue', percentBp: 2000, remark: '20% venue' })
     expect(r.deferred).toBe(false)
-    expect(await discounts.effectiveDiscountPaise(e)).toBe(400_000)
+    expect(await discounts.givenDiscountPaise(e)).toBe(400_000)
     // Live: raise the venue rate and the same 20% now takes more (₹30,000 → ₹6,000).
     await db.update(schema.subEvents).set({ venueRatePaise: 3_000_000 }).where(eq(schema.subEvents.eventId, e))
-    expect(await discounts.effectiveDiscountPaise(e)).toBe(600_000)
+    expect(await discounts.givenDiscountPaise(e)).toBe(600_000)
   })
 })
 

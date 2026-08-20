@@ -5,11 +5,16 @@
  * charged the hire three times. The guest took the room for the day — 9 AM to 8 AM the next
  * morning — and however many functions run inside that window, it is one let.
  *
- * This file pins the arithmetic in all three places it is computed, because they are three
+ * This file pins the arithmetic in all FOUR places it is computed, because they are four
  * separate code paths and a fix in one is worth nothing if another still triples the charge:
- * `priceProposal` (the proposal total, and therefore the payable, the advance base and the
- * discount cap), `computeBillLines` (the Draft), and `proposalDocument` (what the guest is
- * handed). The overlap rule is NOT relaxed — windows still may not collide (BR-C1).
+ * `priceProposal` (the proposal total and the discount cap), `computeBillLines` (the Draft),
+ * `proposalDocument` (what the guest is handed), and `payableRows` (the amount payable, the
+ * 25% advance, the wedding 50% and the balance).
+ *
+ * The fourth was added on 20 Aug 2026, having been missed: it had no dedupe at all, so the one
+ * figure money is actually collected against charged the day once per function while the three
+ * documents charged it once. The overlap rule is NOT relaxed — windows still may not collide
+ * (BR-C1).
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { sql } from 'drizzle-orm'
@@ -17,6 +22,7 @@ import { sql } from 'drizzle-orm'
 const pricing = await import('@/lib/pricing')
 const proposal = await import('@/lib/proposal')
 const invoice = await import('@/lib/invoice')
+const schedule = await import('@/lib/payment-schedule')
 const availability = await import('@/lib/availability')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
@@ -252,5 +258,48 @@ d('the bill and the printed proposal agree with the total', () => {
     expect(first!.subtotalPaise).toBe(rateA)
     expect(second!.subtotalPaise).toBe(0)
     expect(doc.totals.proposalPaise).toBe(rateA)
+  }, 120_000)
+
+  /**
+   * THE FOURTH PATH, and the one that decides money (20 Aug 2026). `payableRows` summed the
+   * hire straight over every sub_event with no venue-day dedupe, so this exact booking was
+   * charged the day twice in the amount payable while all three paths above charged it once.
+   *
+   * That figure is not display: the 25% advance and the wedding 50% are percentages of it, and
+   * the balance is payable − paid. A guest who settled in full against the printed proposal
+   * would have been left short for ever, unable to reach zero and so unable to be closed —
+   * and the screen asked for more than the document in their hand said.
+   */
+  it('charges the amount payable once, and agrees with all three documents', async () => {
+    const eventId = await makeEvent()
+    await addFunction(eventId, 'Haldi', '2027-09-01', '09:00', '12:00', hallA)
+    await addFunction(eventId, 'Sangeet', '2027-09-01', '18:00', '21:00', hallA)
+    await addFunction(eventId, 'Reception', '2027-09-01', '21:00', '23:30', hallA)
+
+    const priced = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(eventId))
+    const billVenue = (await invoice.computeBillLines(db, eventId))
+      .filter((l) => l.section === 'venue')
+      .reduce((n, l) => n + l.amountPaise, 0)
+    const doc = await proposal.proposalDocument(eventId)
+    const bill = await schedule.payableBreakdown(eventId)
+
+    expect(priced.totalPaise).toBe(rateA)
+    expect(billVenue).toBe(rateA)
+    expect(doc.totals.proposalPaise).toBe(rateA)
+    // No menus, no rooms, no discount on this booking, so the payable IS the day's hire.
+    expect(bill.payablePaise).toBe(rateA)
+    expect(bill.preEventPayablePaise).toBe(rateA)
+  }, 120_000)
+
+  it('still charges two days, and two halls, once each', async () => {
+    const twoDays = await makeEvent()
+    await addFunction(twoDays, 'Day one', '2027-09-01', '18:00', '23:00', hallA)
+    await addFunction(twoDays, 'Day two', '2027-09-02', '18:00', '23:00', hallA)
+    expect((await schedule.payableBreakdown(twoDays)).payablePaise).toBe(rateA * 2)
+
+    const twoHalls = await makeEvent()
+    await addFunction(twoHalls, 'Ceremony', '2027-09-03', '10:00', '13:00', hallA)
+    await addFunction(twoHalls, 'Party', '2027-09-03', '19:00', '23:00', hallB)
+    expect((await schedule.payableBreakdown(twoHalls)).payablePaise).toBe(rateA + rateB)
   }, 120_000)
 })
