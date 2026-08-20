@@ -3,7 +3,7 @@ import { and, asc, eq, isNull, sql } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
-import { effectiveDiscountPaise } from '@/lib/discounts'
+import { effectiveGapSql, lumpDiscountPaise, roomLineKeySql } from '@/lib/discounts'
 import { transitionEvent } from '@/lib/events'
 import { GST_BP, isCollectedSection, roomGstBp, taxOf } from '@/lib/tax'
 
@@ -27,10 +27,17 @@ import { GST_BP, isCollectedSection, roomGstBp, taxOf } from '@/lib/tax'
  * agrees, and it is by SECTION — rooms collected, all else shown — NOT by rate: a room over
  * ₹7,500 and a food line both read 1800 bp, and only one of them is money.
  *
- * Tax is charged per line on the GROSS line amount and rounded per line, so the sum of the
- * line taxes is the authoritative figure (not a percentage of a subtotal, which can differ by
- * a paisa). Discounts are shown as a separate deduction, not pro-rated into each line's
- * taxable value — a documented simplification to revisit (D9).
+ * Tax is charged per line and rounded per line, so the sum of the line taxes is the
+ * authoritative figure (not a percentage of a subtotal, which can differ by a paisa).
+ *
+ * IT IS CHARGED ON THE DISCOUNTED LINE (client, 20 Aug 2026: "the money we will be collecting is
+ * what will be taxed"). Each venue / food / room line is priced at what the Discounted column
+ * says, and a room's 5%/18% band is re-read off the DISCOUNTED nightly rate — an ₹11,000 suite
+ * given for ₹7,000 a night is a 5% room. `grossAmountPaise` carries the undiscounted figure
+ * alongside, because the document prints both columns so the guest can see what was given. That
+ * closes D9: a discount is no longer a deduction hanging off the end of the bill, so there is
+ * nothing left to pro-rate. Only the pre-20-Aug LUMP discounts still deduct at the end, and
+ * having no line to attach to they move no tax.
  */
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
@@ -63,6 +70,8 @@ const liveInvoice = (eventId: string) =>
 export type LineSpec = {
   section: string; description: string; sacHsn?: string | null; qty: number
   ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number
+  /** The undiscounted price, for the document's Actual column. NULL when nothing was given. */
+  grossAmountPaise?: number | null
   /** The function this line belongs to; NULL for event-level lines (see migration 0015). */
   functionLabel?: string | null
 }
@@ -87,9 +96,15 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
     amountPaise: number,
     functionLabel: string | null = null,
     gstBp?: number,
+    grossAmountPaise?: number,
   ) => {
     const bp = gstBp ?? GST_BP[section] ?? 0
-    lines.push({ section, description, qty, ratePaise, gstRateBp: bp, amountPaise, taxPaise: taxOf(amountPaise, bp), functionLabel })
+    lines.push({
+      section, description, qty, ratePaise, gstRateBp: bp, amountPaise,
+      // Only a discounted line carries a second figure; everything else is its own actual.
+      grossAmountPaise: grossAmountPaise != null && grossAmountPaise !== amountPaise ? grossAmountPaise : null,
+      taxPaise: taxOf(amountPaise, bp), functionLabel,
+    })
   }
 
   // Venue — the rate-card snapshot on each sub-event (set at confirm). Before confirm the
@@ -111,6 +126,7 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
       SELECT DISTINCT ON (COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date)
              se.name, se.event_date AS "eventDate", se.start_time AS "startTime",
              COALESCE(v.name, b.name) AS "venueName",
+             ${effectiveGapSql(sql.raw('se.event_id'), sql.raw("('venue:' || se.id::text)"))} AS "gapPaise",
              COALESCE(NULLIF(se.venue_rate_paise, 0),
                (SELECT rc.rate_paise FROM venue_rate_cards rc
                  WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
@@ -126,17 +142,25 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
       ORDER BY COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date, se.start_time
     ) d
     ORDER BY d."eventDate", d."startTime"
-  `)) as unknown as { name: string; ratePaise: number; venueName: string }[]
-  for (const v of venues) if (Number(v.ratePaise) > 0) push('venue', v.venueName, 1, Number(v.ratePaise), Number(v.ratePaise), v.name)
+  `)) as unknown as { name: string; ratePaise: number; venueName: string; gapPaise: number }[]
+  for (const v of venues) {
+    const gross = Number(v.ratePaise)
+    if (gross <= 0) continue
+    push('venue', v.venueName, 1, gross, Math.max(0, gross - Number(v.gapPaise)), v.name, undefined, gross)
+  }
 
   // Food — pax × snapshotted per-plate, per sub-event with a saved menu.
   const food = (await exec.execute(sql`
-    SELECT se.name, se.pax, m.tier_name AS "tierName", (m.base_rate_paise + m.surcharge_paise) AS "perPlate"
+    SELECT se.name, se.pax, m.tier_name AS "tierName", (m.base_rate_paise + m.surcharge_paise) AS "perPlate",
+           ${effectiveGapSql(sql.raw('se.event_id'), sql.raw("('food:' || se.id::text)"))} AS "gapPaise"
     FROM sub_event_menus m JOIN sub_events se ON se.id = m.sub_event_id
     WHERE se.event_id = ${eventId}
     ORDER BY se.event_date, se.start_time
-  `)) as unknown as { name: string; pax: number; tierName: string; perPlate: number }[]
-  for (const f of food) push('food', `${f.tierName} × ${f.pax} pax`, f.pax, Number(f.perPlate), f.pax * Number(f.perPlate), f.name)
+  `)) as unknown as { name: string; pax: number; tierName: string; perPlate: number; gapPaise: number }[]
+  for (const f of food) {
+    const gross = f.pax * Number(f.perPlate)
+    push('food', `${f.tierName} × ${f.pax} pax`, f.pax, Number(f.perPlate), Math.max(0, gross - Number(f.gapPaise)), f.name, undefined, gross)
+  }
 
   // Chef delicacies — a priced off-menu dish is a per-plate addition to the food rate, and
   // `foodAndAddonTotal` has always counted it, so the payment review, the payable amount and
@@ -198,21 +222,27 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
            (rr.check_out - rr.check_in)::int AS nights,
            COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
                       WHERE r.room_type = rr.room_type AND r.is_active
-                        AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)::bigint AS "ratePaise"
+                        AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0)::bigint AS "ratePaise",
+           ${effectiveGapSql(sql.raw('rr.event_id'), roomLineKeySql('rr'))} AS "gapPaise"
     FROM room_requirements rr
     LEFT JOIN lodging_units u ON u.id = rr.unit_id
     WHERE rr.event_id = ${eventId}
     ORDER BY u.name, rr.room_type
-  `)) as unknown as { unitName: string | null; roomType: string; count: number; nights: number; ratePaise: number }[]
+  `)) as unknown as { unitName: string | null; roomType: string; count: number; nights: number; ratePaise: number; gapPaise: number }[]
   //
   // The band is read off the NIGHTLY rate, so a ₹11,000 Presidential Suite carries 18% and a
   // ₹4,500 Deluxe carries 5% on the same bill — and a week of the Deluxe stays at 5% however
   // large the line total grows. A dormitory is exempt whatever it costs: its rate buys a room
   // of 18–30 beds, not a bed (client, 17 Aug 2026).
+  //
+  // And it is read off what a night is being CHARGED at, not what it lists at (client, 20 Aug
+  // 2026), so a discounted suite can fall out of the 18% band into the 5% one.
   for (const rm of rooms) {
     const qty = rm.count * rm.nights
+    const gross = qty * Number(rm.ratePaise)
+    const net = Math.max(0, gross - Number(rm.gapPaise))
     const label = `${rm.unitName ?? 'Lodging'} — ${rm.roomType.replace(/_/g, ' ')} × ${rm.count} room(s) × ${rm.nights} night(s)`
-    push('rooms', label, qty, Number(rm.ratePaise), qty * Number(rm.ratePaise), null, roomGstBp(Number(rm.ratePaise), rm.roomType))
+    push('rooms', label, qty, Number(rm.ratePaise), net, null, roomGstBp(qty > 0 ? Math.round(net / qty) : 0, rm.roomType), gross)
   }
 
   // Plates issued beyond the pax a function was catered for (migration 0035) — closed entries
@@ -312,7 +342,7 @@ async function recomputeTotals(tx: Tx, invoiceId: string, eventId: string): Prom
   const rows = await tx.select({ section: schema.invoiceLines.section, amountPaise: schema.invoiceLines.amountPaise, taxPaise: schema.invoiceLines.taxPaise }).from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, invoiceId))
   const gross = rows.reduce((s, r) => s + r.amountPaise, 0)
   const { collected, shown } = splitTax(rows)
-  const discount = await effectiveDiscountPaise(eventId, tx)
+  const discount = await lumpDiscountPaise(eventId, tx)
   const advances = await advancesPaise(tx, eventId)
   const net = gross - discount + collected
   await tx
@@ -327,7 +357,7 @@ export async function draftInvoice(tx: Tx, actor: Actor, eventId: string): Promi
   const specs = await computeBillLines(tx, eventId)
   const gross = specs.reduce((s, l) => s + l.amountPaise, 0)
   const { collected, shown } = splitTax(specs)
-  const discount = await effectiveDiscountPaise(eventId, tx)
+  const discount = await lumpDiscountPaise(eventId, tx)
   const advances = await advancesPaise(tx, eventId)
   const net = gross - discount + collected
 
@@ -336,7 +366,7 @@ export async function draftInvoice(tx: Tx, actor: Actor, eventId: string): Promi
     .values({ eventId, grossPaise: gross, discountPaise: discount, taxPaise: collected, shownTaxPaise: shown, netPaise: net, advancesPaise: advances, balancePaise: net - advances, tncSnapshot: tnc?.value ?? '' })
     .returning({ id: schema.invoices.id })
   if (specs.length > 0) {
-    await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null })))
+    await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, grossAmountPaise: l.grossAmountPaise ?? null, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null })))
   }
   await audit(tx, actor, { entity: 'invoices', entityId: inv!.id, eventId, action: 'insert', field: 'draft', newValue: `net ${net}` })
 }
@@ -360,7 +390,7 @@ export type InvoiceView = {
   advancesPaise: number; balancePaise: number
   payments: PaymentTrailRow[]
   tncSnapshot: string
-  lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; taxPaise: number; functionLabel: string | null }[]
+  lines: { id: string; section: string; description: string; qty: string; ratePaise: number; gstRateBp: number; amountPaise: number; grossAmountPaise: number | null; taxPaise: number; functionLabel: string | null }[]
 }
 
 export async function getInvoice(eventId: string): Promise<InvoiceView | null> {
@@ -379,7 +409,7 @@ export async function getInvoice(eventId: string): Promise<InvoiceView | null> {
     advancesPaise: inv.advancesPaise, balancePaise: inv.balancePaise,
     payments: await paymentTrail(db, eventId),
     tncSnapshot: inv.tncSnapshot,
-    lines: lines.map((l) => ({ id: l.id, section: l.section, description: l.description, functionLabel: l.functionLabel, qty: l.qty, ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
+    lines: lines.map((l) => ({ id: l.id, section: l.section, description: l.description, functionLabel: l.functionLabel, qty: l.qty, ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, grossAmountPaise: l.grossAmountPaise, taxPaise: l.taxPaise })),
   }
 }
 
@@ -450,7 +480,7 @@ export async function reissueInvoice(
   if (!inv.finalisedAt) {
     await tx.delete(schema.invoiceLines).where(sql`invoice_id = ${inv.id} AND section <> 'adjustment'`)
     if (specs.length > 0) {
-      await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null })))
+      await tx.insert(schema.invoiceLines).values(specs.map((l) => ({ invoiceId: inv.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, grossAmountPaise: l.grossAmountPaise ?? null, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null })))
     }
     await recomputeTotals(tx, inv.id, eventId)
     await audit(tx, actor, { entity: 'invoices', entityId: inv.id, eventId, action: 'update', field: 'redraft', newValue: reason })
@@ -466,7 +496,7 @@ export async function reissueInvoice(
 
   const gross = specs.reduce((s, l) => s + l.amountPaise, 0) + adjustments.reduce((s, l) => s + l.amountPaise, 0)
   const { collected, shown } = splitTax([...specs, ...adjustments])
-  const discount = await effectiveDiscountPaise(eventId, tx)
+  const discount = await lumpDiscountPaise(eventId, tx)
   const advances = await advancesPaise(tx, eventId)
   const net = gross - discount + collected
   const now = new Date().toISOString()
@@ -496,8 +526,8 @@ export async function reissueInvoice(
     })
     .returning({ id: schema.invoices.id })
 
-  const carried = adjustments.map((a) => ({ invoiceId: next!.id, section: a.section, description: a.description, sacHsn: a.sacHsn, qty: a.qty, ratePaise: a.ratePaise, gstRateBp: a.gstRateBp, amountPaise: a.amountPaise, taxPaise: a.taxPaise, functionLabel: a.functionLabel }))
-  const fresh = specs.map((l) => ({ invoiceId: next!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null }))
+  const carried = adjustments.map((a) => ({ invoiceId: next!.id, section: a.section, description: a.description, sacHsn: a.sacHsn, qty: a.qty, ratePaise: a.ratePaise, gstRateBp: a.gstRateBp, amountPaise: a.amountPaise, grossAmountPaise: a.grossAmountPaise, taxPaise: a.taxPaise, functionLabel: a.functionLabel }))
+  const fresh = specs.map((l) => ({ invoiceId: next!.id, section: l.section, description: l.description, sacHsn: l.sacHsn ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, grossAmountPaise: l.grossAmountPaise ?? null, taxPaise: l.taxPaise, functionLabel: l.functionLabel ?? null }))
   if (fresh.length + carried.length > 0) {
     await tx.insert(schema.invoiceLines).values([...fresh, ...carried])
   }
@@ -551,7 +581,7 @@ export async function proformaData(eventId: string) {
   const specs = await computeBillLines(db, eventId)
   const gross = specs.reduce((s, l) => s + l.amountPaise, 0)
   const { collected, shown } = splitTax(specs)
-  const discount = await effectiveDiscountPaise(eventId)
+  const discount = await lumpDiscountPaise(eventId)
   const advances = await advancesPaise(db, eventId)
   const net = gross - discount + collected
 
@@ -575,7 +605,7 @@ export async function proformaData(eventId: string) {
     payments: await paymentTrail(db, eventId),
     balancePaise: net - advances,
     tncSnapshot: tnc?.value ?? '',
-    lines: specs.map((l, i) => ({ id: `p${i}`, section: l.section, description: l.description, functionLabel: l.functionLabel ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, taxPaise: l.taxPaise })),
+    lines: specs.map((l, i) => ({ id: `p${i}`, section: l.section, description: l.description, functionLabel: l.functionLabel ?? null, qty: String(l.qty), ratePaise: l.ratePaise, gstRateBp: l.gstRateBp, amountPaise: l.amountPaise, grossAmountPaise: l.grossAmountPaise ?? null, taxPaise: l.taxPaise })),
   }
   return { event, contacts, invoice, signoffs: [] as { designation: string; signedBy: string; signedAt: string }[], lockedPlus: false, proforma: true }
 }

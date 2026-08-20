@@ -45,14 +45,32 @@ export async function revenueReport() {
     WHERE se.event_id IN (SELECT event_id FROM invoices WHERE finalised_at IS NOT NULL AND superseded_at IS NULL)
     GROUP BY p.name ORDER BY "venueRevenuePaise" DESC
   `)) as unknown as { propertyName: string; venueRevenuePaise: number }[]
+  // GROSS AND DISCOUNT BOTH COUNT THE LINES (20 Aug 2026). Since a discount became a PRICE
+  // rather than a deduction, most of one lives inside `invoice_lines.amount_paise` and never
+  // reaches `invoices.discount_paise` — which is the lump discounts alone now. Summing that
+  // column by itself made this report say "Discounts ₹0" on a month in which the hotel had
+  // given lakhs away, and understated gross by exactly the same amount.
+  //
+  // The lines remember what they would have cost: `gross_amount_paise` (migration 0036), NULL
+  // when nothing was given. So the discount is recoverable from the invoice itself rather than
+  // from the live `discounts` table — which matters, because an issued document must not
+  // re-report itself differently after somebody re-prices a booking. `netPaise` was always
+  // right and is untouched; only the two figures either side of it were hiding the money.
   const [tax] = (await db.execute(sql`
-    SELECT COALESCE(sum(gross_paise),0)::bigint AS "grossPaise", COALESCE(sum(discount_paise),0)::bigint AS "discountPaise",
-           COALESCE(sum(tax_paise),0)::bigint AS "taxPaise",
+    WITH line_disc AS (
+      SELECT l.invoice_id, sum(COALESCE(l.gross_amount_paise, l.amount_paise) - l.amount_paise)::bigint AS given
+      FROM invoice_lines l GROUP BY l.invoice_id
+    )
+    SELECT COALESCE(sum(i.gross_paise + COALESCE(d.given, 0)),0)::bigint AS "grossPaise",
+           COALESCE(sum(i.discount_paise + COALESCE(d.given, 0)),0)::bigint AS "discountPaise",
+           COALESCE(sum(i.tax_paise),0)::bigint AS "taxPaise",
            -- The 18% the documents print and nobody pays (migration 0026). Carried so this
            -- report can be reconciled against a bill without the two seeming to disagree.
-           COALESCE(sum(shown_tax_paise),0)::bigint AS "shownTaxPaise",
-           COALESCE(sum(net_paise),0)::bigint AS "netPaise"
-    FROM invoices WHERE finalised_at IS NOT NULL AND superseded_at IS NULL
+           COALESCE(sum(i.shown_tax_paise),0)::bigint AS "shownTaxPaise",
+           COALESCE(sum(i.net_paise),0)::bigint AS "netPaise"
+    FROM invoices i
+    LEFT JOIN line_disc d ON d.invoice_id = i.id
+    WHERE i.finalised_at IS NOT NULL AND i.superseded_at IS NULL
   `)) as unknown as { grossPaise: number; discountPaise: number; taxPaise: number; shownTaxPaise: number; netPaise: number }[]
   return { byEventType, byProperty, taxSummary: tax }
 }

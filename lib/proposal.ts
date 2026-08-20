@@ -2,7 +2,7 @@ import 'server-only'
 import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { notFound } from '@/lib/api'
-import { effectiveDiscountPaise, listDiscounts, type DiscountRow } from '@/lib/discounts'
+import { effectiveLineGaps, listDiscounts, lumpDiscountPaise, roomLineKey, type DiscountRow } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
 import { ADVANCE_PCT, WEDDING_MILESTONE_PCT } from '@/lib/payment-schedule'
 import { ROOM_GST_HIGH_BP, STANDARD_GST_BP, roomGstBp, taxOf } from '@/lib/tax'
@@ -92,6 +92,13 @@ export type ProposalFunction = {
    */
   venueRatePaise: number | null
   /**
+   * The hire before the Discounted column touched it (client, 20 Aug 2026). Equal to
+   * `venueRatePaise` when nothing was given, and printed beside it when something was — the
+   * whole point of the column is that the guest sees what the hall lists at as well as what
+   * they are being charged.
+   */
+  venueActualPaise: number | null
+  /**
    * The function whose day-hire already covers this one — same venue, same date — or null when
    * this function carries the charge itself. Printed instead of a second venue line, because a
    * blank where a charge used to be reads as an omission.
@@ -99,10 +106,14 @@ export type ProposalFunction = {
   venueCoveredBy: string | null
   menu: ProposalMenu | null
   foodAmountPaise: number
+  /** Pax × the per-plate rate before any discount — the Actual column's food figure. */
+  foodActualPaise: number
   addons: ProposalAddon[]
   /** Bottles ordered for this function (12 Aug 2026). Printed as its own Alcohol section. */
   bar: ProposalBarLine[]
   subtotalPaise: number
+  /** The sub-total at list price, so the two columns each add up on their own. */
+  actualSubtotalPaise: number
 }
 
 export type ProposalBarLine = {
@@ -122,6 +133,8 @@ export type ProposalRoomLine = {
   nights: number
   ratePaise: number
   amountPaise: number
+  /** count × nights × the rack/frozen rate, before the Discounted column. */
+  actualAmountPaise: number
   /**
    * 500 or 1800 — the band this line's nightly rate and category put it in. Derived here so the
    * printed document can mark the 18% rooms without carrying its own copy of the threshold and
@@ -136,6 +149,7 @@ export type ProposalLodge = {
   rooms: number
   roomNights: number
   subtotalPaise: number
+  actualSubtotalPaise: number
 }
 
 /** One side of the room-tax bifurcation: what was charged, and the tax it drew. */
@@ -206,7 +220,14 @@ export type ProposalDocument = {
      */
     roomTaxSplit: RoomTaxSplit
     extrasPaise: number
+    /** Pre-20-Aug-2026 LUMP discounts only — the line discounts are already off the lines. */
     discountPaise: number
+    /** Venue + food + add-ons at list price: what the Actual column adds up to. */
+    actualProposalPaise: number
+    /** Rooms at list price. */
+    actualRoomsPaise: number
+    /** actual − discounted across every line: what the guest was given, pre-tax. */
+    lineDiscountPaise: number
     /** proposal + rooms + extras − discount, before tax. */
     subtotalPaise: number
     /**
@@ -256,6 +277,11 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     SELECT phone, label FROM event_contacts WHERE event_id = ${eventId}
   `)) as unknown as ProposalContact[]
   contacts.sort((a, b) => contactRank(a.label) - contactRank(b.label) || a.phone.localeCompare(b.phone))
+
+  // Every line's discounted price, as a gap below its actual (client, 20 Aug 2026). Fetched
+  // once and applied below, so this document, the bill and the payable arithmetic all price the
+  // same line the same way — see lib/discounts.ts.
+  const gaps = await effectiveLineGaps(eventId)
 
   // ── Functions ────────────────────────────────────────────────────────────────
   // The venue rate is the confirm-time snapshot when there is one, otherwise the rate card
@@ -338,7 +364,8 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     const pax = num(s.pax)
     const chefPaise = num(s.chefPaise)
     const perPlatePaise = menuId ? num(s.baseRatePaise) + num(s.surchargePaise) + chefPaise : 0
-    const foodAmountPaise = perPlatePaise * pax
+    const foodActualPaise = perPlatePaise * pax
+    const foodAmountPaise = Math.max(0, foodActualPaise - (gaps.get(`food:${s.id as string}`) ?? 0))
 
     const addons: ProposalAddon[] = addonRows
       .filter((a) => a.subEventId === s.id)
@@ -392,15 +419,20 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     if (!holder) venueDayCarrier.set(dayKey, { id: s.id as string, name: s.name as string })
 
     const rawVenueRate = s.venueRatePaise == null ? null : num(s.venueRatePaise)
-    const venueRatePaise = venueCoveredBy ? 0 : rawVenueRate
+    const venueActualPaise = venueCoveredBy ? 0 : rawVenueRate
+    // What the guest is charged for the hall (client, 20 Aug 2026). `venueActualPaise` stays
+    // beside it so the document prints both columns; a venue with no rate card is still null,
+    // and a null is a gate, never a zero (BR-R1).
+    const venueRatePaise =
+      venueActualPaise == null ? null : Math.max(0, venueActualPaise - (gaps.get(`venue:${s.id as string}`) ?? 0))
     // The bar is in the subtotal because it is in `proposal_total_paise`. Printing the bottles
     // and leaving their money out would put a document in the guest's hand whose own figures
     // do not add up to the one they are asked to pay against.
-    const subtotalPaise =
-      (venueRatePaise ?? 0) +
-      foodAmountPaise +
-      addons.reduce((n, a) => n + a.amountPaise, 0) +
-      bar.reduce((n, b) => n + b.amountPaise, 0)
+    const otherPaise = addons.reduce((n, a) => n + a.amountPaise, 0) + bar.reduce((n, b) => n + b.amountPaise, 0)
+    const subtotalPaise = (venueRatePaise ?? 0) + foodAmountPaise + otherPaise
+    // Add-ons and the bar carry no Discounted cell, so they sit at the same figure in both
+    // columns and the two sub-totals differ by exactly what was given on the venue and the food.
+    const actualSubtotalPaise = (venueActualPaise ?? 0) + foodActualPaise + otherPaise
 
     return {
       id: s.id as string,
@@ -416,12 +448,15 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       isBundle: Boolean(s.isBundle),
       bundleMembers: (s.bundleMembers as string[]) ?? [],
       venueRatePaise,
+      venueActualPaise,
       venueCoveredBy,
       menu,
       foodAmountPaise,
+      foodActualPaise,
       addons,
       bar,
       subtotalPaise,
+      actualSubtotalPaise,
     }
   })
 
@@ -462,15 +497,25 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     const count = num(r.count)
     const nights = num(r.nights)
     const ratePaise = num(r.ratePaise)
-    const amountPaise = count * nights * ratePaise
+    const qty = count * nights
+    const actualAmountPaise = qty * ratePaise
+    const key = roomLineKey({
+      unitId: (r.unitId as string) ?? null,
+      roomType: r.roomType as string,
+      checkIn: r.checkIn as string,
+      checkOut: r.checkOut as string,
+    })
+    const amountPaise = Math.max(0, actualAmountPaise - (gaps.get(key) ?? 0))
     roomsPaise += amountPaise
-    // Per line, then summed — matches lib/pricing.ts and lib/invoice.ts exactly.
-    roomsTaxPaise += bandRoomTax(ratePaise, amountPaise, r.roomType as string)
+    // Per line, then summed — matches lib/pricing.ts and lib/invoice.ts exactly. Taxed on the
+    // DISCOUNTED line and banded by the DISCOUNTED nightly rate (client, 20 Aug 2026).
+    const effectiveNightly = qty > 0 ? Math.round(amountPaise / qty) : 0
+    roomsTaxPaise += bandRoomTax(effectiveNightly, amountPaise, r.roomType as string)
 
     const name = r.lodge as string
     let lodge = lodges.find((l) => l.name === name)
     if (!lodge) {
-      lodge = { name, lines: [], rooms: 0, roomNights: 0, subtotalPaise: 0 }
+      lodge = { name, lines: [], rooms: 0, roomNights: 0, subtotalPaise: 0, actualSubtotalPaise: 0 }
       lodges.push(lodge)
     }
     lodge.lines.push({
@@ -483,11 +528,13 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       nights,
       ratePaise,
       amountPaise,
-      gstRateBp: roomGstBp(ratePaise, r.roomType as string),
+      actualAmountPaise,
+      gstRateBp: roomGstBp(effectiveNightly, r.roomType as string),
     })
     lodge.rooms += count
     lodge.roomNights += count * nights
     lodge.subtotalPaise += amountPaise
+    lodge.actualSubtotalPaise += actualAmountPaise
   }
 
   // ── Extras: the Lodge Manager's, closed maintenance, the Auditor's adjustments ─
@@ -583,8 +630,15 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   const proposalPaise = functions.reduce((n, f) => n + f.subtotalPaise, 0)
   const extrasPaise = extras.reduce((n, e) => n + e.amountPaise, 0)
   const discounts = await listDiscounts(eventId)
-  const discountPaise = await effectiveDiscountPaise(eventId)
+  // Only the pre-20-Aug LUMP rows still deduct here. Every line discount is already off the
+  // line it prices — subtracting it again would take the same money off twice.
+  const discountPaise = await lumpDiscountPaise(eventId)
   const subtotalPaise = proposalPaise + roomsPaise + extrasPaise - discountPaise
+  // The Actual column's own arithmetic, so the guest can read what the booking lists at and
+  // what the difference came to (client, 20 Aug 2026).
+  const actualProposalPaise = functions.reduce((n, f) => n + f.actualSubtotalPaise, 0)
+  const actualRoomsPaise = lodges.reduce((n, l) => n + l.actualSubtotalPaise, 0)
+  const lineDiscountPaise = actualProposalPaise - proposalPaise + (actualRoomsPaise - roomsPaise)
   const totalPaise = subtotalPaise + roomsTaxPaise + extraRoomsTaxPaise
 
   // The 18% shown on everything but rooms, rounded per line and summed — the same lines
@@ -638,6 +692,9 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       roomTaxSplit,
       extrasPaise,
       discountPaise,
+      actualProposalPaise,
+      actualRoomsPaise,
+      lineDiscountPaise,
       subtotalPaise,
       totalPaise,
       shownGstPaise,

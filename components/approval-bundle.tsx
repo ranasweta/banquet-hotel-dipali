@@ -8,6 +8,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
 import { titleCase } from '@/lib/text'
+import { DiscountGrid } from '@/components/discount-grid'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -125,8 +126,6 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
   const [fnEdits, setFnEdits] = useState<Record<string, Partial<Fn>>>({})
   const [menuEdits, setMenuEdits] = useState<Record<string, string[]>>({})
   const [roomDraft, setRoomDraft] = useState<RoomLine[] | null>(null)
-  const [removedDiscounts, setRemovedDiscounts] = useState<string[]>([])
-  const [newDiscount, setNewDiscount] = useState({ head: 'overall', rupees: '', remark: '' })
   const [reason, setReason] = useState('')
   /** Keyed by ROW INDEX: two lines can share a shape yet each takes real rooms. */
   const [free, setFree] = useState<Record<number, { available: number; total: number }>>({})
@@ -244,18 +243,12 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
   const dirty =
     Object.keys(fnEdits).length > 0 ||
     Object.keys(menuEdits).length > 0 ||
-    roomDraft !== null ||
-    removedDiscounts.length > 0 ||
-    Boolean(newDiscount.rupees.trim())
+    roomDraft !== null
 
   async function save() {
     if (!detail) return
     if (detail.isLocked && !reason.trim()) {
       toast.error('This booking is locked — give a reason for the change.')
-      return
-    }
-    if (newDiscount.rupees.trim() && !newDiscount.remark.trim()) {
-      toast.error('A discount needs a remark.')
       return
     }
     for (const a of pending) {
@@ -277,16 +270,6 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
       edits.rooms = roomDraft.map((r) => ({
         unitId: r.unitId, roomType: r.roomType, count: r.count, checkIn: r.checkIn, checkOut: r.checkOut,
       }))
-    }
-    if (removedDiscounts.length) edits.removeDiscountIds = removedDiscounts
-    if (newDiscount.rupees.trim()) {
-      // Rupees in the field, paise on the wire — money is BIGINT paise everywhere but the UI.
-      const paise = Math.round(Number(newDiscount.rupees) * 100)
-      if (!Number.isFinite(paise) || paise <= 0) {
-        toast.error('Enter a discount amount in rupees.')
-        return
-      }
-      edits.addDiscounts = [{ head: newDiscount.head, amountPaise: paise, remark: newDiscount.remark.trim() }]
     }
     if (reason.trim()) edits.reason = reason.trim()
 
@@ -316,8 +299,7 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
       if (r.remaining === 0) router.push('/approvals')
       else {
         setConfirming(false)
-        setFnEdits({}); setMenuEdits({}); setRoomDraft(null); setRemovedDiscounts([])
-        setNewDiscount({ head: 'overall', rupees: '', remark: '' }); setReason('')
+        setFnEdits({}); setMenuEdits({}); setRoomDraft(null); setReason('')
         await load()
       }
     } catch (e) {
@@ -714,71 +696,16 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
           </CardContent>
         </Card>
 
-        {/* Discounts */}
+        {/* The bill in two columns, the same tool the counter uses (client, 20 Aug 2026:
+            "same thing do with the GM one too so that whole site should be unified as same
+            discount method"). His prices are not held to the 10% cap and take effect at once —
+            the server decides that, so this screen does not have to claim it. It saves on its
+            own button rather than with the bundle below: a price is a price, and holding it
+            behind the same Save as a menu revision made the two look like one decision. */}
         <Card>
           <CardContent className="space-y-3 py-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-medium">Discounts</h3>
-              <span className="text-sm tabular-nums text-muted-foreground">−{formatPaise(p.totals.discountPaise)}</span>
-            </div>
-            {p.discounts.length === 0 ? (
-              <p className="text-sm text-muted-foreground">None given.</p>
-            ) : (
-              <ul className="space-y-1.5">
-                {p.discounts.map((d) => {
-                  const gone = removedDiscounts.includes(d.id)
-                  return (
-                    <li key={d.id} className={cn('flex flex-wrap items-center gap-2 text-sm', gone && 'opacity-50 line-through')}>
-                      <Badge variant="outline" className="text-xs">{titleCase(d.head)}</Badge>
-                      <span className="tabular-nums">{d.percentBp != null ? `${d.percentBp / 100}%` : ''} {formatPaise(d.amountPaise)}</span>
-                      <span className="text-muted-foreground">{d.remark}</span>
-                      {d.status === 'pending' && (
-                        <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs font-medium text-white">Requested</span>
-                      )}
-                      <Button
-                        variant="ghost" size="sm" className="ml-auto h-7"
-                        aria-label={gone ? `Restore ${d.head} discount` : `Remove ${d.head} discount`}
-                        onClick={() => setRemovedDiscounts(gone ? removedDiscounts.filter((x) => x !== d.id) : [...removedDiscounts, d.id])}
-                      >
-                        {gone ? 'Undo' : <Trash2 className="size-3.5" aria-hidden />}
-                      </Button>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-            <Separator />
-            <div className="grid items-end gap-2 sm:grid-cols-[8rem_8rem_1fr]">
-              <div>
-                <Label htmlFor="disc-head" className="text-xs">Apply to</Label>
-                <select
-                  id="disc-head" className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
-                  value={newDiscount.head} onChange={(e) => setNewDiscount({ ...newDiscount, head: e.target.value })}
-                >
-                  <option value="overall">Whole bill</option>
-                  <option value="menu">Menu</option>
-                  <option value="venue">Venue</option>
-                  <option value="room">Rooms</option>
-                </select>
-              </div>
-              <div>
-                <Label htmlFor="disc-amt" className="text-xs">Amount ₹</Label>
-                <Input
-                  id="disc-amt" inputMode="decimal" className="mt-1 h-8 tabular-nums" placeholder="25000"
-                  value={newDiscount.rupees} onChange={(e) => setNewDiscount({ ...newDiscount, rupees: e.target.value })}
-                />
-              </div>
-              <div>
-                <Label htmlFor="disc-remark" className="text-xs">Remark (required)</Label>
-                <Input
-                  id="disc-remark" className="mt-1 h-8" placeholder="Repeat client — agreed with the owner"
-                  value={newDiscount.remark} onChange={(e) => setNewDiscount({ ...newDiscount, remark: e.target.value })}
-                />
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Your discount is not held to the 10% cap and takes effect at once.
-            </p>
+            <h3 className="font-medium">Prices &amp; discounts</h3>
+            <DiscountGrid eventId={eventId} editable onChanged={load} />
           </CardContent>
         </Card>
       </section>

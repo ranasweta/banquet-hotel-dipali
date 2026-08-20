@@ -85,21 +85,37 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      tax, less discounts. The 18% GST is not in it (see rule 10).
    - Combined discounts ≤ 10% of the **total bill** — `proposal_total_paise` + rooms,
      pre-tax and free of GST of either kind (BR-D2, amended 25 Jul 2026; was venue+food
-     only). A discount is **an amount of money** off a head (menu / venue / room /
-     overall) — client's lead, 4 Aug 2026, replacing the live percentage. What is typed
-     is what the guest gets; the percentage survives only as the cap's arithmetic. Such
-     a row stores `percent_bp = NULL`; older percentage rows still recompute live.
-     Over the cap → Higher Authority approval. Per-room caps (BR-D1) are retired now
+     only). A discount is **the price we are actually charging**, not money taken off
+     (client, 20 Aug 2026, replacing the 4 Aug rupee-amount-off-a-head; migration 0036).
+     Every priced line — venue and food per function, each room category — carries an
+     **Actual** figure that never moves and a **Discounted** one prefilled with it and typed
+     over. Nothing is subtracted anywhere. What is STORED is the gap below the actual, never
+     the typed price, because "the Billing figure always follows the live feeding of pax,
+     menu, everything as it is": pax moves and the Discounted column moves with it, keeping
+     the same money off. A flat gap, not a per-plate one. Every reader clamps at
+     `max(0, actual − gap)`. The line is keyed by `discounts.line_key` — text, because saving
+     rooms deletes and re-inserts every row (rule 9) and a uuid would orphan.
+     **Tax follows the money**: the room 5%/18% is charged on the discounted line and the band
+     is re-read off the **discounted nightly rate**, so an ₹11,000 suite given for ₹7,000 a
+     night is a 5% room; the shown 18% on venue and food is computed on the discounted figure
+     too. `lib/discounts.ts` owns the sheet and `payableRows` / `computeBillLines` /
+     `proposalDocument` each price a line the same way.
+     A row with `line_key IS NULL` is a pre-20-Aug LUMP discount: still effective, still
+     subtracted at the end of the bill, and moving no tax. Nothing new writes one from a screen.
+     Over the cap → Higher Authority approval, as **one** request carrying every cell of that
+     save, never one per cell. Per-room caps (BR-D1) are retired now
      that rooms are booked in bulk. Because a frozen rupee figure cannot shrink with the
      bill the way a percentage did, `confirmEvent` re-tests the same cap once more.
      Discounts are the **Booking Manager's** to give (he has `billing` edit) and the
      **Authority's** — both, from the Payment review or the event's Billing panel.
      **The cap does not bind the Authority himself** (amended 1 Aug 2026; widened 3 Aug 2026
      from the approvals screen to *wherever he gives it*): his discount is written with no
-     `exception_id` — which is what `effectiveDiscountPaise` reads as in force — and may be a
-     flat rupee amount. The cap's job is to route a big discount *to* him; it has nothing to do
-     when he is the one giving it. `lib/discounts.ts` owns that test now, so every screen agrees.
-     The remark is still mandatory.
+     `exception_id` — which is what every reader takes as in force. The cap's job is to route a
+     big discount *to* him; it has nothing to do when he is the one giving it.
+     `lib/discounts.ts` owns that test now, so every screen agrees.
+     **The remark is optional** (client, 20 Aug 2026, reversing FR-11.1): one per save, covering
+     every cell that moved in it. The audit row still names who moved which line from what to
+     what — see `docs/SEED_ASSUMPTIONS.md` §F29, which flags the control that was given up.
    Each runs in ONE db transaction; rely on the PK/exclusion constraints to
    win races, and translate constraint violations into friendly errors.
 4. **Snapshots, not references**: menus copy tier name, price, surcharge, and
@@ -195,8 +211,10 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    **Never explain the shown-not-collected 18% on a guest-facing document**
    (client, 17 Aug 2026). That the hotel prints it and does not take it is the
    hotel's business; the note that used to say so on the proposal has been struck
-   out. Staff screens — the Payment review, the lock panel, the billing ledger,
-   the reports — still say it plainly, and must.
+   out. On the **Payment review's total row** it is now just "GST 18%" as well
+   (client, 20 Aug 2026) — that row sits directly under **Amount payable**, which is
+   what the counter takes. Every other staff screen — the lock panel, the billing
+   ledger, the reports — still spells the split out in words, and must.
    The 18% enters **no** threshold and **no** balance — not the 25% advance, not
    the wedding 50%, not the discount cap, not `balance = payable − paid`. Folding
    it into a balance would leave every booking 18% short of zero for ever and

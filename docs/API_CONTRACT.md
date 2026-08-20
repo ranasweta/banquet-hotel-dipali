@@ -304,8 +304,14 @@ and collected from nobody.
 
 ## Discounts & payments (module: billing — booking_manager has none; the advance is
 ## recorded on the bookings/confirm path instead)
-- `GET|POST /events/:id/discounts` — head menu/venue/room/overall. POST takes `amount_paise`
-  (a discount is money, 4 Aug 2026); `percent_bp` is still accepted for the approval-bundle path
+- `GET|PUT /events/:id/discounts` — GET returns the Actual | Discounted **sheet**: every priced
+  line with what it lists at, what is being charged for it, the room tax on each, and the totals
+  both columns come to — plus any surviving lump rows and the cap. PUT writes the Discounted
+  column: `{ lines: [{ key, discounted_paise }], remark? }`, the remark optional since
+  20 Aug 2026. Send a line back at its actual price to clear it. 200 when it takes effect, 202
+  when the combined discount crosses the cap and the whole save is held for the Authority as one
+  request. PUT rather than POST: it sets prices to a state, so sending the same column twice
+  leaves the same bill. `percent_bp` is still accepted for the approval-bundle path
   and older callers. Over cap → 202 { exception_id } (BR-D2). GET adds `cap`
   { capPct, capBasePaise, capPaise, usedPaise, headroomPaise } so a screen can state the
   remaining headroom in rupees.

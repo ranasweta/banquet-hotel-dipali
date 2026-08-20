@@ -79,6 +79,7 @@ export type Ledger = {
   roomsPaise: number
   roomsTaxPaise: number
   discountPaise: number
+  givenDiscountPaise: number
   /** Closed maintenance, billed and now inside the payable (client, 11 Aug 2026). */
   maintenancePaise: number
   /** The Lodge Manager's closed extras: extra rooms, the 5% on them, and in-room dining. */
@@ -140,6 +141,8 @@ export async function getLedger(eventId: string): Promise<Ledger> {
       schedule.extraRoomsPaise + schedule.extraRoomsTaxPaise + schedule.inRoomDiningPaise,
     extraPlatesPaise: schedule.extraPlatesPaise,
     discountPaise: schedule.discountPaise,
+    // What the guest was given, lines included — the figure the panel's Discounts tile shows.
+    givenDiscountPaise: schedule.givenDiscountPaise,
     payablePaise: schedule.payablePaise,
     shownGstPaise,
     displayTotalPaise: schedule.payablePaise + shownGstPaise,

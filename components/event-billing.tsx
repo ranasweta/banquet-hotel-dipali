@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
-import { EventDiscounts } from '@/components/event-discounts'
+import { DiscountGrid } from '@/components/discount-grid'
 import {
   Select,
   SelectContent,
@@ -43,6 +43,7 @@ type Ledger = {
   roomsPaise: number
   roomsTaxPaise: number
   discountPaise: number
+  givenDiscountPaise: number
   maintenancePaise: number
   lodgeExtrasPaise: number
   extraPlatesPaise: number
@@ -78,7 +79,10 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
           the balance below is measured against the payable figure, not the printed one. */}
       <div className="grid gap-3 sm:grid-cols-4">
         <Stat label="Amount payable" value={formatPaise(ledger.payablePaise)} />
-        <Stat label="Discounts" value={ledger.discountPaise ? `− ${formatPaise(ledger.discountPaise)}` : '—'} />
+        {/* What was GIVEN, not what is still deducted at the end. Since 20 Aug 2026 most of a
+            discount lives inside the line prices, so `discountPaise` alone reads "—" on a
+            booking that was just discounted. */}
+        <Stat label="Discounts" value={ledger.givenDiscountPaise ? `− ${formatPaise(ledger.givenDiscountPaise)}` : '—'} />
         <Stat label="Paid" value={formatPaise(ledger.paidPaise)} />
         <Stat
           label="Balance"
@@ -100,9 +104,14 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
 
       <MilestoneSection milestones={ledger.milestones} />
 
-      {/* Per-head percentage discounts, where the bill total is read (client, 25 Jul 2026).
+      {/* The bill in two columns — the actual price of every line and what the guest is being
+          charged for it (client, 20 Aug 2026). Here as well as on the payment review, because
+          this is the other screen the bill is read on and the same tool has to be to hand.
           Refreshes the money summary above on change so the balance tracks. */}
-      <EventDiscounts eventId={eventId} editable={editable} onChanged={load} />
+      <div>
+        <h3 className="mb-2 text-sm font-medium">Prices &amp; discounts</h3>
+        <DiscountGrid eventId={eventId} editable={editable} onChanged={load} reloadKey={ledger.balancePaise} />
+      </div>
 
       <PaymentSection eventId={eventId} ledger={ledger} editable={editable} onChanged={load} />
     </div>

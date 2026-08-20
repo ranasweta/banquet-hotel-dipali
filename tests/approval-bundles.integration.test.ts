@@ -446,14 +446,14 @@ d('the Authority’s own discount', () => {
   it('is uncapped, immediately effective, and needs no approval', async () => {
     const { eventId, subId } = await makeBooking()
     await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: { 'Paneer Main Course': ['Kadai Paneer'] } })
-    const before = await discounts.effectiveDiscountPaise(eventId)
+    const before = await discounts.givenDiscountPaise(eventId)
 
     // Far over BR-D2's 10%: from anyone else this defers behind an exception.
     await gm.editProposalAsAuthority(ha, eventId, {
       addDiscounts: [{ head: 'overall', amountPaise: 5_000_00, remark: 'Owner’s instruction' }],
     })
 
-    const after = await discounts.effectiveDiscountPaise(eventId)
+    const after = await discounts.givenDiscountPaise(eventId)
     expect(after - before).toBe(5_000_00)
     // No exception was raised against himself — he IS the approver.
     const [{ n }] = (await db.execute(sql`
@@ -479,7 +479,7 @@ d('the Authority’s own discount', () => {
     })
     expect(res.skipped).toEqual([exceptionId])
     expect(res.remaining).toBe(0)
-    expect(await discounts.effectiveDiscountPaise(eventId)).toBe(0)
+    expect(await discounts.givenDiscountPaise(eventId)).toBe(0)
   }, SLOW)
 
   it('flows into the bill like any other discount', async () => {

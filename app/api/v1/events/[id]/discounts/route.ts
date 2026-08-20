@@ -2,28 +2,28 @@ import type { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { requirePermission } from '@/lib/auth'
 import { ok, route } from '@/lib/api'
-import { addDiscount, discountBases, discountCap, listDiscounts } from '@/lib/discounts'
+import { discountCap, discountSheet, listDiscounts, setLineDiscounts } from '@/lib/discounts'
 import { AUTHORITY_ROLES } from '@/lib/post-confirm'
 
-const bodySchema = z
-  .object({
-    head: z.enum(['menu', 'venue', 'room', 'overall']),
-    percent_bp: z.number().int().min(1).max(10000).optional(),
-    amount_paise: z.number().int().positive().optional(),
-    remark: z.string().trim().min(1).max(300),
-    ref_id: z.uuid().optional(),
-  })
-  .refine((v) => (v.percent_bp == null) !== (v.amount_paise == null), {
-    message: 'Give either a percentage or a rupee amount — exactly one.',
-  })
+const bodySchema = z.object({
+  // One save carries the whole Discounted column, not one cell at a time: the cap is measured on
+  // the combination, and a save that crosses it goes to the Authority as ONE request.
+  lines: z
+    .array(z.object({ key: z.string().min(1).max(200), discounted_paise: z.number().int().min(0) }))
+    .min(1)
+    .max(200),
+  // Optional since 20 Aug 2026 (client). The audit row still names who moved which line to what.
+  remark: z.string().trim().max(300).optional(),
+})
 
 /**
- * GET /events/:id/discounts — every discount (tagged effective/pending/rejected, with its rupee
- * value) plus the per-head subtotals and the cap.
+ * GET /events/:id/discounts — the Actual | Discounted sheet: every priced line with what it
+ * lists at and what is being charged for it, the rooms tax on each, and the totals both columns
+ * add up to. Plus the surviving pre-20-Aug lump rows, and the cap.
  *
- * `cap` carries the ceiling AND the headroom left in rupees, which is the only form that helps
- * now that a discount is typed in rupees (client's lead, 4 Aug 2026): "₹42,000 still available"
- * is actionable where "10%" needs a calculator.
+ * The sheet is built server-side and rendered as-is. No screen recomputes it: once the room GST
+ * band is decided by the DISCOUNTED nightly rate, a client-side copy of the arithmetic is a
+ * counter and a bill quietly disagreeing about what the guest owes.
  *
  * `capPct` and `uncapped` are here so the screen can state the rule it is actually under: the
  * cap is a setting, not the constant 10 the copy used to hardcode, and it does not bind the
@@ -33,14 +33,10 @@ const bodySchema = z
 export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   const actor = await requirePermission('billing', 'view')
   const { id } = await ctx.params
-  const [discounts, bases, cap] = await Promise.all([
-    listDiscounts(id),
-    discountBases(id),
-    discountCap(id),
-  ])
+  const [sheet, lumpDiscounts, cap] = await Promise.all([discountSheet(id), listDiscounts(id), discountCap(id)])
   return ok({
-    discounts,
-    bases,
+    sheet,
+    lumpDiscounts,
     cap,
     capPct: cap.capPct,
     uncapped: AUTHORITY_ROLES.has(actor.roleName),
@@ -48,22 +44,23 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
 })
 
 /**
- * POST /events/:id/discounts — records a discount against a head. `amount_paise` is how the
- * screens send one now (client's lead, 4 Aug 2026: money, not a percentage); `percent_bp` is
- * still accepted for the approval-bundle path and for anything holding the older contract.
- * Within the 10% cap it takes effect (201); over the cap it is held behind a discount_over_cap
- * exception (202, BR-D2).
+ * PUT /events/:id/discounts — writes the Discounted column. Send a line back at its actual price
+ * to clear its discount.
+ *
+ * 200 when it takes effect; 202 when the combined discount crosses the 10% cap and the whole
+ * save is held behind one `discount_over_cap` request for the Higher Authority (BR-D2). PUT, not
+ * POST: this sets prices to a state rather than appending another deduction to a ledger, and
+ * sending the same column twice must leave the same bill.
  */
-export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   const actor = await requirePermission('billing', 'create_edit')
   const { id } = await ctx.params
   const input = bodySchema.parse(await req.json())
-  const result = await addDiscount(actor, id, {
-    head: input.head,
-    percentBp: input.percent_bp,
-    amountPaise: input.amount_paise,
-    remark: input.remark,
-    refId: input.ref_id,
-  })
-  return ok(result, result.deferred ? 202 : 201)
+  const result = await setLineDiscounts(
+    actor,
+    id,
+    input.lines.map((l) => ({ key: l.key, discountedPaise: l.discounted_paise })),
+    input.remark ?? '',
+  )
+  return ok(result, result.deferred ? 202 : 200)
 })
