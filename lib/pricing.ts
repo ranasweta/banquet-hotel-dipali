@@ -1,6 +1,7 @@
 import 'server-only'
-import { and, desc, eq, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, lte, sql, type SQL } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
+import { crossesMidnight, prevDay, toMinutes } from '@/lib/occupancy'
 import { roomGstBp, taxOf } from '@/lib/tax'
 
 /** A db handle or a transaction handle — pricing reads must run inside the confirm tx. */
@@ -20,6 +21,9 @@ export type SubEventForPricing = {
   id: string
   name: string
   eventDate: string
+  /** Both needed to place the function in a venue-day — see `venueDayOf`, which reads the end. */
+  startTime: string
+  endTime: string
   venueId: string | null
   bundleId: string | null
 }
@@ -64,15 +68,67 @@ export type ProposalPricing = {
 }
 
 /**
- * The venue-day a function belongs to. Hiring a hall takes it for the day — 9 AM to 8 AM the
- * next morning — so every function inside that window shares one let (client, 12 Aug 2026).
- *
- * Keyed on the DATE, not on the occupancy window, which is why a function running 8 PM to
- * 6 AM belongs to the day it started on and not to two of them. A different venue on the same
- * day is a different let and is charged again; so is the same venue on another day.
+ * The hour a venue-day turns over: check-out 07:59, check-in 08:00, with no gap between them
+ * (client, 12 Aug 2026; hours and rule confirmed 21 Aug).
  */
+export const VENUE_DAY_CHANGEOVER = '08:00'
+
+/**
+ * The venue-day a function's charge belongs to.
+ *
+ * CHECKOUT DECIDES IT (client, 21 Aug 2026): "if checkout of event exceeds 8 AM then it will be
+ * charged, that's it — hence a 7 to 10 AM event will be charged, and then any event from 10 AM
+ * will not be charged if it's charged once."
+ *
+ * So a function that ENDS at or before 08:00 is the tail of the night before and costs nothing
+ * extra; a function that ends after 08:00 has run into a new let and that let is charged, once,
+ * however many functions follow it that day.
+ *
+ * It reads off the END time, not the start, and that is the whole rule — no special case for a
+ * booking that opens early. A 6 AM–7 AM breakfast after a wedding is free because it is out by
+ * 7; a 7 AM–10 AM engagement breakfast is charged because it is still in the hall at 10, and it
+ * then carries the day for the lunch and the sangeet behind it.
+ *
+ * Keying on the START time, which this did first, got both of those wrong in opposite
+ * directions: it made a 6 AM–10 AM breakfast free, and it pushed a 7 AM day-opener onto the
+ * previous day where nothing was booked, splitting one hall-day into two hires.
+ *
+ * A function running PAST MIDNIGHT is charged on the day it started — 8 PM to 6 AM is one
+ * function and one let, not the tail of the day before. `crossesMidnight` is what tells the two
+ * apart: an 8 PM–6 AM function ends before it starts, a 6 AM–7 AM one does not.
+ *
+ * THE BOARD IS NOT AFFECTED. A function still draws on its own date and the occupancy range is
+ * untouched, so BR-C1 refuses the same clashes it always did. Only the charge moves.
+ */
+function venueDayOf(sub: SubEventForPricing): string {
+  if (crossesMidnight(sub.startTime, sub.endTime)) return sub.eventDate
+  // Compared as MINUTES, never as strings: the database hands back '08:00:00', which sorts
+  // after the literal '08:00' and would have left a checkout exactly on the hour paying for a
+  // second let.
+  return toMinutes(sub.endTime) <= toMinutes(VENUE_DAY_CHANGEOVER) ? prevDay(sub.eventDate) : sub.eventDate
+}
+
+/**
+ * The same rule in SQL, for the three readers that group in one statement — lib/invoice.ts,
+ * lib/proposal.ts and lib/payment-schedule.ts. Written once here because those three plus
+ * `priceProposal` must agree on which functions share a let, and a fix in one is worth nothing
+ * if another still charges the morning twice.
+ */
+export function venueDaySql(alias: string): SQL {
+  // A LITERAL time, not a bound parameter: two callers use this expression in both DISTINCT ON
+  // and ORDER BY, and Postgres requires those to match structurally. A parameter renders as $1
+  // in one and $2 in the other, which it rejects. The constant is ours, not user input.
+  //
+  // `end_time > start_time` is "does not run past midnight" — an 8 PM to 6 AM function is
+  // charged on the day it started, not treated as the tail of the day before.
+  return sql.raw(`(${alias}.event_date - (CASE
+    WHEN ${alias}.end_time > ${alias}.start_time
+     AND ${alias}.end_time <= TIME '${VENUE_DAY_CHANGEOVER}'
+    THEN 1 ELSE 0 END))`)
+}
+
 function venueDayKey(sub: SubEventForPricing): string {
-  return `${sub.bundleId ?? sub.venueId ?? 'none'}|${sub.eventDate}`
+  return `${sub.bundleId ?? sub.venueId ?? 'none'}|${venueDayOf(sub)}`
 }
 
 /**
@@ -266,6 +322,8 @@ export async function loadSubEventsForPricing(
       id: schema.subEvents.id,
       name: schema.subEvents.name,
       eventDate: schema.subEvents.eventDate,
+      startTime: schema.subEvents.startTime,
+      endTime: schema.subEvents.endTime,
       venueId: schema.subEvents.venueId,
       bundleId: schema.subEvents.bundleId,
     })

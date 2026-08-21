@@ -2,8 +2,8 @@
  * The hall is hired by the DAY, not by the function (client, 12 Aug 2026).
  *
  * Staff hit this in the field: a booking with three functions in one hall on one day was
- * charged the hire three times. The guest took the room for the day — 9 AM to 8 AM the next
- * morning — and however many functions run inside that window, it is one let.
+ * charged the hire three times. The guest took the room for the day — check-in 8 AM, check-out
+ * 7:59 the next morning — and however many functions run inside that window, it is one let.
  *
  * This file pins the arithmetic in all FOUR places it is computed, because they are four
  * separate code paths and a fix in one is worth nothing if another still triples the charge:
@@ -122,6 +122,101 @@ d('one hall, one day, one charge', () => {
     expect(priced.coveredBy.get(evening)).toBe(morning)
     expect(priced.coveredBy.get(night)).toBe(morning)
     expect(priced.missing).toHaveLength(0) // covered is not the same as unrated
+  }, 120_000)
+
+  /**
+   * THE MORNING AFTER (client, 21 Aug 2026). A wedding runs in Gulmohar until midnight and
+   * breakfast is served in the same hall at 6 the next morning. The hall was never given back:
+   * the let that began at 8 AM on the wedding day runs to 8 AM the next morning, so the
+   * breakfast is inside it and there is nothing more to charge. Keyed on the calendar date, as
+   * this was, it billed a second full day's hire for an hour of tea.
+   */
+  it('does not charge again for a function that is out of the hall by 8 AM', async () => {
+    const eventId = await makeEvent()
+    const wedding = await addFunction(eventId, 'Wedding', '2027-09-01', '19:00', '23:59', hallA)
+    const breakfast = await addFunction(eventId, 'Breakfast', '2027-09-02', '06:00', '07:00', hallA)
+
+    const priced = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(eventId))
+    expect(priced.totalPaise).toBe(rateA) // one let, not two
+    expect(priced.rates.get(wedding)).toBe(rateA)
+    expect(priced.rates.get(breakfast)).toBe(0)
+    expect(priced.coveredBy.get(breakfast)).toBe(wedding)
+
+    // The other three readers must agree, or the bill and the balance charge the morning twice.
+    const billVenue = (await invoice.computeBillLines(db, eventId))
+      .filter((l) => l.section === 'venue')
+      .reduce((n, l) => n + l.amountPaise, 0)
+    expect(billVenue).toBe(rateA)
+    const doc = await proposal.proposalDocument(eventId)
+    expect(doc.totals.proposalPaise).toBe(rateA)
+    expect(doc.functions.find((f) => f.name === 'Breakfast')!.venueCoveredBy).toBe('Wedding')
+    expect((await schedule.payableBreakdown(eventId)).payablePaise).toBe(rateA)
+  }, 120_000)
+
+  /**
+   * THE DAY THAT OPENS WITH BREAKFAST (client, 21 Aug 2026, on the first cut of the rule above).
+   * An engagement breakfast at 7 AM, lunch at noon and a sangeet in the evening — all in
+   * Imperial, all on one day. The early-morning shift pushed the breakfast onto the day before,
+   * where NOTHING was booked, so it invented a second let and the guest was charged the hire
+   * twice: the very fault this rule exists to prevent, arriving from the other side.
+   *
+   * There is no previous let to belong to, so the breakfast stays on its own day and shares it.
+   */
+  it('charges one hire when the day opens early and runs past 8 AM', async () => {
+    const eventId = await makeEvent()
+    const breakfast = await addFunction(eventId, 'Engagement breakfast', '2027-09-05', '07:00', '10:00', hallA)
+    const lunch = await addFunction(eventId, 'Engagement lunch', '2027-09-05', '12:00', '15:00', hallA)
+    const sangeet = await addFunction(eventId, 'Sangeet', '2027-09-05', '19:00', '23:59', hallA)
+
+    const priced = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(eventId))
+    expect(priced.totalPaise).toBe(rateA) // ONE hire for the day, not two
+    expect(priced.rates.get(breakfast)).toBe(rateA) // the day's earliest carries it
+    expect(priced.rates.get(lunch)).toBe(0)
+    expect(priced.rates.get(sangeet)).toBe(0)
+
+    const billVenue = (await invoice.computeBillLines(db, eventId))
+      .filter((l) => l.section === 'venue')
+      .reduce((n, l) => n + l.amountPaise, 0)
+    expect(billVenue).toBe(rateA)
+    expect((await proposal.proposalDocument(eventId)).totals.proposalPaise).toBe(rateA)
+    expect((await schedule.payableBreakdown(eventId)).payablePaise).toBe(rateA)
+  }, 120_000)
+
+  /**
+   * THE BOUNDARY, TO THE MINUTE (client, 21 Aug 2026): "7:59 AM — checkout (until this time no
+   * double charging). 8:00 AM — checkin (charge of the venue from first event starts from
+   * here)." There is no gap between the two: 07:59 is the last minute of one let and 08:00 is
+   * the first minute of the next. Both sides are pinned so neither can drift.
+   */
+  it('lets a checkout at 08:00 go free and charges one a minute later', async () => {
+    const onTime = await makeEvent()
+    const nightA = await addFunction(onTime, 'Wedding', '2027-09-01', '19:00', '23:59', hallA)
+    const outAtEight = await addFunction(onTime, 'Breakfast', '2027-09-02', '06:00', '08:00', hallA)
+    const a = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(onTime))
+    expect(a.totalPaise).toBe(rateA)
+    expect(a.coveredBy.get(outAtEight)).toBe(nightA)
+
+    const overstayed = await makeEvent()
+    await addFunction(overstayed, 'Wedding', '2027-09-01', '19:00', '23:59', hallA)
+    const outAtEightOhOne = await addFunction(overstayed, 'Breakfast', '2027-09-02', '06:00', '08:01', hallA)
+    const b = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(overstayed))
+    expect(b.totalPaise).toBe(rateA * 2)
+    expect(b.rates.get(outAtEightOhOne)).toBe(rateA)
+    expect(b.coveredBy.has(outAtEightOhOne)).toBe(false)
+  }, 120_000)
+
+  /**
+   * The case the start-time rule got backwards: a breakfast that begins at 6 but keeps the hall
+   * until 10 has run well into the new let, and is charged for it — "if checkout of event
+   * exceeds 8 AM then it will be charged" (client, 21 Aug 2026).
+   */
+  it('charges a breakfast that keeps the hall past 8 AM, however early it started', async () => {
+    const eventId = await makeEvent()
+    await addFunction(eventId, 'Wedding', '2027-09-01', '19:00', '23:59', hallA)
+    const long = await addFunction(eventId, 'Long breakfast', '2027-09-02', '06:00', '10:00', hallA)
+    const priced = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(eventId))
+    expect(priced.totalPaise).toBe(rateA * 2)
+    expect(priced.rates.get(long)).toBe(rateA)
   }, 120_000)
 
   it('charges each day separately when the same hall is taken on two dates', async () => {

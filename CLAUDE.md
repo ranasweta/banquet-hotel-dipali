@@ -61,7 +61,7 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      Rely on the `venue_bookings` GiST exclusion to win races; no fixed slots, no 11 AM
      rule. Booking a bundle inserts one `venue_bookings` row per member venue.
      **The hall is charged once a DAY, not once a function** (client, 12 Aug 2026, after staff
-     hit it in the field). Hiring a venue takes it 9 AM to 8 AM the next morning; every function
+     hit it in the field). Hiring a venue takes it 8 AM to 7:59 the next morning; every function
      inside that window shares one let, whatever their menus. Three functions in one hall on one
      day billed the hire three times — the guest hired the room for the day and paid for it
      thrice. The **earliest** function of a venue-day carries the charge and the rest are covered
@@ -69,8 +69,21 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      the same carrier, so total, bill and printed proposal agree. A different venue on the same
      day is a separate let, and so is the same venue on another day. **The overlap rule is
      untouched** — windows still may not collide; only the price changed.
-     A function is keyed to the day it STARTS on: one running 8 PM–6 AM consumes one day of that
-     hall, and the calendar board draws it on that day only (no next-morning carryover chip).
+     A single function running 8 PM–6 AM consumes one day of that hall, and the calendar board
+     draws it on the day it started (no next-morning carryover chip).
+     **CHECKOUT decides whether a function is charged** (client, 21 Aug 2026): *"if checkout of
+     event exceeds 8 AM then it will be charged, that's it — hence a 7 to 10 AM event will be
+     charged, and then any event from 10 AM will not be charged if it's charged once."* A
+     function OUT of the hall by 08:00 is the tail of the night before and costs nothing extra;
+     one still in it after 08:00 has run into a new let, and that let is charged once however
+     many functions follow. Read off the END time, never the start — keying on the start made a
+     6 AM–10 AM breakfast free and pushed a 7 AM day-opener onto a day nobody booked, splitting
+     one hall-day into two hires. `VENUE_DAY_CHANGEOVER` and `venueDaySql` in `lib/pricing.ts`
+     own it; the other three readers import them. Times compare as MINUTES — the database
+     returns '08:00:00', which sorts after the literal '08:00'.
+     This supersedes "keyed to the day it STARTS on", which was written to settle which calendar
+     square the board draws and contradicted the 9-to-8 window for anything starting after
+     midnight. The board and the occupancy range are unaffected — only the charge moves.
      The occupancy range still crosses midnight, so the exclusion refuses a clash as before —
      but the board no longer paints the next day as taken, and the availability check may still
      refuse an early slot that the board shows as free.

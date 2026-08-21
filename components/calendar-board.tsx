@@ -138,7 +138,7 @@ export function CalendarBoard() {
    * date -> chips. A booking shows on the day it STARTS and on no other (client, 12 Aug 2026).
    *
    * It used to trail a "↳ till 06:00" chip onto the following morning, which was honest about
-   * the occupancy and wrong about the let: hiring a hall takes it 9 AM to 8 AM the next day, so
+   * the occupancy and wrong about the let: hiring a hall takes it 8 AM to 7:59 the next day, so
    * a function running 8 PM to 6 AM consumes ONE day of that hall and the morning it ends in
    * belongs to the same let. Painting the next day as taken lost a sellable day on the board.
    *

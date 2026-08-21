@@ -3,6 +3,8 @@ import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { notFound } from '@/lib/api'
 import { effectiveLineGaps, listDiscounts, lumpDiscountPaise, roomLineKey, type DiscountRow } from '@/lib/discounts'
+import { crossesMidnight, prevDay, toMinutes } from '@/lib/occupancy'
+import { VENUE_DAY_CHANGEOVER } from '@/lib/pricing'
 import { percentOfPaise } from '@/lib/money'
 import { ADVANCE_PCT, WEDDING_MILESTONE_PCT } from '@/lib/payment-schedule'
 import { ROOM_GST_HIGH_BP, STANDARD_GST_BP, roomGstBp, taxOf } from '@/lib/tax'
@@ -87,7 +89,7 @@ export type ProposalFunction = {
    * null = no rate card for this venue + event type. A gate, never a zero (BR-R1).
    *
    * ZERO here means something different and is not a gate: the venue-day is already charged on
-   * an earlier function (see `venueCoveredBy`). Hiring a hall takes it 9 AM to 8 AM next
+   * an earlier function (see `venueCoveredBy`). Hiring a hall takes it 8 AM to 7:59 next
    * morning, so however many functions run inside that window, the hire is one charge.
    */
   venueRatePaise: number | null
@@ -413,7 +415,16 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     // The hall is hired by the DAY, not by the function (client, 12 Aug 2026): the first
     // function on a venue-day carries the charge and the rest are covered by it. Same rule and
     // same carrier as lib/pricing.ts and lib/invoice.ts, so all three documents agree.
-    const dayKey = `${(s.bundleId as string | null) ?? (s.venueId as string | null) ?? 'none'}|${s.date as string}`
+    // CHECKOUT decides: out by 8 AM and it is the tail of the night before, costing nothing;
+    // still in the hall after 8 and it has run into a new let (client, 21 Aug 2026). A function
+    // running past midnight is charged on the day it started. lib/pricing.ts owns the rule.
+    const venueOf = (s.bundleId as string | null) ?? (s.venueId as string | null) ?? 'none'
+    const venueDay =
+      !crossesMidnight(s.startTime as string, s.endTime as string) &&
+      toMinutes(s.endTime as string) <= toMinutes(VENUE_DAY_CHANGEOVER)
+        ? prevDay(s.date as string)
+        : (s.date as string)
+    const dayKey = `${venueOf}|${venueDay}`
     const holder = venueDayCarrier.get(dayKey)
     const venueCoveredBy = holder && holder.id !== s.id ? holder.name : null
     if (!holder) venueDayCarrier.set(dayKey, { id: s.id as string, name: s.name as string })

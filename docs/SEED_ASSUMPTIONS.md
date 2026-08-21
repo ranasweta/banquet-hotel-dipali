@@ -1262,7 +1262,7 @@ Client, 12 Aug 2026, reported by staff using the system: a booking with three fu
 hall on one day was charged the venue hire **three times**. The guest hired the room for the
 day; they were billed for it thrice.
 
-The rule as given: a venue hire runs **9 AM to 8 AM the next morning**, and between those hours
+The rule as given: a venue hire runs **8 AM to 7:59 the next morning**, and between those hours
 the guest may hold as many functions with as many different menus as they like for one charge.
 Changing venue is fine and is charged the same way — a second hall on the same day is a second
 let. The same hall on another day is another let.
@@ -1310,6 +1310,52 @@ Discounted column). None was caused by the column itself; two were exposed by it
   included, understating the debt. It reads `balancesByEvent` now, which is `payableBreakdown`
   for many events at once. The fixture that pinned the old behaviour had been stamping a
   `proposal_total_paise` its own function did not match, and agreed with nothing but itself.
+
+**The morning after** (client, 21 Aug 2026). A wedding ran in Gulmohar + Middle until midnight
+and breakfast was served in the same hall at 6 the next morning — and the bill charged a second
+full day's hire for an hour of tea. The hall was never given back: the let that began at 8 AM on
+the wedding day runs to 8 AM the next morning, and the breakfast is inside it.
+
+`venueDayKey` keyed on the calendar date alone, so anything past midnight started a new let.
+
+**CHECKOUT is what decides**, settled by the client the same day after two wrong cuts:
+*"if checkout of event exceeds 8 AM then it will be charged, that's it — hence a 7 to 10 AM event
+will be charged, and then any event from 10 AM will not be charged if it's charged once."*
+A function out of the hall by 08:00 is the tail of the night before and costs nothing extra; one
+still in it after 08:00 has run into a new let, which is charged once however many functions
+follow that day.
+
+The two wrong cuts are worth recording, because each was wrong in a different direction and the
+second looked right until it met real data:
+
+1. **Keyed on the START time.** A 6 AM–7 AM breakfast was absorbed correctly, but a 6 AM–**10 AM**
+   breakfast was too — free, though it kept the hall for two hours of the new let. Worse, a
+   booking that OPENED at 7 AM had its first function pushed onto the previous day, where nothing
+   was booked, so it formed its own let: a 7 AM breakfast, a noon lunch and an evening sangeet
+   all in Imperial on one day were billed as TWO hires. Four of the seven pre-8 AM functions then
+   in the database would have been double-charged.
+2. **Start time, plus "only if the previous day was actually hired."** This patched the
+   day-opener but kept the 6 AM–10 AM hole and added a condition the client had never asked for.
+
+Reading the END time needs neither special case. The day-opener stays put because it is still in
+the hall at 10; the long breakfast is charged because it is still in the hall at 10. One rule.
+
+A function running **past midnight** is charged on the day it started — 8 PM to 6 AM is one
+function and one let, not the tail of the day before. `crossesMidnight` separates the two.
+
+Times compare as **minutes**, not strings: Postgres returns `'08:00:00'`, which sorts after the
+literal `'08:00'`, so a checkout exactly on the hour was paying for a second let until it was
+caught by the test that pins 08:00 against 08:01.
+
+CLAUDE.md's own "a function is keyed to the day it STARTS on" was part of why this survived. It
+was written to settle which calendar square the board draws an 8 PM–6 AM function on, and it
+reads as a pricing rule. It is still true of ONE function crossing midnight; it was never meant
+to govern a SECOND function starting at 6 AM. Rule 3 now says both things separately.
+
+The board and the occupancy range are untouched — the breakfast still draws on its own date and
+BR-C1 refuses exactly the clashes it did before. Only the charge moves. `VENUE_DAY_START_TIME`
+and `venueDaySql` live in `lib/pricing.ts` and the other three readers import them, so the
+quartet cannot drift; `tests/venue-day.integration.test.ts` pins all four.
 
 ### F26. The venue master, and the hall an "Other" booking is not charged for
 Client, 12 Aug 2026. Two instructions in one message; the second is expressed entirely as data
