@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -107,6 +107,12 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
   // Step 1 — dates & event
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
+  /**
+   * What the server last told us this proposal's run and guest name were. Continue compares
+   * against it so a plain page-turn costs nothing and only a real edit is written — and so the
+   * "saved" toast means something rather than firing on every click.
+   */
+  const savedStep1 = useRef({ fromDate: '', toDate: '', guestName: '' })
   const [eventType, setEventType] = useState('')
   const [guestName, setGuestName] = useState('')
 
@@ -176,6 +182,11 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
         // The declared run (planned_from/to), falling back to the functions' span server-side.
         setFromDate(roomRes.window.firstDate ?? '')
         setToDate(roomRes.window.lastDate ?? '')
+        savedStep1.current = {
+          fromDate: roomRes.window.firstDate ?? '',
+          toDate: roomRes.window.lastDate ?? '',
+          guestName: ev.guestName,
+        }
         setRooms(roomRes.requirements)
 
         // Menu summary per function so the food line and the picker both show the saved tier.
@@ -255,10 +266,44 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
         toast.success('Proposal created — now add the Aadhaar images.')
       } else {
         await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, from_date: fromDate, to_date: toDate, contacts: contactsPayload }) })
+        savedStep1.current = { fromDate, toDate, guestName }
         toast.success('Contacts saved.')
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not save')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * Writes the declared run and the guest name before leaving step 1.
+   *
+   * Continue used to be `setStep(1)` and nothing else, so the ONLY thing that ever saved these
+   * was the "Save contacts" button on the KYC step — a button whose label says nothing about
+   * dates. Change a date, press Continue, come back, and the field showed the old value again,
+   * because the wizard re-reads the run from the server on load. It looked like the field was
+   * refusing to change; the change had simply never been sent (client, 21 Aug 2026).
+   *
+   * Before the proposal exists there is nothing to write to — it is created on the KYC step,
+   * which needs the contacts — so this is a no-op on a fresh booking.
+   */
+  async function saveStep1(): Promise<boolean> {
+    if (!eventId) return true
+    const prev = savedStep1.current
+    if (prev.fromDate === fromDate && prev.toDate === toDate && prev.guestName === guestName) return true
+    setBusy(true)
+    try {
+      await api(`/events/${eventId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ guest_name: guestName, from_date: fromDate, to_date: toDate }),
+      })
+      savedStep1.current = { fromDate, toDate, guestName }
+      toast.success('Dates saved.')
+      return true
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not save the dates')
+      return false
     } finally {
       setBusy(false)
     }
@@ -388,6 +433,9 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
     .map((t) => ({ value: t.code, label: eventTypeLabel(t.code, t.displayName) }))
 
   const datesOk = Boolean(fromDate && toDate && toDate >= fromDate)
+  // Functions already booked outside the run as it currently reads (client, 21 Aug 2026).
+  const outsideRun =
+    datesOk ? subEvents.filter((s) => s.eventDate < fromDate || s.eventDate > toDate) : []
 
   // Lodging estimate: rooms × nights × the type's rack rate. The exact charge is settled when
   // the Lodge Manager allocates real rooms, but the proposal has to show a number.
@@ -432,6 +480,16 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
           {fromDate && toDate && toDate < fromDate && (
             <p className="text-sm text-destructive">The To date can&apos;t be before the From date.</p>
           )}
+          {/* Narrowing the run can strand a function that is already booked. Said out loud, not
+              refused: the guest may genuinely be dropping that day, and the fix is to move or
+              remove the function — which is a decision, not a validation error. */}
+          {outsideRun.length > 0 && (
+            <p className="text-sm text-amber-600">
+              {outsideRun.length === 1 ? 'This function falls' : 'These functions fall'} outside{' '}
+              {fromDate} → {toDate}: {outsideRun.map((s) => `${s.name} (${s.eventDate})`).join(', ')}.
+              Move {outsideRun.length === 1 ? 'it' : 'them'} on the Functions step, or widen the dates.
+            </p>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Event">
               {/* Event type is fixed once the proposal exists — it drives the contact rule and
@@ -450,7 +508,11 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
               <Input value={guestName} onChange={(e) => setGuestName(e.target.value)} placeholder="Any name — it doesn't affect pricing" />
             </Field>
           </div>
-          <Nav onNext={() => setStep(1)} busy={busy} nextDisabled={!datesOk || !eventType || !guestName.trim()} />
+          <Nav
+            onNext={() => { void saveStep1().then((ok) => { if (ok) setStep(1) }) }}
+            busy={busy}
+            nextDisabled={!datesOk || !eventType || !guestName.trim()}
+          />
         </StepCard>
       )}
 

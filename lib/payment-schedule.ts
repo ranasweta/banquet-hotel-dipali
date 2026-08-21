@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { effectiveGapSql, givenDiscountPaise, lumpDiscountPaise, roomLineKeySql } from '@/lib/discounts'
 import { percentOfPaise } from '@/lib/money'
+import { venueDaySql } from '@/lib/pricing'
 import { roomGstBpSql } from '@/lib/tax'
 
 /**
@@ -195,7 +196,8 @@ async function payableRows(
       -- just taken off. The dedupe has to happen here, before the COALESCE.
       SELECT event_id, GREATEST(0, rate - gap) AS amount
       FROM (
-        SELECT DISTINCT ON (se.event_id, COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date)
+        SELECT DISTINCT ON (se.event_id, COALESCE(se.bundle_id::text, se.venue_id::text),
+                            ${venueDaySql('se.event_date', 'se.start_time')})
                se.event_id,
                COALESCE(NULLIF(se.venue_rate_paise, 0),
                  (SELECT rc.rate_paise FROM venue_rate_cards rc
@@ -208,7 +210,9 @@ async function payableRows(
         FROM sub_events se
         JOIN events ev ON ev.id = se.event_id
         WHERE se.event_id IN (${ids})
-        ORDER BY se.event_id, COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date, se.start_time
+        ORDER BY se.event_id, COALESCE(se.bundle_id::text, se.venue_id::text),
+                 ${venueDaySql('se.event_date', 'se.start_time')},
+                 se.event_date, se.start_time
       ) vl
     ),
     room_lines AS (

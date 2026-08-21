@@ -1,6 +1,7 @@
 import 'server-only'
-import { and, desc, eq, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, lte, sql, type SQL } from 'drizzle-orm'
 import { db, schema } from '@/db/drizzle'
+import { prevDay } from '@/lib/occupancy'
 import { roomGstBp, taxOf } from '@/lib/tax'
 
 /** A db handle or a transaction handle — pricing reads must run inside the confirm tx. */
@@ -20,6 +21,8 @@ export type SubEventForPricing = {
   id: string
   name: string
   eventDate: string
+  /** Needed to place the function in a venue-day: before 8 AM belongs to the day before. */
+  startTime: string
   venueId: string | null
   bundleId: string | null
 }
@@ -64,15 +67,54 @@ export type ProposalPricing = {
 }
 
 /**
- * The venue-day a function belongs to. Hiring a hall takes it for the day — 9 AM to 8 AM the
- * next morning — so every function inside that window shares one let (client, 12 Aug 2026).
- *
- * Keyed on the DATE, not on the occupancy window, which is why a function running 8 PM to
- * 6 AM belongs to the day it started on and not to two of them. A different venue on the same
- * day is a different let and is charged again; so is the same venue on another day.
+ * The hour a venue-day turns over. A hire runs 9 AM to 8 AM the next morning (client, 12 Aug
+ * 2026), so a function that STARTS before 8 AM is still inside the previous day's let — the
+ * guest never gave the hall back.
  */
+export const VENUE_DAY_START_TIME = '08:00'
+
+/**
+ * The venue-day a function's charge belongs to.
+ *
+ * THE EARLY-MORNING CASE (client, 21 Aug 2026). This used to key on the calendar date alone,
+ * which charged a second full day's hire for a 6 AM breakfast served in the same hall the
+ * wedding had run in until midnight. The hall was never released: the let that began at 9 AM
+ * on the wedding day runs to 8 AM the next morning, and the breakfast is inside it.
+ *
+ * CLAUDE.md also said "a function is keyed to the day it STARTS on", and that is still true of
+ * a single function running 8 PM to 6 AM — one function, one day. It was written to settle
+ * which calendar square the board draws, and it quietly contradicted the 9-to-8 window for a
+ * SEPARATE function starting between midnight and 8 AM. This is that contradiction resolved.
+ *
+ * The boundary is 8 AM exactly, on the client's instruction: before it, the previous day; at or
+ * after it, its own day. The 8–9 AM hour therefore starts a fresh let, which is what a hall let
+ * go at 8 and taken again at 9 actually is.
+ *
+ * THE BOARD IS NOT AFFECTED. The breakfast still draws on its own date and the occupancy range
+ * is untouched, so BR-C1 refuses the same clashes it always did. Only the charge moves.
+ */
+function venueDayOf(sub: SubEventForPricing): string {
+  return sub.startTime < VENUE_DAY_START_TIME ? prevDay(sub.eventDate) : sub.eventDate
+}
+
+/**
+ * The same rule in SQL, for the three readers that group in one statement — lib/invoice.ts,
+ * lib/proposal.ts and lib/payment-schedule.ts. Written once here because those three plus
+ * `priceProposal` must agree on which functions share a let, and a fix in one is worth nothing
+ * if another still charges the morning twice.
+ */
+export function venueDaySql(dateCol: string, startCol: string): SQL {
+  // A LITERAL time, not a bound parameter: two of the three callers use this expression in both
+  // DISTINCT ON and ORDER BY, and Postgres requires those to match structurally. A parameter
+  // renders as $1 in one and $2 in the other, which it rejects. The constant is ours, not user
+  // input, so interpolating it keeps one source of truth without opening anything up.
+  return sql.raw(
+    `(${dateCol} - (CASE WHEN ${startCol} < TIME '${VENUE_DAY_START_TIME}' THEN 1 ELSE 0 END))`,
+  )
+}
+
 function venueDayKey(sub: SubEventForPricing): string {
-  return `${sub.bundleId ?? sub.venueId ?? 'none'}|${sub.eventDate}`
+  return `${sub.bundleId ?? sub.venueId ?? 'none'}|${venueDayOf(sub)}`
 }
 
 /**
@@ -266,6 +308,7 @@ export async function loadSubEventsForPricing(
       id: schema.subEvents.id,
       name: schema.subEvents.name,
       eventDate: schema.subEvents.eventDate,
+      startTime: schema.subEvents.startTime,
       venueId: schema.subEvents.venueId,
       bundleId: schema.subEvents.bundleId,
     })

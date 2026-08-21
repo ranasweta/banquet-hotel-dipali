@@ -1311,6 +1311,26 @@ Discounted column). None was caused by the column itself; two were exposed by it
   for many events at once. The fixture that pinned the old behaviour had been stamping a
   `proposal_total_paise` its own function did not match, and agreed with nothing but itself.
 
+**The morning after** (client, 21 Aug 2026). A wedding ran in Gulmohar + Middle until midnight
+and breakfast was served in the same hall at 6 the next morning — and the bill charged a second
+full day's hire for an hour of tea. The hall was never given back: the let that began at 9 AM on
+the wedding day runs to 8 AM the next morning, and the breakfast is inside it.
+
+`venueDayKey` keyed on the calendar date alone, so anything past midnight started a new let. The
+rule now shifts a function starting **before 8 AM** into the previous day's venue-day. The
+boundary is 8 AM exactly, on the client's instruction: at or after it, a fresh let, because a
+hall let go at 8 and taken again at 9 is a new day's hire.
+
+CLAUDE.md's own "a function is keyed to the day it STARTS on" was part of why this survived. It
+was written to settle which calendar square the board draws an 8 PM–6 AM function on, and it
+reads as a pricing rule. It is still true of ONE function crossing midnight; it was never meant
+to govern a SECOND function starting at 6 AM. Rule 3 now says both things separately.
+
+The board and the occupancy range are untouched — the breakfast still draws on its own date and
+BR-C1 refuses exactly the clashes it did before. Only the charge moves. `VENUE_DAY_START_TIME`
+and `venueDaySql` live in `lib/pricing.ts` and the other three readers import them, so the
+quartet cannot drift; `tests/venue-day.integration.test.ts` pins all four.
+
 ### F26. The venue master, and the hall an "Other" booking is not charged for
 Client, 12 Aug 2026. Two instructions in one message; the second is expressed entirely as data
 the first lets the Auditor edit.

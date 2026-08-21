@@ -5,6 +5,7 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound } from '@/lib/api'
 import { effectiveGapSql, lumpDiscountPaise, roomLineKeySql } from '@/lib/discounts'
 import { transitionEvent } from '@/lib/events'
+import { venueDaySql } from '@/lib/pricing'
 import { GST_BP, isCollectedSection, roomGstBp, taxOf } from '@/lib/tax'
 
 /**
@@ -123,7 +124,8 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
       -- confirm writes that snapshot from the same dedupe, but the COALESCE below reads a zero
       -- as "not snapshotted" and falls back to the rate card — which would put the charge
       -- straight back on every function it was just taken off.
-      SELECT DISTINCT ON (COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date)
+      SELECT DISTINCT ON (COALESCE(se.bundle_id::text, se.venue_id::text),
+                          ${venueDaySql('se.event_date', 'se.start_time')})
              se.name, se.event_date AS "eventDate", se.start_time AS "startTime",
              COALESCE(v.name, b.name) AS "venueName",
              ${effectiveGapSql(sql.raw('se.event_id'), sql.raw("('venue:' || se.id::text)"))} AS "gapPaise",
@@ -139,7 +141,9 @@ export async function computeBillLines(exec: Exec, eventId: string): Promise<Lin
       JOIN events e ON e.id = se.event_id
       LEFT JOIN venues v ON v.id = se.venue_id LEFT JOIN venue_bundles b ON b.id = se.bundle_id
       WHERE se.event_id = ${eventId}
-      ORDER BY COALESCE(se.bundle_id::text, se.venue_id::text), se.event_date, se.start_time
+      ORDER BY COALESCE(se.bundle_id::text, se.venue_id::text),
+               ${venueDaySql('se.event_date', 'se.start_time')},
+               se.event_date, se.start_time
     ) d
     ORDER BY d."eventDate", d."startTime"
   `)) as unknown as { name: string; ratePaise: number; venueName: string; gapPaise: number }[]

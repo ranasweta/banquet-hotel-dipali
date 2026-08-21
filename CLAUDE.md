@@ -69,8 +69,16 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      the same carrier, so total, bill and printed proposal agree. A different venue on the same
      day is a separate let, and so is the same venue on another day. **The overlap rule is
      untouched** — windows still may not collide; only the price changed.
-     A function is keyed to the day it STARTS on: one running 8 PM–6 AM consumes one day of that
-     hall, and the calendar board draws it on that day only (no next-morning carryover chip).
+     A single function running 8 PM–6 AM consumes one day of that hall, and the calendar board
+     draws it on the day it started (no next-morning carryover chip).
+     **A SEPARATE function starting before 8 AM belongs to the previous day's let** (client,
+     21 Aug 2026): the hire runs to 8 AM, so a 6 AM breakfast in the hall the wedding ran in is
+     inside a let already paid for and is charged nothing. At or after 8 AM it is a fresh let —
+     a hall let go at 8 and taken again is a new day's hire. `VENUE_DAY_START_TIME` and
+     `venueDaySql` in `lib/pricing.ts` own the boundary; the other three readers import it.
+     This supersedes "keyed to the day it STARTS on", which was written to settle which calendar
+     square the board draws and contradicted the 9-to-8 window for anything starting after
+     midnight. The board and the occupancy range are unaffected — only the charge moves.
      The occupancy range still crosses midnight, so the exclusion refuses a clash as before —
      but the board no longer paints the next day as taken, and the availability check may still
      refuse an early slot that the board shows as free.
