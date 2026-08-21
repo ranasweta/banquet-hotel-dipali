@@ -21,6 +21,11 @@ export function nextDay(date: string): string {
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10)
 }
 
+export function prevDay(date: string): string {
+  const [y, m, d] = date.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10)
+}
+
 /**
  * The [lower, upper) timestamp bounds a sub-event occupies, as 'YYYY-MM-DD HH:MM[:SS]'
  * strings. This is the single source of the occupancy maths: the read-side availability

@@ -74,7 +74,7 @@ d('zero is a price; absent is a gate', () => {
     expect(await pricing.venueRatePaise({ venueId, bundleId: null }, 'wedding', '2027-01-01')).toBeNull()
 
     const priced = await pricing.priceProposal('wedding', [
-      { id: 'sub-1', name: 'Function', eventDate: '2027-01-01', venueId, bundleId: null },
+      { id: 'sub-1', name: 'Function', eventDate: '2027-01-01', startTime: '19:00', venueId, bundleId: null },
     ])
     expect(priced.missing).toHaveLength(1) // BR-R1 gate, not a free hall
     expect(priced.totalPaise).toBe(0)
@@ -86,7 +86,7 @@ d('zero is a price; absent is a gate', () => {
 
     expect(await pricing.venueRatePaise({ venueId, bundleId: null }, 'wedding', '2027-01-01')).toBe(0)
     const priced = await pricing.priceProposal('wedding', [
-      { id: 'sub-1', name: 'Function', eventDate: '2027-01-01', venueId, bundleId: null },
+      { id: 'sub-1', name: 'Function', eventDate: '2027-01-01', startTime: '19:00', venueId, bundleId: null },
     ])
     expect(priced.missing).toHaveLength(0) // confirm is NOT blocked
     expect(priced.totalPaise).toBe(0)

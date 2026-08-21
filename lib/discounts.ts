@@ -274,7 +274,7 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
   // A covered function shows ₹0 against its venue, which is what the guest is being charged.
   const pricing = await priceProposal(
     ev.eventType,
-    subs.map((s) => ({ id: s.id, name: s.name, eventDate: s.eventDate, venueId: s.venueId, bundleId: s.bundleId })),
+    subs.map((s) => ({ id: s.id, name: s.name, eventDate: s.eventDate, startTime: s.startTime, venueId: s.venueId, bundleId: s.bundleId })),
     exec,
   )
 

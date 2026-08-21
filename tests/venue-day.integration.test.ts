@@ -124,6 +124,48 @@ d('one hall, one day, one charge', () => {
     expect(priced.missing).toHaveLength(0) // covered is not the same as unrated
   }, 120_000)
 
+  /**
+   * THE MORNING AFTER (client, 21 Aug 2026). A wedding runs in Gulmohar until midnight and
+   * breakfast is served in the same hall at 6 the next morning. The hall was never given back:
+   * the let that began at 9 AM on the wedding day runs to 8 AM the next morning, so the
+   * breakfast is inside it and there is nothing more to charge. Keyed on the calendar date, as
+   * this was, it billed a second full day's hire for an hour of tea.
+   */
+  it('does not charge again for a function starting before 8 AM the next morning', async () => {
+    const eventId = await makeEvent()
+    const wedding = await addFunction(eventId, 'Wedding', '2027-09-01', '19:00', '23:59', hallA)
+    const breakfast = await addFunction(eventId, 'Breakfast', '2027-09-02', '06:00', '07:00', hallA)
+
+    const priced = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(eventId))
+    expect(priced.totalPaise).toBe(rateA) // one let, not two
+    expect(priced.rates.get(wedding)).toBe(rateA)
+    expect(priced.rates.get(breakfast)).toBe(0)
+    expect(priced.coveredBy.get(breakfast)).toBe(wedding)
+
+    // The other three readers must agree, or the bill and the balance charge the morning twice.
+    const billVenue = (await invoice.computeBillLines(db, eventId))
+      .filter((l) => l.section === 'venue')
+      .reduce((n, l) => n + l.amountPaise, 0)
+    expect(billVenue).toBe(rateA)
+    const doc = await proposal.proposalDocument(eventId)
+    expect(doc.totals.proposalPaise).toBe(rateA)
+    expect(doc.functions.find((f) => f.name === 'Breakfast')!.venueCoveredBy).toBe('Wedding')
+    expect((await schedule.payableBreakdown(eventId)).payablePaise).toBe(rateA)
+  }, 120_000)
+
+  it('starts a fresh let at 8 AM, which is where the hire ends', async () => {
+    // The boundary is 8 AM exactly, on the client's instruction: a hall let go at 8 and taken
+    // again is a new day's hire, whatever ran in it the night before.
+    const eventId = await makeEvent()
+    await addFunction(eventId, 'Wedding', '2027-09-01', '19:00', '23:59', hallA)
+    const late = await addFunction(eventId, 'Late breakfast', '2027-09-02', '08:00', '09:30', hallA)
+
+    const priced = await pricing.priceProposal('engagement', await pricing.loadSubEventsForPricing(eventId))
+    expect(priced.totalPaise).toBe(rateA * 2)
+    expect(priced.rates.get(late)).toBe(rateA)
+    expect(priced.coveredBy.has(late)).toBe(false)
+  }, 120_000)
+
   it('charges each day separately when the same hall is taken on two dates', async () => {
     const eventId = await makeEvent()
     await addFunction(eventId, 'Day one', '2027-09-01', '18:00', '23:00', hallA)

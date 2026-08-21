@@ -3,6 +3,8 @@ import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { notFound } from '@/lib/api'
 import { effectiveLineGaps, listDiscounts, lumpDiscountPaise, roomLineKey, type DiscountRow } from '@/lib/discounts'
+import { prevDay } from '@/lib/occupancy'
+import { VENUE_DAY_START_TIME } from '@/lib/pricing'
 import { percentOfPaise } from '@/lib/money'
 import { ADVANCE_PCT, WEDDING_MILESTONE_PCT } from '@/lib/payment-schedule'
 import { ROOM_GST_HIGH_BP, STANDARD_GST_BP, roomGstBp, taxOf } from '@/lib/tax'
@@ -413,7 +415,11 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     // The hall is hired by the DAY, not by the function (client, 12 Aug 2026): the first
     // function on a venue-day carries the charge and the rest are covered by it. Same rule and
     // same carrier as lib/pricing.ts and lib/invoice.ts, so all three documents agree.
-    const dayKey = `${(s.bundleId as string | null) ?? (s.venueId as string | null) ?? 'none'}|${s.date as string}`
+    // Before 8 AM belongs to the previous day's let — the hall was never given back (client,
+    // 21 Aug 2026). Same rule as lib/pricing.ts, which owns it.
+    const venueDay =
+      (s.startTime as string) < VENUE_DAY_START_TIME ? prevDay(s.date as string) : (s.date as string)
+    const dayKey = `${(s.bundleId as string | null) ?? (s.venueId as string | null) ?? 'none'}|${venueDay}`
     const holder = venueDayCarrier.get(dayKey)
     const venueCoveredBy = holder && holder.id !== s.id ? holder.name : null
     if (!holder) venueDayCarrier.set(dayKey, { id: s.id as string, name: s.name as string })
