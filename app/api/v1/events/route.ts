@@ -1,5 +1,5 @@
 import type { NextRequest } from 'next/server'
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { db, schema } from '@/db/drizzle'
 import { getCurrentUser, requirePermission } from '@/lib/auth'
@@ -94,12 +94,34 @@ export const GET = route(async (req: NextRequest) => {
   const from = params.get('from')
   const to = params.get('to')
   const mine = params.get('mine') === 'true'
+  const q = params.get('q')?.trim()
+  const eventType = params.get('type')
+
+  // WHEN THE BOOKING ACTUALLY RUNS. `first_date`/`last_date` are caches written at confirm and
+  // can be NULL on a booking that has functions, so filtering on them quietly drops proposals
+  // that plainly fall inside the range. The functions' own dates decide; the declared run
+  // answers for a proposal that has none yet, and the caches are the last resort.
+  const spanStart = sql`COALESCE((SELECT min(se.event_date) FROM sub_events se WHERE se.event_id = ${schema.events.id}),
+                                 ${schema.events.plannedFrom}, ${schema.events.firstDate})`
+  const spanEnd = sql`COALESCE((SELECT max(se.event_date) FROM sub_events se WHERE se.event_id = ${schema.events.id}),
+                               ${schema.events.plannedTo}, ${schema.events.lastDate})`
 
   const conditions = []
   if (status) conditions.push(eq(schema.events.status, status as typeof schema.events.status.enumValues[number]))
-  if (from && ISO_DATE.test(from)) conditions.push(gte(schema.events.firstDate, from))
-  if (to && ISO_DATE.test(to)) conditions.push(lte(schema.events.firstDate, to))
+  // Overlap, not containment: a wedding running 28–30 Jan belongs in a search for the 29th.
+  if (from && ISO_DATE.test(from)) conditions.push(sql`${spanEnd} >= ${from}::date`)
+  if (to && ISO_DATE.test(to)) conditions.push(sql`${spanStart} <= ${to}::date`)
   if (mine) conditions.push(eq(schema.events.createdBy, user.id))
+  if (eventType) conditions.push(eq(schema.events.eventType, eventType))
+  // Searched SERVER-side, so it reaches past the 200 most recent rather than filtering the
+  // page you happen to be looking at — the whole point of searching an old proposal. The code
+  // is matched too: staff quote "E-1065" to each other far more than they type a full name.
+  if (q) {
+    // % and _ are LIKE wildcards; a guest who types one should match that character, not
+    // everything. Backslash is Postgres's default LIKE escape.
+    const like = `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%`
+    conditions.push(sql`(${schema.events.guestName} ILIKE ${like} OR ${schema.events.code} ILIKE ${like})`)
+  }
 
   const rows = await db
     .select({
@@ -110,6 +132,10 @@ export const GET = route(async (req: NextRequest) => {
       status: schema.events.status,
       firstDate: schema.events.firstDate,
       lastDate: schema.events.lastDate,
+      // The span the date filter matches on, so a row found by date can actually show its
+      // dates. `first_date` is NULL on plenty of enquiries that plainly have functions.
+      startDate: sql<string | null>`(${spanStart})::text`,
+      endDate: sql<string | null>`(${spanEnd})::text`,
       proposalTotalPaise: schema.events.proposalTotalPaise,
       updatedAt: schema.events.updatedAt,
       // Stale: an enquiry untouched for STALE_DAYS days (FR-1.8).
@@ -120,5 +146,12 @@ export const GET = route(async (req: NextRequest) => {
     .orderBy(desc(schema.events.createdAt))
     .limit(200)
 
-  return ok({ events: rows })
+  // The filter's options, so the screen offers every configured type rather than only the ones
+  // that happen to appear in this page of results.
+  const types = await db
+    .select({ code: schema.eventTypes.code, displayName: schema.eventTypes.displayName })
+    .from(schema.eventTypes)
+    .orderBy(schema.eventTypes.displayName)
+
+  return ok({ events: rows, eventTypes: types })
 })
