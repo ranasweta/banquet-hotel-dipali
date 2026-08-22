@@ -7,7 +7,7 @@ import { percentOfPaise } from '@/lib/money'
 import { AUTHORITY_ROLES } from '@/lib/post-confirm'
 import { getIntSettings } from '@/lib/settings'
 import { priceProposal } from '@/lib/pricing'
-import { ROOM_GST_HIGH_BP, roomGstBp, taxOf } from '@/lib/tax'
+import { roomGstBp, taxOf } from '@/lib/tax'
 
 /**
  * Discounts (M7, FR-11.x, BR-D2).
@@ -138,6 +138,19 @@ export type SheetRoomGroup = {
 export type DiscountSheet = {
   functions: SheetFunction[]
   roomGroups: SheetRoomGroup[]
+  /**
+   * Room GST band by band — one entry per rate actually in play, 5% before 18% (client, 22 Aug
+   * 2026). The screen prints "Tax on rooms — 5%" and "Tax on rooms — 18%" as separate lines and
+   * says nothing about the ₹7,500 threshold that decides them: which band a room falls in is the
+   * hotel's arithmetic, not something a guest reading the total needs explained.
+   *
+   * Each column is grouped by ITS OWN band, because a discount can move a room across the
+   * boundary — an ₹11,000 suite given for ₹7,000 a night is 18% at list and 5% as charged. So a
+   * line can appear in the 5% row of one column and the 18% row of the other. Both columns add
+   * up, and each figure sits under the rate it was actually computed at, which is the only
+   * arrangement where neither label lies.
+   */
+  roomsTaxBands: { gstRateBp: number; actualPaise: number; discountedPaise: number }[]
   /** Room GST on the ACTUAL prices, so the Actual column totals to something a guest can check. */
   roomsTaxActualPaise: number
   /** Room GST on what is collected — the figure that enters the payable and the balance. */
@@ -148,8 +161,6 @@ export type DiscountSheet = {
   lineDiscountPaise: number
   /** Pre-20-Aug-2026 lump discounts, still effective and still subtracted at the end. */
   lumpDiscountPaise: number
-  /** Whether any room on this booking is over ₹7,500 a night, so a label can say which bands apply. */
-  hasHighTaxRoom: boolean
   /** No rate card for these functions (BR-R1) — confirm is blocked until one exists. */
   missing: { subEventId: string; name: string }[]
 }
@@ -326,7 +337,12 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
   const groups = new Map<string, SheetRoomGroup>()
   let roomsTaxPaise = 0
   let roomsTaxActualPaise = 0
-  let hasHighTaxRoom = false
+  /** bp -> the tax each column charged at that rate. */
+  const bands = new Map<number, { actualPaise: number; discountedPaise: number }>()
+  const band = (bp: number) => {
+    if (!bands.has(bp)) bands.set(bp, { actualPaise: 0, discountedPaise: 0 })
+    return bands.get(bp)!
+  }
   for (const r of roomRows) {
     const qty = Math.max(0, r.count) * Math.max(0, r.nights)
     const rate = Number(r.ratePaise)
@@ -344,8 +360,11 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
     const gstRateBp = roomGstBp(effectiveNightly, r.roomType)
     const taxPaise = taxOf(base.discountedPaise, gstRateBp)
     roomsTaxPaise += taxPaise
-    roomsTaxActualPaise += taxOf(base.actualPaise, roomGstBp(rate, r.roomType))
-    if (roomGstBp(rate, r.roomType) === ROOM_GST_HIGH_BP) hasHighTaxRoom = true
+    const actualBp = roomGstBp(rate, r.roomType)
+    const actualTaxPaise = taxOf(base.actualPaise, actualBp)
+    roomsTaxActualPaise += actualTaxPaise
+    band(gstRateBp).discountedPaise += taxPaise
+    band(actualBp).actualPaise += actualTaxPaise
 
     const gk = r.unitId ?? '-'
     if (!groups.has(gk)) {
@@ -370,6 +389,12 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
   return {
     functions,
     roomGroups,
+    // Only the rates in play, cheapest first — a booking with no room over the threshold prints
+    // one 5% line and no empty 18% one.
+    roomsTaxBands: [...bands.entries()]
+      .filter(([, v]) => v.actualPaise > 0 || v.discountedPaise > 0)
+      .sort(([a], [b]) => a - b)
+      .map(([gstRateBp, v]) => ({ gstRateBp, ...v })),
     roomsTaxActualPaise,
     roomsTaxPaise,
     actualTotalPaise,
@@ -379,7 +404,6 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
       functions.reduce((n, f) => n + f.actualSubtotalPaise - f.discountedSubtotalPaise, 0) +
       roomGroups.reduce((n, g) => n + g.actualSubtotalPaise - g.discountedSubtotalPaise, 0),
     lumpDiscountPaise: await lumpDiscountPaise(eventId, exec),
-    hasHighTaxRoom,
     missing: pricing.missing,
   }
 }

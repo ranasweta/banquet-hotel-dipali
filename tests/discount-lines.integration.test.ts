@@ -170,6 +170,49 @@ d('the Discounted column', () => {
     expect(cut.taxPaise).toBe(700_00)
   })
 
+  /**
+   * The review prints one tax line per RATE (client, 22 Aug 2026) — "tax on rooms 5%" and "tax
+   * on rooms 18%" as separate rows, with no mention of the threshold that decides them.
+   *
+   * Each column is grouped by its own band, because a discount can move a room across the
+   * boundary: the suite below is 18% at its list price and 5% at the price it is given for. So
+   * one line lands in the 18% row of the Actual column and the 5% row of the Discounted one,
+   * and both columns still add up.
+   */
+  it('splits the room tax into one row per rate, and lets a discount move a room between them', async () => {
+    const { eventId } = await makeEvent()
+    await addRoom(eventId, 'deluxe', 4_500_00, 2) // 5% either way
+    await addRoom(eventId, 'presidential_suite', 11_000_00, 2) // 18% at list
+
+    const before = await discounts.discountSheet(eventId)
+    expect(before.roomsTaxBands.map((b) => b.gstRateBp)).toEqual([500, 1800])
+    expect(before.roomsTaxBands.find((b) => b.gstRateBp === 500)!.actualPaise).toBe(450_00)
+    expect(before.roomsTaxBands.find((b) => b.gstRateBp === 1800)!.actualPaise).toBe(3_960_00)
+
+    // Give the suite for Rs.7,000 a night — at the threshold, so it becomes a 5% room.
+    const suite = before.roomGroups[0]!.lines.find((l) => l.label.includes('Presidential'))!
+    await discounts.setLineDiscounts(auditor, eventId, [{ key: suite.key, discountedPaise: 14_000_00 }])
+
+    const after = await discounts.discountSheet(eventId)
+    const low = after.roomsTaxBands.find((b) => b.gstRateBp === 500)!
+    const high = after.roomsTaxBands.find((b) => b.gstRateBp === 1800)!
+    // The suite's tax has crossed: still 18% on what it lists at, now 5% on what is charged.
+    expect(high.actualPaise).toBe(3_960_00)
+    expect(high.discountedPaise).toBe(0)
+    expect(low.discountedPaise).toBe(450_00 + 700_00)
+    // Each column still totals to the sheet's own figure.
+    const sum = (k: 'actualPaise' | 'discountedPaise') => after.roomsTaxBands.reduce((n, b) => n + b[k], 0)
+    expect(sum('actualPaise')).toBe(after.roomsTaxActualPaise)
+    expect(sum('discountedPaise')).toBe(after.roomsTaxPaise)
+  })
+
+  it('prints no empty band when every room is at the same rate', async () => {
+    const { eventId } = await makeEvent()
+    await addRoom(eventId, 'deluxe', 4_500_00, 2)
+    const sheet = await discounts.discountSheet(eventId)
+    expect(sheet.roomsTaxBands.map((b) => b.gstRateBp)).toEqual([500])
+  })
+
   it('agrees to the paisa across the payable, the bill and the printed proposal', async () => {
     const { eventId, subEventId } = await makeEvent({ venuePaise: 10_000_00, perPlatePaise: 700_00, pax: 100 })
     await addRoom(eventId, 'deluxe', 4_500_00, 2)
