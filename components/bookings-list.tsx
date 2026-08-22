@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { Search } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
@@ -10,6 +11,8 @@ import { todayISO } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Table,
   TableBody,
@@ -27,9 +30,13 @@ type EventRow = {
   status: string
   firstDate: string | null
   lastDate: string | null
+  /** When the booking actually runs — its functions' span, not the confirm-time cache. */
+  startDate: string | null
+  endDate: string | null
   proposalTotalPaise: number
   stale: boolean
 }
+type EventTypeOption = { code: string; displayName: string }
 
 const STATUS_STYLES: Record<string, string> = {
   enquiry: 'bg-muted text-muted-foreground',
@@ -52,15 +59,57 @@ const FILTERS: { value: string; label: string }[] = [
 
 export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boolean; canEditConfirmed: boolean }) {
   const [events, setEvents] = useState<EventRow[]>([])
+  const [types, setTypes] = useState<EventTypeOption[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('all')
 
+  // Searched and filtered SERVER-side (client, 22 Aug 2026: "so we can type name of the client
+  // and search"). The list is capped at 200 rows, so filtering what the browser happens to hold
+  // would search only the newest proposals — the opposite of what looking for an old one needs.
+  const [query, setQuery] = useState('')
+  const [eventType, setEventType] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  /** The typed query, settled. Refetching on every keystroke is a request per letter. */
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+
   useEffect(() => {
-    api<{ events: EventRow[] }>('/events')
-      .then((r) => setEvents(r.events))
-      .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load'))
-      .finally(() => setLoading(false))
-  }, [])
+    const t = setTimeout(() => setDebouncedQuery(query.trim()), 300)
+    return () => clearTimeout(t)
+  }, [query])
+
+  useEffect(() => {
+    const p = new URLSearchParams()
+    if (debouncedQuery) p.set('q', debouncedQuery)
+    if (eventType) p.set('type', eventType)
+    if (from) p.set('from', from)
+    if (to) p.set('to', to)
+    const qs = p.toString()
+    let live = true
+    // The spinner has to be up before the request leaves, not after it returns — otherwise the
+    // old rows sit there looking current while a new search is in flight.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true)
+    api<{ events: EventRow[]; eventTypes: EventTypeOption[] }>(`/events${qs ? `?${qs}` : ''}`)
+      .then((r) => {
+        if (!live) return
+        setEvents(r.events)
+        setTypes(r.eventTypes)
+      })
+      .catch((e) => { if (live) toast.error(e instanceof Error ? e.message : 'Failed to load') })
+      .finally(() => { if (live) setLoading(false) })
+    // `live` drops a slow response that a newer search has already overtaken, or the list
+    // flickers back to the previous query's rows.
+    return () => { live = false }
+  }, [debouncedQuery, eventType, from, to])
+
+  const filtersOn = Boolean(debouncedQuery || eventType || from || to)
+  function clearFilters() {
+    setQuery('')
+    setEventType('')
+    setFrom('')
+    setTo('')
+  }
 
   const shown = useMemo(() => {
     const today = todayISO()
@@ -75,6 +124,46 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
 
   return (
     <div className="space-y-4">
+      <div className="grid gap-3 rounded-lg border bg-card p-3 sm:grid-cols-2 lg:grid-cols-[1fr_12rem_10rem_10rem]">
+        <div className="space-y-1">
+          <Label htmlFor="q" className="text-xs">Search</Label>
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            <Input
+              id="q"
+              className="pl-8"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Guest name or code — e.g. Sharma, E-1065"
+            />
+          </div>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="type" className="text-xs">Event</Label>
+          <select
+            id="type"
+            className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+            value={eventType}
+            onChange={(e) => setEventType(e.target.value)}
+          >
+            <option value="">All events</option>
+            {types.map((t) => (
+              <option key={t.code} value={t.code}>{t.displayName}</option>
+            ))}
+          </select>
+        </div>
+        {/* Dates OVERLAP the range rather than sit inside it, so a wedding running 28–30 Jan is
+            found by a search for the 29th. Either end may be left blank for an open range. */}
+        <div className="space-y-1">
+          <Label htmlFor="from" className="text-xs">From</Label>
+          <Input id="from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="to" className="text-xs">To</Label>
+          <Input id="to" type="date" min={from || undefined} value={to} onChange={(e) => setTo(e.target.value)} />
+        </div>
+      </div>
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-0.5 rounded-lg border bg-card p-0.5">
           {FILTERS.map((f) => (
@@ -93,11 +182,18 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
             </button>
           ))}
         </div>
-        {canCreate && (
-          <Link href="/bookings/new" className={buttonVariants()}>
-            New proposal
-          </Link>
-        )}
+        <div className="flex items-center gap-3">
+          {filtersOn && (
+            <button type="button" onClick={clearFilters} className="text-sm text-muted-foreground hover:text-foreground">
+              Clear filters
+            </button>
+          )}
+          {canCreate && (
+            <Link href="/bookings/new" className={buttonVariants()}>
+              New proposal
+            </Link>
+          )}
+        </div>
       </div>
       <div className="overflow-x-auto rounded-lg border">
         <Table>
@@ -120,9 +216,11 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
             ) : shown.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-muted-foreground">
-                  {events.length === 0
-                    ? `No proposals yet.${canCreate ? ' Start one with “New proposal”.' : ''}`
-                    : 'No proposals match this filter.'}
+                  {filtersOn
+                    ? 'No proposals match this search.'
+                    : events.length === 0
+                      ? `No proposals yet.${canCreate ? ' Start one with “New proposal”.' : ''}`
+                      : 'No proposals match this filter.'}
                 </TableCell>
               </TableRow>
             ) : (
@@ -136,7 +234,11 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
                   <TableCell>{titleCase(e.guestName)}</TableCell>
                   <TableCell>{titleCase(e.eventType)}</TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">
-                    {e.firstDate ? `${e.firstDate}${e.lastDate && e.lastDate !== e.firstDate ? ` → ${e.lastDate}` : ''}` : '—'}
+                    {/* The functions' own span, so a proposal found by date can show the dates
+                        that found it. `first_date` is a confirm-time cache and is often NULL. */}
+                    {e.startDate
+                      ? `${e.startDate}${e.endDate && e.endDate !== e.startDate ? ` → ${e.endDate}` : ''}`
+                      : '—'}
                   </TableCell>
                   <TableCell>
                     <span className={`inline-block rounded-full px-2 py-0.5 text-xs ${STATUS_STYLES[e.status] ?? STATUS_STYLES.enquiry}`}>
