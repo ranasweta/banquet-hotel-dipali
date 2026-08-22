@@ -63,13 +63,13 @@ type SheetRoomGroup = {
 export type Sheet = {
   functions: SheetFunction[]
   roomGroups: SheetRoomGroup[]
+  roomsTaxBands: { gstRateBp: number; actualPaise: number; discountedPaise: number }[]
   roomsTaxActualPaise: number
   roomsTaxPaise: number
   actualTotalPaise: number
   discountedTotalPaise: number
   lineDiscountPaise: number
   lumpDiscountPaise: number
-  hasHighTaxRoom: boolean
   missing: { subEventId: string; name: string }[]
 }
 type LumpRow = { id: string; head: string; amountPaise: number; remark: string; status: string }
@@ -386,11 +386,17 @@ export function DiscountGrid({
                 ))}
                 {/* No cell of its own (client, 20 Aug 2026) — but not frozen either: it is
                     charged on what we collect, so it follows the room lines down. */}
-                <MoneyRow
-                  label={sheet.hasHighTaxRoom ? 'Tax on rooms — 5%, and 18% over ₹7,500 a night' : 'Tax — 5% on rooms'}
-                  actualPaise={sheet.roomsTaxActualPaise}
-                  line={totalRow(sheet.roomsTaxActualPaise, sheet.roomsTaxPaise)}
-                />
+                {/* One line per rate, 5% before 18% (client, 22 Aug 2026), and no word about the
+                    threshold that decides them — which band a room falls in is our arithmetic,
+                    not something a guest reading the total needs explained. */}
+                {sheet.roomsTaxBands.map((b) => (
+                  <MoneyRow
+                    key={b.gstRateBp}
+                    label={`Tax on rooms — ${b.gstRateBp / 100}%`}
+                    actualPaise={b.actualPaise}
+                    line={totalRow(b.actualPaise, b.discountedPaise)}
+                  />
+                ))}
               </>
             )}
 
