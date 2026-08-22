@@ -38,11 +38,6 @@ async function idOf(table: 'venues' | 'menuTiers', name: string): Promise<string
   const [r] = await db.select({ id: t.id }).from(t).where(eq(t.name, name)).limit(1)
   return r!.id
 }
-async function deluxeRoom(): Promise<string> {
-  const [r] = (await db.execute(sql`SELECT r.id FROM rooms r JOIN lodging_units u ON u.id = r.unit_id WHERE u.name = 'Palace' AND r.room_type = 'deluxe' LIMIT 1`)) as unknown as { id: string }[]
-  return r!.id
-}
-
 /**
  * A Completed event fully ready to lock, with exact numbers for the hand-computed invoice:
  *   venue 15,00,000 · food 100 × 65,000 = 65,00,000 · rooms 2 × 5,00,000 = 10,00,000 ·
