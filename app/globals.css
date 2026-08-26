@@ -90,6 +90,16 @@
   --chart-3: oklch(0.3859 0.0084 97.54);
   --chart-4: oklch(0.7350 0.1156 86.59);
   --chart-5: oklch(0.4913 0.0881 268.78);
+  /* Reports: the pipeline is a funnel, so its four stages take an ORDINAL ramp — one hue,
+     light→dark as a proposal advances — not four identities from the chart ramp above.
+     Stepped on the brand gold and validated against the card (#FFFCF5): monotone lightness,
+     every adjacent gap ≥ 0.06 L, and the light end at 2.09:1 so the first stage is still
+     visible. --stage-3 doubles as the fill for the ranking bars, where one hue is correct
+     (bar length already carries the magnitude). */
+  --stage-1: oklch(0.7620 0.0880 86.5);              /* #CAAE6F Enquiry */
+  --stage-2: oklch(0.6920 0.1050 86.5);              /* #B89749 Confirmed */
+  --stage-3: oklch(0.6220 0.1069 86.5);              /* #A3822F In progress · ranking bars */
+  --stage-4: oklch(0.5500 0.0910 86.5);              /* #896E2B Completed */
   --radius: 0.625rem;
   --sidebar: oklch(0.9738 0.0167 88.00); /* #FBF6EA */
   --sidebar-foreground: oklch(0.2769 0.0111 91.70);
@@ -127,6 +137,12 @@
   --chart-3: oklch(0.6730 0.0179 91.62);
   --chart-4: oklch(0.8185 0.1060 88.23);
   --chart-5: oklch(0.6084 0.0881 270.01);
+  /* The stage ramp, re-stepped for the dark card rather than flipped: the anchor moves, so
+     a proposal still gets brighter as it advances, and the dim end holds 2.23:1 on #1F1E17. */
+  --stage-1: oklch(0.4500 0.0750 86.5);              /* #67521E */
+  --stage-2: oklch(0.5500 0.0910 86.5);              /* #896E2B */
+  --stage-3: oklch(0.6500 0.1069 86.5);              /* #AC8A39 */
+  --stage-4: oklch(0.7500 0.1156 86.5);              /* #CEA950 */
   --sidebar: oklch(0.2164 0.0132 100.67);
   --sidebar-foreground: oklch(0.9341 0.0153 90.24);
   --sidebar-primary: oklch(0.7350 0.1156 86.59);
