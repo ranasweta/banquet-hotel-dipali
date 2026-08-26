@@ -138,10 +138,14 @@ export const GET = route(async (req: NextRequest) => {
       endDate: sql<string | null>`(${spanEnd})::text`,
       proposalTotalPaise: schema.events.proposalTotalPaise,
       updatedAt: schema.events.updatedAt,
+      // Who took the enquiry. The list is read by people who did not take it, and "whose
+      // proposal is this?" was being answered by opening the trail (client, 26 Aug 2026).
+      createdByName: schema.users.fullName,
       // Stale: an enquiry untouched for STALE_DAYS days (FR-1.8).
       stale: sql<boolean>`(${schema.events.status} = 'enquiry' AND ${schema.events.updatedAt} < now() - (${STALE_DAYS} || ' days')::interval)`,
     })
     .from(schema.events)
+    .innerJoin(schema.users, eq(schema.users.id, schema.events.createdBy))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(schema.events.createdAt))
     .limit(200)

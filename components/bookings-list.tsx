@@ -34,6 +34,7 @@ type EventRow = {
   startDate: string | null
   endDate: string | null
   proposalTotalPaise: number
+  createdByName: string
   stale: boolean
 }
 type EventTypeOption = { code: string; displayName: string }
@@ -231,7 +232,15 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
                       {e.code}
                     </Link>
                   </TableCell>
-                  <TableCell>{titleCase(e.guestName)}</TableCell>
+                  {/* Who took the enquiry, under the guest's name (client, 26 Aug 2026). Quiet
+                      and secondary on purpose: the column is scanned for the client, and the
+                      staff name answers "whose proposal is this?" without being read first. */}
+                  <TableCell>
+                    {titleCase(e.guestName)}
+                    <span className="block text-xs text-muted-foreground">
+                      by {titleCase(e.createdByName)}
+                    </span>
+                  </TableCell>
                   <TableCell>{titleCase(e.eventType)}</TableCell>
                   <TableCell className="tabular-nums text-muted-foreground">
                     {/* The functions' own span, so a proposal found by date can show the dates
