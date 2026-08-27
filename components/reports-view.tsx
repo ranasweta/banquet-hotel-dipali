@@ -5,6 +5,8 @@ import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
+import { titleCase } from '@/lib/text'
+import { Donut, Hero, Meter, RankBars, StatTile } from '@/components/report-charts'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -17,14 +19,25 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 
-const KINDS = ['pipeline', 'occupancy', 'revenue', 'exceptions', 'maintenance', 'outstanding'] as const
+const KINDS = ['overview', 'pipeline', 'occupancy', 'revenue', 'exceptions', 'maintenance', 'outstanding'] as const
 type Kind = (typeof KINDS)[number]
 const LABEL: Record<Kind, string> = {
-  pipeline: 'Pipeline', occupancy: 'Occupancy', revenue: 'Revenue', exceptions: 'Exceptions', maintenance: 'Maintenance', outstanding: 'Outstanding',
+  overview: 'Overview', pipeline: 'Pipeline', occupancy: 'Occupancy', revenue: 'Revenue', exceptions: 'Exceptions', maintenance: 'Maintenance', outstanding: 'Outstanding',
+}
+
+/* The pipeline is a funnel, so its colours are one hue getting stronger as a proposal
+   advances — a reader sees the order in the colour. Cancelled leaves the funnel, so it wears
+   the neutral instead of a step of the ramp. */
+const STAGE_COLOR: Record<string, string> = {
+  enquiry: 'var(--stage-1)',
+  confirmed: 'var(--stage-2)',
+  running: 'var(--stage-3)',
+  delivered: 'var(--stage-4)',
+  cancelled: 'var(--muted-foreground)',
 }
 
 export function ReportsView() {
-  const [kind, setKind] = useState<Kind>('pipeline')
+  const [kind, setKind] = useState<Kind>('overview')
   // Track which kind the loaded data belongs to, so a tab switch never renders the previous
   // report's shape against the new kind (and a slow response can't overwrite a newer one).
   const [result, setResult] = useState<{ kind: Kind; data: Record<string, unknown> } | null>(null)
@@ -86,9 +99,142 @@ function Stat({ label, value }: { label: string; value: string }) {
   return <Card><CardContent className="py-3"><div className="text-xs text-muted-foreground">{label}</div><div className="text-xl font-semibold tabular-nums">{value}</div></CardContent></Card>
 }
 
+/** A titled block on the overview. `note` carries the caveat that keeps a figure honest. */
+function Panel({ title, note, children }: { title: string; note?: string; children: React.ReactNode }) {
+  return (
+    <Card>
+      <CardContent className="space-y-3 py-4">
+        <div>
+          <h3 className="text-sm font-medium">{title}</h3>
+          {note && <p className="mt-0.5 text-xs text-muted-foreground">{note}</p>}
+        </div>
+        {children}
+      </CardContent>
+    </Card>
+  )
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <p className="py-6 text-center text-sm text-muted-foreground">{children}</p>
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function renderReport(kind: Kind, d: any) {
   switch (kind) {
+    case 'overview': {
+      const venues = d.venues.slice(0, 8)
+      const hidden = d.venues.length - venues.length
+      return (
+        <div className="space-y-4">
+          {/* One hero figure, then the numbers that qualify it. Conversion is counted over
+              EVERY proposal ever raised — the same way the Pipeline tab counts it — so the
+              two tabs can never print different percentages. */}
+          <div className="grid gap-3 lg:grid-cols-3">
+            <Hero
+              value={`${d.conversionRatePct}%`}
+              label="Conversion"
+              sub={`${d.won} of ${d.total} proposals reached confirmed or beyond`}
+            />
+            <div className="grid gap-3 sm:grid-cols-2 lg:col-span-2">
+              <StatTile label="Proposals raised" value={String(d.total)} hint="every enquiry, all time" />
+              <StatTile label="Open enquiry value" value={formatPaise(d.openValuePaise)} hint="venue + food + add-ons, before tax and discounts" />
+              <StatTile label="Booked value" value={formatPaise(d.wonValuePaise)} hint="confirmed and beyond, on the same basis" />
+              <StatTile label="Advances received" value={formatPaise(d.collectedPaise)} hint={`${d.receipts} receipt${d.receipts === 1 ? '' : 's'} recorded`} />
+            </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-2">
+            <Panel title="Where the proposals stand" note="Every booking on the books, by stage.">
+              {d.stages.length === 0 ? (
+                <Empty>No proposals yet.</Empty>
+              ) : (
+                <Donut
+                  segments={d.stages.map((s: any) => ({ label: s.label, value: s.n, color: STAGE_COLOR[s.key] }))}
+                  centerValue={String(d.total)}
+                  centerLabel="proposals"
+                  ariaLabel={`Proposals by stage: ${d.stages.map((s: any) => `${s.label} ${s.n}`).join(', ')}`}
+                />
+              )}
+            </Panel>
+
+            {/* Demand, deliberately: enquiries count. Occupancy answers the other question —
+                what was actually confirmed — and this would say the same thing twice if it
+                filtered the same way. Bundles rank as themselves; they are what was sold. */}
+            <Panel
+              title="Most asked-for venues"
+              note={`Functions on live proposals, enquiries included.${hidden > 0 ? ` Top ${venues.length} of ${d.venues.length} — the rest are in Occupancy.` : ''}`}
+            >
+              {venues.length === 0 ? (
+                <Empty>No functions with a venue yet.</Empty>
+              ) : (
+                <RankBars
+                  unit="functions"
+                  rows={venues.map((v: any) => ({
+                    label: v.name,
+                    value: v.functions,
+                    note: v.property ? `${v.kind} · ${v.property}` : v.kind,
+                  }))}
+                />
+              )}
+            </Panel>
+          </div>
+
+          <Panel
+            title="Booking managers"
+            note="Everyone who has raised a proposal, ranked by how many they converted. Someone joining appears with their first proposal. A small number of proposals makes a conversion rate noisy — read the counts beside it."
+          >
+            {d.managers.length === 0 ? (
+              <Empty>No proposals have been raised yet.</Empty>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-8">#</TableHead>
+                      <TableHead>Manager</TableHead>
+                      <TableHead className="text-right">Raised</TableHead>
+                      <TableHead className="text-right">Converted</TableHead>
+                      <TableHead className="w-40">Conversion</TableHead>
+                      <TableHead className="text-right">Booked value</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {d.managers.map((m: any, i: number) => (
+                      <TableRow key={m.name}>
+                        <TableCell className="text-muted-foreground tabular-nums">{i + 1}</TableCell>
+                        <TableCell className="font-medium">
+                          {titleCase(m.name)}
+                          {/* A manager who has left keeps their history — the proposals are
+                              still theirs — but the reader should know they are gone. */}
+                          {!m.isActive && <span className="ml-1.5 text-xs font-normal text-muted-foreground">disabled</span>}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{m.proposals}</TableCell>
+                        <TableCell className="text-right tabular-nums">{m.won}</TableCell>
+                        <TableCell>
+                          <Meter
+                            pct={m.proposals > 0 ? (m.won / m.proposals) * 100 : 0}
+                            label={`${m.won} of ${m.proposals} converted`}
+                          />
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{formatPaise(m.wonValuePaise)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="What the hotel is asked for" note="Live proposals by event type.">
+            {d.byType.length === 0 ? (
+              <Empty>No proposals yet.</Empty>
+            ) : (
+              <RankBars unit="proposals" rows={d.byType.map((t: any) => ({ label: titleCase(t.label), value: t.n }))} />
+            )}
+          </Panel>
+        </div>
+      )
+    }
     case 'pipeline':
       return (
         <div className="space-y-3">

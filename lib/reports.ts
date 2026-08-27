@@ -131,7 +131,125 @@ export async function outstandingReport() {
   return { rows, totalOutstanding, buckets }
 }
 
+/**
+ * 7. Overview — the one screen a manager reads first: how the pipeline converts, who is
+ * writing the proposals, and which venues the enquiries actually ask for.
+ *
+ * It aggregates PROPOSALS, not invoices, and that is the point. The five reports above are
+ * built on `invoices`, so until a booking is billed they have nothing to say — on a hotel
+ * whose bookings are still months out, five of the six tabs read empty. Everything here comes
+ * from `events`, `sub_events` and `payments`, which exist from the first enquiry.
+ *
+ * Money is therefore PROPOSAL value — `proposal_total_paise`, i.e. venue + food + add-ons
+ * before tax and before discounts — and every figure that leaves this function is labelled as
+ * such in the UI. It is deliberately not called a total: a bill's Total and Amount payable are
+ * a pair (CLAUDE.md rule 11) and neither is what a pipeline is worth.
+ */
+export async function overviewReport() {
+  // Conversion counts the same way `pipelineReport` does — confirmed-or-beyond over every
+  // proposal ever raised — so the two tabs can never print different percentages.
+  const [funnel] = (await db.execute(sql`
+    SELECT count(*)::int AS total,
+           count(*) FILTER (WHERE status = 'enquiry')::int AS enquiry,
+           count(*) FILTER (WHERE status = 'confirmed')::int AS confirmed,
+           count(*) FILTER (WHERE status = 'in_progress')::int AS running,
+           count(*) FILTER (WHERE status IN ('completed','locked','billed','closed'))::int AS delivered,
+           count(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
+           COALESCE(sum(proposal_total_paise) FILTER (WHERE status = 'enquiry'),0)::bigint AS "openValuePaise",
+           COALESCE(sum(proposal_total_paise) FILTER (WHERE status IN ${CONFIRMED_PLUS}),0)::bigint AS "wonValuePaise"
+    FROM events
+  `)) as unknown as {
+    total: number; enquiry: number; confirmed: number; running: number; delivered: number
+    cancelled: number; openValuePaise: number; wonValuePaise: number
+  }[]
+
+  const [collected] = (await db.execute(sql`
+    SELECT COALESCE(sum(amount_paise),0)::bigint AS "paidPaise", count(*)::int AS receipts FROM payments
+  `)) as unknown as { paidPaise: number; receipts: number }[]
+
+  // Demand, not utilisation: every function on a live proposal, enquiries included, because
+  // what this answers is "which room do people ask for". The Occupancy tab counts confirmed
+  // bookings only, and says so. Bundles are counted as themselves — 11 of the 41 functions on
+  // the books are bundle lets, and joining on venue_id alone drops every one of them.
+  //
+  // Grouped by ID, not by name. `venues` is unique on (property_id, name) only, so the day
+  // Palace and Regency both have a "Crystal" the two are different rooms — grouping by the
+  // text would silently add them into one bar. The property rides along for the same reason:
+  // two bars reading "Crystal" need telling apart. A renamed venue simply reports under its
+  // new name, since nothing here caches it.
+  const venues = (await db.execute(sql`
+    SELECT v.name, v.kind, p.name AS property, count(*)::int AS functions
+    FROM sub_events se JOIN events e ON e.id = se.event_id AND e.status <> 'cancelled'
+    JOIN venues v ON v.id = se.venue_id
+    JOIN properties p ON p.id = v.property_id
+    GROUP BY v.id, v.name, v.kind, p.name
+    UNION ALL
+    SELECT b.name, 'bundle' AS kind, NULL AS property, count(*)::int AS functions
+    FROM sub_events se JOIN events e ON e.id = se.event_id AND e.status <> 'cancelled'
+    JOIN venue_bundles b ON b.id = se.bundle_id
+    GROUP BY b.id, b.name
+    ORDER BY functions DESC, name
+  `)) as unknown as { name: string; kind: string; property: string | null; functions: number }[]
+
+  // Whose proposals convert. `events.created_by` has been on the table since 0001, so this
+  // reaches back over every booking the hotel has ever taken.
+  //
+  // Grouped by u.id and joined live, so staff changes need no maintenance here: a manager
+  // hired tomorrow appears with their first proposal, a renamed one reports under the new
+  // name from the next page load, and two people who happen to share a name stay two rows.
+  // It lists whoever has RAISED a proposal, not everyone who could — a directory of people
+  // with nothing to rank is not a leaderboard, and the panel says so.
+  const managers = (await db.execute(sql`
+    SELECT u.full_name AS name, u.is_active AS "isActive",
+           count(*)::int AS proposals,
+           count(*) FILTER (WHERE e.status IN ${CONFIRMED_PLUS})::int AS won,
+           count(*) FILTER (WHERE e.status = 'cancelled')::int AS cancelled,
+           COALESCE(sum(e.proposal_total_paise) FILTER (WHERE e.status IN ${CONFIRMED_PLUS}),0)::bigint AS "wonValuePaise",
+           COALESCE(sum(e.proposal_total_paise),0)::bigint AS "raisedValuePaise"
+    FROM events e JOIN users u ON u.id = e.created_by
+    GROUP BY u.id, u.full_name, u.is_active
+    ORDER BY won DESC, proposals DESC, u.full_name
+  `)) as unknown as {
+    name: string; isActive: boolean; proposals: number; won: number; cancelled: number
+    wonValuePaise: number; raisedValuePaise: number
+  }[]
+
+  // By the event type's CODE, which is its primary key — two types are allowed to be given
+  // the same display name, and they would otherwise merge into one bar.
+  const byType = (await db.execute(sql`
+    SELECT COALESCE(t.display_name, e.event_type) AS label, count(*)::int AS n
+    FROM events e LEFT JOIN event_types t ON t.code = e.event_type
+    WHERE e.status <> 'cancelled'
+    GROUP BY e.event_type, t.display_name ORDER BY n DESC, 1
+  `)) as unknown as { label: string; n: number }[]
+
+  const f = funnel!
+  const stages = [
+    { key: 'enquiry', label: 'Enquiry', n: f.enquiry },
+    { key: 'confirmed', label: 'Confirmed', n: f.confirmed },
+    { key: 'running', label: 'In progress', n: f.running },
+    { key: 'delivered', label: 'Completed', n: f.delivered },
+    { key: 'cancelled', label: 'Cancelled', n: f.cancelled },
+  ].filter((s) => s.n > 0)
+
+  const won = f.confirmed + f.running + f.delivered
+  return {
+    stages,
+    total: f.total,
+    won,
+    conversionRatePct: f.total > 0 ? Math.round((won / f.total) * 1000) / 10 : 0,
+    openValuePaise: Number(f.openValuePaise),
+    wonValuePaise: Number(f.wonValuePaise),
+    collectedPaise: Number(collected!.paidPaise),
+    receipts: collected!.receipts,
+    venues,
+    managers,
+    byType,
+  }
+}
+
 export const REPORTS: Record<string, () => Promise<unknown>> = {
+  overview: overviewReport,
   occupancy: occupancyReport,
   revenue: revenueReport,
   pipeline: pipelineReport,

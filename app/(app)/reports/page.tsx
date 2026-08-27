@@ -9,7 +9,7 @@ export default async function ReportsPage() {
   if (!perms.some((p) => p.module === 'audit' && p.action === 'view')) redirect('/')
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       <h1 className="text-2xl font-semibold">Reports</h1>
       <ReportsView />
     </div>
