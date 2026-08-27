@@ -60,8 +60,35 @@ export type ProposalMenu = {
   tierName: string
   baseRatePaise: number
   surchargePaise: number
+  /** The per-plate sum of the priced delicacies — carried for the approval screen's arithmetic. */
   chefPaise: number
+  /**
+   * The TIER'S OWN per-plate rate: base + the wedding surcharge, and nothing else. A priced
+   * delicacy used to be folded in here, which made the document quote a plate rate the menu
+   * card does not carry; it is a line of its own now (client, 27 Aug 2026), exactly as
+   * `computeBillLines` has always billed it, so the Draft and the final bill itemise alike.
+   */
   perPlatePaise: number
+  /**
+   * The per-plate figure ACTUALLY being charged — `foodAmountPaise / pax` (client, 26 Aug 2026).
+   * Equal to `perPlatePaise` on an undiscounted line. The document's Rate column prints this
+   * one; the description under the tier name keeps `perPlatePaise`, so the guest can read the
+   * list price and what they are paying without either figure being rewritten.
+   *
+   * Derived from the line total, never the other way round: the stored discount is a flat gap
+   * (migration 0036), so this figure moves when pax does. Rounded to the paise for printing —
+   * pax × this can differ from the line total by a few paise, which is why the amount column
+   * is never computed from it.
+   */
+  chargedPerPlatePaise: number
+  /**
+   * The Chef's priced delicacies BY NAME ONLY (client, 27 Aug 2026: "just add chef delicacy
+   * sushi counter in menu, no need to show you charged how much for it"). The menu sheet is
+   * what the guest reads to see what is being served, and a rupee figure among the dishes is
+   * the one thing on that page that is not a dish. The money is a charge, so it goes where
+   * charges go — `ProposalFunction.delicacies`, in the breakdown under the function.
+   */
+  chefItems: string[]
   segments: ProposalSegment[]
 }
 
@@ -110,6 +137,16 @@ export type ProposalFunction = {
   foodAmountPaise: number
   /** Pax × the per-plate rate before any discount — the Actual column's food figure. */
   foodActualPaise: number
+  /**
+   * The Chef's priced delicacies as CHARGES (client, 27 Aug 2026), one line each under the
+   * function: pax × the per-plate charge, the same shape `computeBillLines` bills them in.
+   * The dishes themselves are named in the menu (`menu.chefItems`) without a price.
+   *
+   * NOT inside `foodAmountPaise`, and that is the whole change: the food line is the tier's
+   * rate again, and this rides beside it. `subtotalPaise` carries both, so the function's
+   * total is what it always was.
+   */
+  delicacies: ProposalAddon[]
   addons: ProposalAddon[]
   /** Bottles ordered for this function (12 Aug 2026). Printed as its own Alcohol section. */
   bar: ProposalBarLine[]
@@ -134,6 +171,15 @@ export type ProposalRoomLine = {
   checkOut: string
   nights: number
   ratePaise: number
+  /**
+   * The nightly rate ACTUALLY being charged — `amountPaise / (count × nights)` (client,
+   * 26 Aug 2026), equal to `ratePaise` on an undiscounted line. The Rate column prints this;
+   * `ratePaise` stays the rack/frozen rate the Actual column is built from.
+   *
+   * It is the same figure `gstRateBp` is read off, so a suite let below ₹7,500 prints its 5%
+   * band and its ₹7,000 rate together rather than one of each.
+   */
+  chargedRatePaise: number
   amountPaise: number
   /** count × nights × the rack/frozen rate, before the Discounted column. */
   actualAmountPaise: number
@@ -319,6 +365,16 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     ORDER BY se.event_date, se.start_time
   `)) as unknown as Row[]
 
+  // The same rows `chefPaise` above sums, kept individually so the document can name them
+  // (client, 26 Aug 2026). Only `priced` ones: a pending request has no charge and a declined
+  // one is not being served.
+  const chefRows = (await db.execute(sql`
+    SELECT c.sub_event_id AS "subEventId", c.description, c.charge_paise AS "ratePaise"
+    FROM chef_requests c JOIN sub_events se ON se.id = c.sub_event_id
+    WHERE se.event_id = ${eventId} AND c.status = 'priced'
+    ORDER BY c.description
+  `)) as unknown as { subEventId: string; description: string; ratePaise: number }[]
+
   const addonRows = (await db.execute(sql`
     SELECT a.sub_event_id AS "subEventId", a.description, a.qty, a.rate_paise AS "ratePaise"
     FROM sub_event_addons a JOIN sub_events se ON se.id = a.sub_event_id
@@ -365,8 +421,21 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     const menuId = s.menuId as string | null
     const pax = num(s.pax)
     const chefPaise = num(s.chefPaise)
-    const perPlatePaise = menuId ? num(s.baseRatePaise) + num(s.surchargePaise) + chefPaise : 0
+    // The tier's own rate. A priced delicacy is charged on its own line below, not folded in.
+    const perPlatePaise = menuId ? num(s.baseRatePaise) + num(s.surchargePaise) : 0
     const foodActualPaise = perPlatePaise * pax
+    // Joined through the menu the same way `computeBillLines` does: a function with no saved
+    // menu contributes no food, so a delicacy on one must not be charged either.
+    const delicacies: ProposalAddon[] = menuId
+      ? chefRows
+          .filter((c) => c.subEventId === s.id)
+          .map((c) => ({
+            description: c.description,
+            qty: pax,
+            ratePaise: num(c.ratePaise),
+            amountPaise: pax * num(c.ratePaise),
+          }))
+      : []
     const foodAmountPaise = Math.max(0, foodActualPaise - (gaps.get(`food:${s.id as string}`) ?? 0))
 
     const addons: ProposalAddon[] = addonRows
@@ -386,6 +455,8 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
           surchargePaise: num(s.surchargePaise),
           chefPaise,
           perPlatePaise,
+          chargedPerPlatePaise: pax > 0 ? Math.round(foodAmountPaise / pax) : perPlatePaise,
+          chefItems: delicacies.map((d) => d.description),
           segments: segRows
             .filter((c) => c.menuId === menuId)
             .map((c) => {
@@ -434,7 +505,10 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
     // The bar is in the subtotal because it is in `proposal_total_paise`. Printing the bottles
     // and leaving their money out would put a document in the guest's hand whose own figures
     // do not add up to the one they are asked to pay against.
-    const otherPaise = addons.reduce((n, a) => n + a.amountPaise, 0) + bar.reduce((n, b) => n + b.amountPaise, 0)
+    const otherPaise =
+      addons.reduce((n, a) => n + a.amountPaise, 0) +
+      bar.reduce((n, b) => n + b.amountPaise, 0) +
+      delicacies.reduce((n, d) => n + d.amountPaise, 0)
     const subtotalPaise = (venueRatePaise ?? 0) + foodAmountPaise + otherPaise
     // Add-ons and the bar carry no Discounted cell, so they sit at the same figure in both
     // columns and the two sub-totals differ by exactly what was given on the venue and the food.
@@ -459,6 +533,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       menu,
       foodAmountPaise,
       foodActualPaise,
+      delicacies,
       addons,
       bar,
       subtotalPaise,
@@ -533,6 +608,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
       checkOut: r.checkOut as string,
       nights,
       ratePaise,
+      chargedRatePaise: qty > 0 ? effectiveNightly : ratePaise,
       amountPaise,
       actualAmountPaise,
       gstRateBp: roomGstBp(effectiveNightly, r.roomType as string),

@@ -988,11 +988,36 @@ function FunctionBlock({ fn, showActual }: { fn: ProposalFunction; showActual: b
                 </span>
               </td>
               <td className="c calc">{fn.pax} pax</td>
-              <td className="n calc">{formatPaise(fn.menu.perPlatePaise)} / plate</td>
+              {/* THE RATE ACTUALLY CHARGED (client, 26 Aug 2026). The description above keeps the
+                  list price, so the guest reads both: what the plate costs, and what they are
+                  paying for it. Printing the list rate here beside a discounted amount made the
+                  row's own arithmetic look wrong — pax × rate did not come to the figure at the
+                  end of the line. Computed on the server from the line total, so this column and
+                  that amount can never disagree. */}
+              <td className="n calc">{formatPaise(fn.menu.chargedPerPlatePaise)} / plate</td>
               {showActual && <td className="n amt was">{formatPaise(fn.foodActualPaise)}</td>}
               <td className="n amt">{formatPaise(fn.foodAmountPaise)}</td>
             </tr>
           )}
+          {/* A priced delicacy, charged on its own line under the function (client, 27 Aug
+              2026) rather than folded into the plate rate above. Same shape the final bill
+              itemises it in, so the Draft the guest holds and the bill they settle read alike.
+              No Actual cell of its own: the food gap is given on the food line, and this is
+              charged at the Chef's price in both columns. */}
+          {fn.delicacies.map((d) => (
+            <tr key={`delicacy-${d.description}`}>
+              <td>
+                <span className="it-name">{titleCase(d.description)}</span>
+                <span className="it-desc">
+                  Chef&rsquo;s delicacy, prepared to order. Listed with the menu overleaf.
+                </span>
+              </td>
+              <td className="c calc">{d.qty} pax</td>
+              <td className="n calc">{formatPaise(d.ratePaise)} / plate</td>
+              {showActual && <td className="n amt was">{formatPaise(d.amountPaise)}</td>}
+              <td className="n amt">{formatPaise(d.amountPaise)}</td>
+            </tr>
+          ))}
           {fn.addons.map((a) =>
             a.ratePaise === 0 ? (
               <tr key={a.description}>
@@ -1109,6 +1134,24 @@ function MenuPages({ doc }: { doc: ProposalDocument }) {
                       </div>
                     ))}
 
+                  {/* The Chef's delicacies, as DISHES (client, 27 Aug 2026: "just add chef
+                      delicacy sushi counter in menu, no need to show you charged how much for
+                      it"). This sheet is what the guest reads to see what is being served, so
+                      the off-menu request belongs among the food with everything else. Its
+                      charge is a charge and prints in the breakdown under the function. */}
+                  {fn.menu!.chefItems.length > 0 && (
+                    <div className="seg">
+                      <div className="seg-h">
+                        <span className="seg-n">Chef&rsquo;s Delicacies</span>
+                      </div>
+                      <ul className="dishes">
+                        {fn.menu!.chefItems.map((c) => (
+                          <li key={c}>{titleCase(c)}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                   {/* Alcohol, broken out under its own heading (client, 12 Aug 2026) — here on
                       the menu sheet and nowhere else, since this is what the guest reads to
                       see what is being served. It carries the BOTTLE COUNT, unlike a dish: a
@@ -1177,8 +1220,10 @@ function Lodge({ lodge, multi, showActual }: { lodge: ProposalDocument['lodges']
             </span>
           </td>
           <td className="c calc">{l.count}</td>
+          {/* The nightly rate actually charged, for the reason the food row gives: count ×
+              nights × this comes to the amount at the end of the line. */}
           <td className="n calc">
-            {l.nights} × {formatPaise(l.ratePaise)}
+            {l.nights} × {formatPaise(l.chargedRatePaise)}
           </td>
           {showActual && <td className="n amt was">{formatPaise(l.actualAmountPaise)}</td>}
           <td className="n amt">{formatPaise(l.amountPaise)}</td>
@@ -1471,6 +1516,19 @@ const CSS = `
 .pd .menu-note{margin-top:2.6mm; padding-top:2.2mm; border-top:1px solid var(--rule-soft);
   font-size:7.2pt; color:var(--soft); line-height:1.45}
 .pd .menu-note b{color:var(--gold-deep); font-weight:700}
+/* The chef's delicacies close the menu — the one block on this sheet that carries money, so
+   it is set apart from the dish cards rather than made to look like another segment. */
+.pd .chef{margin-top:3.4mm; border:1px solid var(--rule-soft); border-radius:12px;
+  overflow:hidden; break-inside:avoid; background:linear-gradient(180deg,#fff,var(--ivory))}
+.pd .chef-h{padding:2.3mm 3.2mm; background:var(--champagne);
+  border-bottom:1px solid var(--rule-soft); font-size:6.7pt; letter-spacing:.16em;
+  text-transform:uppercase; font-weight:700; color:var(--gold-deep)}
+.pd .chef-list{list-style:none; padding:2.2mm 3.2mm}
+.pd .chef-list li{display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+  font-size:8pt; line-height:1.36; color:var(--ink-2); margin-bottom:.85mm}
+.pd .chef-list li:last-child{margin-bottom:0}
+.pd .chef-r{font-variant-numeric:tabular-nums; color:var(--ink-1); white-space:nowrap}
+.pd .chef-note{padding:0 3.2mm 2.4mm; font-size:7.2pt; color:var(--soft); line-height:1.45}
 
 /* ══════════ A MENU'S OWN SHEET ══════════
    A .page like the proposal's, so the gilt bar, pill header and footer are the same
