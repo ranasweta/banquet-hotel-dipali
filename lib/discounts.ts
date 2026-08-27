@@ -125,6 +125,13 @@ export type SheetFunction = {
   pax: number
   venue: SheetLine
   food: SheetLine | null
+  /**
+   * The Chef's priced delicacies, pax x the per-plate charge (client, 27 Aug 2026). Charged
+   * beside the food line rather than inside it, exactly as the bill and the document itemise
+   * them. NOT discountable and so not a SheetLine: the gap is given on the food line, and a
+   * second editable cell for the same negotiation is how two screens start disagreeing.
+   */
+  delicacyPaise: number
   actualSubtotalPaise: number
   discountedSubtotalPaise: number
 }
@@ -251,7 +258,14 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
              se.venue_id AS "venueId", se.bundle_id AS "bundleId",
              se.venue_rate_paise AS "venueRatePaise",
              COALESCE(v.name, b.name) AS "venueName",
-             m.tier_name AS "tierName", (m.base_rate_paise + m.surcharge_paise) AS "perPlate"
+             m.tier_name AS "tierName", (m.base_rate_paise + m.surcharge_paise) AS "perPlate",
+             -- A PRICED DELICACY IS A CHARGE OF ITS OWN, not part of the tier's plate rate
+             -- (client, 27 Aug 2026) — the same split computeBillLines bills and the document
+             -- prints. It was missing from this screen ENTIRELY until 26 Aug: the reception
+             -- totalled Rs.32,000 less here than on the payable, the bill and the guest's own
+             -- Draft, on the very screen where the discount is typed.
+             COALESCE((SELECT sum(c.charge_paise) FROM chef_requests c
+                        WHERE c.sub_event_id = se.id AND c.status = 'priced'), 0) AS "chefPerPlate"
       FROM sub_events se
       LEFT JOIN venues v ON v.id = se.venue_id
       LEFT JOIN venue_bundles b ON b.id = se.bundle_id
@@ -261,7 +275,7 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
     `) as unknown as Promise<{
       id: string; name: string; eventDate: string; startTime: string; endTime: string; pax: number
       venueId: string | null; bundleId: string | null; venueRatePaise: number; venueName: string | null
-      tierName: string | null; perPlate: number | null
+      tierName: string | null; perPlate: number | null; chefPerPlate: number | null
     }[]>,
     exec.execute(sql`
       SELECT rr.unit_id AS "unitId", u.name AS "lodgeName", rr.room_type AS "roomType",
@@ -320,6 +334,9 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
             `Food — ${s.tierName}, ${s.pax} pax × ${Number(s.perPlate) / 100}/plate`,
             s.pax * Number(s.perPlate),
           )
+    // Joined through the menu the same way the bill is: a function with no saved menu has no
+    // food line, so a delicacy on one is not charged either.
+    const delicacyPaise = food ? s.pax * Number(s.chefPerPlate ?? 0) : 0
     return {
       subEventId: s.id,
       name: s.name,
@@ -329,8 +346,9 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
       pax: s.pax,
       venue,
       food,
-      actualSubtotalPaise: venue.actualPaise + (food?.actualPaise ?? 0),
-      discountedSubtotalPaise: venue.discountedPaise + (food?.discountedPaise ?? 0),
+      delicacyPaise,
+      actualSubtotalPaise: venue.actualPaise + (food?.actualPaise ?? 0) + delicacyPaise,
+      discountedSubtotalPaise: venue.discountedPaise + (food?.discountedPaise ?? 0) + delicacyPaise,
     }
   })
 

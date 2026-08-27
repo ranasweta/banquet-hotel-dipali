@@ -50,6 +50,7 @@ type SheetFunction = {
   pax: number
   venue: SheetLine
   food: SheetLine | null
+  delicacyPaise: number
   actualSubtotalPaise: number
   discountedSubtotalPaise: number
 }
@@ -75,6 +76,20 @@ export type Sheet = {
 type LumpRow = { id: string; head: string; amountPaise: number; remark: string; status: string }
 type Cap = { capPct: number; capBasePaise: number; capPaise: number; usedPaise: number; headroomPaise: number }
 
+/**
+ * Rupees as a person types them: "750", not "750.00", but "755.56" when the paise matter.
+ * Used for the derived box, so a round rate does not arrive full of zeros.
+ */
+function rupeeText(paise: number): string {
+  const r = paise / 100
+  return Number.isInteger(r) ? String(r) : r.toFixed(2)
+}
+const toPaise = (text: string): number | null => {
+  if (text.trim() === '') return null
+  const n = Math.round(Number(text) * 100)
+  return Number.isFinite(n) ? n : null
+}
+
 /** A row of the grid: a label, the actual, and the cell (editable or not) beside it. */
 function MoneyRow({
   label,
@@ -82,8 +97,11 @@ function MoneyRow({
   actualPaise,
   line,
   draft,
+  rateDraft,
+  unit,
   editing,
   onDraft,
+  onRateDraft,
   tone = 'normal',
   indent = false,
 }: {
@@ -92,12 +110,17 @@ function MoneyRow({
   actualPaise: number
   line?: SheetLine
   draft?: string
+  rateDraft?: string
+  /** What one unit of this line is, when it has one: 800 plates, or 66 room-nights. */
+  unit?: { count: number; noun: string }
   editing?: boolean
   onDraft?: (key: string, value: string) => void
+  onRateDraft?: (key: string, value: string) => void
   tone?: 'normal' | 'muted' | 'strong'
   indent?: boolean
 }) {
   const given = line ? line.actualPaise - line.discountedPaise : 0
+  const charged = unit && unit.count > 0 && line ? Math.round(line.discountedPaise / unit.count) : null
   return (
     <tr className={cn(tone === 'strong' && 'font-medium', tone === 'muted' && 'text-xs text-muted-foreground')}>
       <td className={cn('px-2 py-2 sm:px-3', indent && 'pl-6')}>
@@ -116,19 +139,45 @@ function MoneyRow({
       <td className="px-2 py-2 sm:px-3 text-right tabular-nums">{formatPaise(actualPaise)}</td>
       <td className="px-2 py-2 sm:px-3 text-right tabular-nums">
         {line && editing && onDraft ? (
-          <span className="flex items-center justify-end gap-1">
-            <span className="text-muted-foreground">₹</span>
-            <Input
-              inputMode="decimal"
-              aria-label={`Discounted price — ${line.label}`}
-              className="h-8 w-20 text-right tabular-nums sm:w-32"
-              value={draft ?? ''}
-              onChange={(e) => onDraft(line.key, e.target.value)}
-            />
+          <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+            {/* THE RATE, AND THE TOTAL, EITHER WAY ROUND (client, 26 Aug 2026). Staff negotiate
+                per plate and per night — "I'll give it at 750" — and were having to multiply by
+                the pax in their head to type a total. Typing in one box fills the other; the
+                one just typed is the one that means it. */}
+            {unit && unit.count > 0 && onRateDraft && (
+              <span className="flex items-center gap-1">
+                <span className="text-muted-foreground">₹</span>
+                <Input
+                  inputMode="decimal"
+                  aria-label={`Discounted rate per ${unit.noun} — ${line.label}`}
+                  className="h-8 w-16 text-right tabular-nums sm:w-24"
+                  value={rateDraft ?? ''}
+                  onChange={(e) => onRateDraft(line.key, e.target.value)}
+                />
+                <span className="text-xs text-muted-foreground">/{unit.noun}</span>
+              </span>
+            )}
+            <span className="flex items-center gap-1">
+              <span className="text-muted-foreground">₹</span>
+              <Input
+                inputMode="decimal"
+                aria-label={`Discounted price — ${line.label}`}
+                className="h-8 w-20 text-right tabular-nums sm:w-32"
+                value={draft ?? ''}
+                onChange={(e) => onDraft(line.key, e.target.value)}
+              />
+            </span>
           </span>
         ) : (
           <span className={cn(given > 0 && 'font-medium text-emerald-700 dark:text-emerald-400')}>
             {formatPaise(line ? line.discountedPaise : actualPaise)}
+            {/* What the guest is paying per plate or per night, once something has been given.
+                On an undiscounted line it is the rate already printed in the label. */}
+            {given > 0 && charged != null && (
+              <span className="block text-xs font-normal text-muted-foreground">
+                {formatPaise(charged)}/{unit!.noun}
+              </span>
+            )}
           </span>
         )}
       </td>
@@ -160,6 +209,8 @@ export function DiscountGrid({
   const [uncapped, setUncapped] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Record<string, string>>({})
+  /** The per-plate / per-night box beside it, as typed. Derived from `draft` unless being typed in. */
+  const [rateDraft, setRateDraft] = useState<Record<string, string>>({})
   const [remark, setRemark] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -188,12 +239,35 @@ export function DiscountGrid({
       ]
     : []
 
+  /**
+   * What one unit of a line is, for the lines that have one: a food line is priced per plate,
+   * a room line per room-night. A venue is hired whole and has none, so it keeps the single box.
+   */
+  const unitByKey = new Map<string, { count: number; noun: string }>()
+  if (sheet) {
+    for (const f of sheet.functions) {
+      if (f.food && f.pax > 0) unitByKey.set(f.food.key, { count: f.pax, noun: 'plate' })
+    }
+    for (const g of sheet.roomGroups) {
+      for (const l of g.lines) {
+        const n = l.count * l.nights
+        if (n > 0) unitByKey.set(l.key, { count: n, noun: 'night' })
+      }
+    }
+  }
+
   function startEditing() {
     // Prefilled with the price as it stands — the actual on an undiscounted line, what was
     // already given on a discounted one. Rupees, because that is what a person types.
     const seed: Record<string, string> = {}
-    for (const l of allLines) seed[l.key] = String(l.discountedPaise / 100)
+    const rates: Record<string, string> = {}
+    for (const l of allLines) {
+      seed[l.key] = String(l.discountedPaise / 100)
+      const u = unitByKey.get(l.key)
+      if (u) rates[l.key] = rupeeText(Math.round(l.discountedPaise / u.count))
+    }
     setDraft(seed)
+    setRateDraft(rates)
     setRemark('')
     setEditing(true)
   }
@@ -201,6 +275,7 @@ export function DiscountGrid({
   function stopEditing() {
     setEditing(false)
     setDraft({})
+    setRateDraft({})
     setRemark('')
   }
 
@@ -250,7 +325,30 @@ export function DiscountGrid({
     }
   }
 
-  const onDraft = (key: string, value: string) => setDraft((d) => ({ ...d, [key]: value }))
+  /**
+   * The two boxes, kept in step. The TOTAL is what gets saved — the rate is a way of arriving
+   * at it, and the discount stored underneath is still a flat amount off (migration 0036), so
+   * a rate typed today does not survive a pax change on its own. That is the client's decision
+   * of 26 Aug 2026, taken so a discount can never grow past the 10% cap without anyone typing.
+   *
+   * Rounding is honest about itself: a rate that does not divide the total exactly is shown to
+   * the paise, and whichever box was typed last is the one that decides the money.
+   */
+  const onDraft = (key: string, value: string) => {
+    setDraft((d) => ({ ...d, [key]: value }))
+    const u = unitByKey.get(key)
+    if (!u) return
+    const paise = toPaise(value)
+    setRateDraft((r) => ({ ...r, [key]: paise == null ? '' : rupeeText(Math.round(paise / u.count)) }))
+  }
+
+  const onRateDraft = (key: string, value: string) => {
+    setRateDraft((r) => ({ ...r, [key]: value }))
+    const u = unitByKey.get(key)
+    if (!u) return
+    const paise = toPaise(value)
+    setDraft((d) => ({ ...d, [key]: paise == null ? '' : rupeeText(paise * u.count) }))
+  }
 
   /**
    * What a line is worth right now — the typed figure while the column is open, the saved one
@@ -281,7 +379,15 @@ export function DiscountGrid({
 
   if (!sheet) return <p className="text-sm text-muted-foreground">Pricing…</p>
 
-  const cell = (l: SheetLine) => ({ line: l, draft: draft[l.key], editing, onDraft })
+  const cell = (l: SheetLine) => ({
+    line: l,
+    draft: draft[l.key],
+    rateDraft: rateDraft[l.key],
+    unit: unitByKey.get(l.key),
+    editing,
+    onDraft,
+    onRateDraft,
+  })
 
   return (
     <div className="space-y-3">
@@ -337,10 +443,24 @@ export function DiscountGrid({
                 ) : (
                   <MoneyRow label={`Food — no menu chosen yet (${f.pax} pax)`} actualPaise={0} />
                 )}
+                {/* The Chef's priced delicacies, charged beside the food line rather than
+                    inside the plate rate (client, 27 Aug 2026) — the split the bill and the
+                    document both use. No cell: the discount is given on the food line above,
+                    and this is charged at the Chef's price either way. It was absent from this
+                    screen altogether until 26 Aug, which left the sub-total short. */}
+                {f.delicacyPaise > 0 && (
+                  <MoneyRow
+                    label={`Chef's delicacies — ${f.pax} pax`}
+                    actualPaise={f.delicacyPaise}
+                  />
+                )}
                 <MoneyRow
                   label={`${f.name} sub-total`}
                   actualPaise={f.actualSubtotalPaise}
-                  line={totalRow(f.actualSubtotalPaise, liveOf(f.venue) + (f.food ? liveOf(f.food) : 0))}
+                  line={totalRow(
+                    f.actualSubtotalPaise,
+                    liveOf(f.venue) + (f.food ? liveOf(f.food) : 0) + f.delicacyPaise,
+                  )}
                   tone="muted"
                 />
               </Fragment>
