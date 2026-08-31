@@ -5,6 +5,7 @@ import { db, schema } from '@/db/drizzle'
 import { getCurrentUser, requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
 import { badRequest, ok, route, unauthorized } from '@/lib/api'
+import { balancesByEvent } from '@/lib/payment-schedule'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -150,6 +151,13 @@ export const GET = route(async (req: NextRequest) => {
     .orderBy(desc(schema.events.createdAt))
     .limit(200)
 
+  // WHAT THE GUEST ACTUALLY OWES, rooms and their GST included (client, 31 Aug 2026). The
+  // list used to print `proposal_total_paise`, which is venue + food + add-ons — so a wedding
+  // with thirty rooms was scanned at a figure lakhs below the one on its own proposal. Priced
+  // through the module the booking page and the calendar read, so a list and the booking it
+  // links to cannot disagree; it is one batched query for the whole page.
+  const balances = await balancesByEvent(rows.map((r) => r.id))
+
   // The filter's options, so the screen offers every configured type rather than only the ones
   // that happen to appear in this page of results.
   const types = await db
@@ -157,5 +165,8 @@ export const GET = route(async (req: NextRequest) => {
     .from(schema.eventTypes)
     .orderBy(schema.eventTypes.displayName)
 
-  return ok({ events: rows, eventTypes: types })
+  return ok({
+    events: rows.map((r) => ({ ...r, payablePaise: balances.get(r.id)?.payablePaise ?? 0 })),
+    eventTypes: types,
+  })
 })

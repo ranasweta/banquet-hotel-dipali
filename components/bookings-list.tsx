@@ -33,7 +33,12 @@ type EventRow = {
   /** When the booking actually runs — its functions' span, not the confirm-time cache. */
   startDate: string | null
   endDate: string | null
-  proposalTotalPaise: number
+  /**
+   * What the guest owes — venue + food + add-ons + rooms + the room GST, less discounts, and
+   * closed maintenance, lodge extras and plates once they exist. NOT `proposal_total_paise`,
+   * which is the first three alone and read lakhs light on any booking with lodging.
+   */
+  payablePaise: number
   createdByName: string
   stale: boolean
 }
@@ -205,7 +210,12 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
               <TableHead>Type</TableHead>
               <TableHead>Dates</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Proposal</TableHead>
+              {/* "Amount payable" in full, never "Proposal": it is the figure a counter
+                  collects and the one staff quote, and the printed Total is 18% above it
+                  (rule 11). The Total itself is on the booking page beside it — pricing the
+                  18% needs the whole bill built line by line, which is nine queries a row on
+                  a screen that draws two hundred. */}
+              <TableHead className="text-right">Amount payable</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
@@ -256,7 +266,7 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
                     {e.stale && <Badge variant="outline" className="ml-2 text-amber-600">stale</Badge>}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {e.proposalTotalPaise > 0 ? formatPaise(e.proposalTotalPaise) : '—'}
+                    {e.payablePaise > 0 ? formatPaise(e.payablePaise) : '—'}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-3 whitespace-nowrap">

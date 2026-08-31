@@ -55,7 +55,16 @@ function nights(checkIn: string, checkOut: string): number {
   return d > 0 ? d : 0
 }
 
-export function EventRooms({ eventId, editable }: { eventId: string; editable: boolean }) {
+export function EventRooms({
+  eventId,
+  editable,
+  onChanged,
+}: {
+  eventId: string
+  editable: boolean
+  /** Fired after a save — rooms are inside the payable, so the page header moves with them. */
+  onChanged?: () => void
+}) {
   const [rows, setRows] = useState<Requirement[] | null>(null)
   const [units, setUnits] = useState<Unit[]>([])
   // Only `roomRates` is kept: it carries which categories each lodge actually holds, and the
@@ -182,6 +191,7 @@ export function EventRooms({ eventId, editable }: { eventId: string; editable: b
           : 'Rooms saved',
       )
       await load()
+      onChanged?.()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not save rooms')
     } finally {
