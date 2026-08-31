@@ -247,9 +247,7 @@ export function EventDetailView({
                 <span>Total</span>
                 <span className="tabular-nums">{formatPaise(totals.displayTotalPaise)}</span>
               </div>
-              <div className="text-xs leading-snug text-muted-foreground">
-                The difference is the 18% GST shown on the proposal and collected from nobody.
-              </div>
+              
               {advancePaid > 0 && (
                 <div className="text-xs text-muted-foreground tabular-nums">
                   Advance recorded: {formatPaise(advancePaid)}
