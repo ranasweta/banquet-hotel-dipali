@@ -28,6 +28,7 @@ vi.mock('@/lib/session', () => ({
 }))
 
 const { GET: listEvents } = await import('@/app/api/v1/events/route')
+const { payableBreakdown } = await import('@/lib/payment-schedule')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -39,7 +40,10 @@ if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping bookings-se
 
 const bm = { id: '' }
 
-type Row = { id: string; code: string; guestName: string; startDate: string | null; endDate: string | null }
+type Row = {
+  id: string; code: string; guestName: string; startDate: string | null; endDate: string | null
+  payablePaise: number
+}
 
 /** Calls GET /events with a query string, as the Booking Manager. */
 async function list(qs: string): Promise<{ events: Row[]; eventTypes: { code: string }[] }> {
@@ -166,6 +170,38 @@ d('searching the proposals list', () => {
 
     expect((await list('?from=2027-08-15')).events.map((e) => e.guestName)).toEqual(['Late'])
     expect((await list('?to=2027-08-15')).events.map((e) => e.guestName)).toEqual(['Early'])
+  }, 120_000)
+
+  /**
+   * THE MONEY COLUMN IS THE PAYABLE, NOT `proposal_total_paise` (client, 31 Aug 2026). That
+   * column is venue + food + add-ons and never had lodging or tax in it, so a booking with
+   * rooms was scanned here at a figure lakhs below the one on its own proposal — the guest's
+   * document said one thing and the list another.
+   *
+   * Asserted against `payableBreakdown` rather than a literal, because the point is that the
+   * list and the booking page price the SAME way: a hard-coded rupee figure would still pass
+   * if the two drifted apart again.
+   */
+  it('shows what the guest owes, rooms and their GST included', async () => {
+    const id = await makeProposal({ guest: 'Rooms Guest', dates: ['2027-11-20'] })
+    const [room] = await db
+      .select({ unitId: schema.rooms.unitId, roomType: schema.rooms.roomType, ratePaise: schema.rooms.rackRatePaise })
+      .from(schema.rooms)
+      .where(eq(schema.rooms.isActive, true))
+      .limit(1)
+    await db.insert(schema.roomRequirements).values({
+      eventId: id, unitId: room!.unitId, roomType: room!.roomType, count: 4,
+      checkIn: '2027-11-20', checkOut: '2027-11-22', ratePaise: room!.ratePaise,
+    })
+
+    const row = (await list('?q=Rooms Guest')).events[0]!
+    const bill = await payableBreakdown(id)
+    expect(bill.roomsPaise).toBeGreaterThan(0)
+    // Rooms AND the GST collected on them are both in the figure the list prints...
+    expect(row.payablePaise).toBe(bill.payablePaise)
+    // ...which is exactly what the old column was missing.
+    expect(row.payablePaise).toBe(bill.proposalPaise + bill.roomsPaise + bill.roomsTaxPaise)
+    expect(row.payablePaise).toBeGreaterThan(bill.proposalPaise)
   }, 120_000)
 
   it('narrows on name, type and dates together', async () => {

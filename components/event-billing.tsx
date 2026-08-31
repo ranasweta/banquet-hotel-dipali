@@ -56,12 +56,28 @@ type Ledger = {
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string; note: string | null }[]
 }
 
-export function EventBilling({ eventId, editable }: { eventId: string; editable: boolean }) {
+export function EventBilling({
+  eventId,
+  editable,
+  onChanged,
+}: {
+  eventId: string
+  editable: boolean
+  /** Fired after a discount or a payment — both move the payable the page header shows. */
+  onChanged?: () => void
+}) {
   const [ledger, setLedger] = useState<Ledger | null>(null)
 
   const load = useCallback(async () => {
     setLedger(await api<Ledger>(`/events/${eventId}/ledger`))
   }, [eventId])
+
+  // The effect below loads; these two also tell the page, so the header and this panel
+  // cannot disagree about what is owed after a price is typed.
+  const reload = useCallback(async () => {
+    await load()
+    onChanged?.()
+  }, [load, onChanged])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -110,10 +126,10 @@ export function EventBilling({ eventId, editable }: { eventId: string; editable:
           Refreshes the money summary above on change so the balance tracks. */}
       <div>
         <h3 className="mb-2 text-sm font-medium">Prices &amp; discounts</h3>
-        <DiscountGrid eventId={eventId} editable={editable} onChanged={load} reloadKey={ledger.balancePaise} />
+        <DiscountGrid eventId={eventId} editable={editable} onChanged={reload} reloadKey={ledger.balancePaise} />
       </div>
 
-      <PaymentSection eventId={eventId} ledger={ledger} editable={editable} onChanged={load} />
+      <PaymentSection eventId={eventId} ledger={ledger} editable={editable} onChanged={reload} />
     </div>
   )
 }

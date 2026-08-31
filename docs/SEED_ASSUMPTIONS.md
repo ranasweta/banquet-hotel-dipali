@@ -1525,6 +1525,34 @@ rather than as a courtesy.
 
 ---
 
+### F30. The booking header and the list stop quoting `proposal_total_paise`
+Client, 31 Aug 2026, on a confirmed wedding: the booking page's card and the proposals list
+both read **₹15,33,750** while that booking's own pricing sheet totalled **₹19,43,200**. Not a
+pricing bug — the two figures were never the same thing. `proposal_total_paise` is venue + food
++ add-ons and always was, so on any booking with lodging the single most-read number on the
+screen was short by the whole room charge and the GST collected on it (here ₹5,59,000 of rooms
+and ₹27,950 of tax). It was labelled *Proposal total*, which reads like the whole quote.
+
+Both screens price through `lib/payment-schedule.ts` now — the module the calendar, the ledger
+and confirm already read — so a list, a booking page and the document a guest holds cannot
+disagree about what is owed. The booking card shows **Amount payable** with the printed
+**Total** under it, per rule 11; `proposal_total_paise` is untouched and still does its own job
+(the 10% discount cap's base, the reports' proposal value, BR-D2).
+
+**The list column shows the payable ALONE, and that is a deliberate exception to rule 11's
+"never one alone".** Pricing the shown-and-never-collected 18% means building the whole bill
+line by line — `computeBillLines` is nine queries for one event — and the list draws up to two
+hundred rows from one batched query. The column is therefore labelled *Amount payable* in full,
+never *Proposal*: rule 11's hazard is a counter reading a printed Total and taking 18% too
+much, and the payable is the safe half of the pair — it is the figure the manual tells staff to
+quote. The Total is one click away, on the booking page. Flagged rather than settled: if the
+list is ever wanted with both figures, the fix is a bulk `shownTaxByEvent` that reproduces
+`computeBillLines`' per-line rounding in SQL, and reproducing it *approximately* is not an
+option — a list and a booking page that differ by a few paise is the disagreement all of this
+exists to prevent.
+
+---
+
 ## E. Still needed from the client
 
 Ranked by what they block.

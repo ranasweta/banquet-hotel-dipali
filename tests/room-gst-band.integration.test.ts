@@ -216,6 +216,12 @@ d('a booking with rooms on both sides of the line', () => {
     expect(est.roomsTaxPaise).toBe(bill.roomsTaxPaise)
     expect(billed).toBe(bill.roomsTaxPaise)
     expect(doc.totals.roomsTaxPaise).toBe(bill.roomsTaxPaise)
+
+    // And the whole figure, not just the tax on it: the Draft's Amount Payable is what
+    // the booking page's header card shows, and both are `payableBreakdown`. They are
+    // built by two separate modules, so nothing but this stops them drifting apart and
+    // leaving the screen asking for a different number than the paper in the guest's hand.
+    expect(doc.totals.totalPaise).toBe(bill.payablePaise)
   }, 90_000)
 })
 

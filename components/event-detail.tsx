@@ -57,6 +57,15 @@ export type EventDetail = {
   payments: { kind: string; amountPaise: number; receiptNo: string }[]
 }
 
+/**
+ * The header's money. `proposal_total_paise` is venue + food + add-ons and always was, so
+ * a booking with lodging on it showed a figure the guest had never been quoted (client,
+ * 31 Aug 2026). Both, never one (rule 11): `payablePaise` is what is collected — rooms and
+ * their 5%/18% included — and `displayTotalPaise` is that plus the 18% the proposal prints
+ * and nobody pays.
+ */
+export type EventTotals = { payablePaise: number; displayTotalPaise: number }
+
 const STATUS_STYLES: Record<string, string> = {
   enquiry: 'bg-muted text-muted-foreground',
   confirmed: 'bg-[var(--chart-2)]/15 text-[var(--chart-5)] dark:text-[var(--chart-2)]',
@@ -66,6 +75,7 @@ const STATUS_STYLES: Record<string, string> = {
 
 export function EventDetailView({
   initial,
+  initialTotals,
   canViewMenus,
   canEditMenus,
   canViewRooms,
@@ -82,6 +92,7 @@ export function EventDetailView({
   isAuditor,
 }: {
   initial: EventDetail
+  initialTotals: EventTotals
   canViewMenus: boolean
   canEditMenus: boolean
   canViewRooms: boolean
@@ -98,6 +109,7 @@ export function EventDetailView({
   isAuditor: boolean
 }) {
   const [event, setEvent] = useState(initial)
+  const [totals, setTotals] = useState(initialTotals)
   // Which function's in-place editor is open. One at a time: two half-edited functions on one
   // screen is how the wrong one gets saved.
   const [editingFn, setEditingFn] = useState<string | null>(null)
@@ -135,11 +147,16 @@ export function EventDetailView({
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load menu catalog'))
   }, [canViewMenus])
 
-  // After a menu/add-on change, refresh the header proposal total.
+  // After a menu, room or price change, refresh the header's money. The quote endpoint
+  // rather than `/events/:id`, because the card no longer shows a column off the events
+  // row: it shows the payable and the printed total, which is what the quote returns. Same
+  // `bookings: view` gate as this page, so anyone who can read the card can refresh it.
   const refreshTotal = useCallback(async () => {
     try {
-      const r = await api<{ event: { proposalTotalPaise: number } }>(`/events/${event.id}`)
-      setEvent((e) => ({ ...e, proposalTotalPaise: r.event.proposalTotalPaise }))
+      const r = await api<{ payablePaise: number; displayTotalPaise: number }>(
+        `/events/${event.id}/quote`,
+      )
+      setTotals({ payablePaise: r.payablePaise, displayTotalPaise: r.displayTotalPaise })
     } catch {
       /* header total is cosmetic; ignore a refresh miss */
     }
@@ -151,7 +168,8 @@ export function EventDetailView({
   const refreshEvent = useCallback(async () => {
     const r = await api<{ event: EventDetail }>(`/events/${event.id}`)
     setEvent(r.event)
-  }, [event.id])
+    await refreshTotal()
+  }, [event.id, refreshTotal])
 
   const advancePaid = event.payments
     .filter((p) => p.kind === 'advance_block' || p.kind === 'part_payment')
@@ -212,10 +230,26 @@ export function EventDetailView({
           </p>
         </div>
         <div className="flex flex-col items-end gap-1.5">
-          <Card className="min-w-52">
-            <CardContent className="py-3">
-              <div className="text-xs text-muted-foreground">Proposal total</div>
-              <div className="text-xl font-semibold tabular-nums">{formatPaise(event.proposalTotalPaise)}</div>
+          {/* What the guest owes, rooms and their GST included — not `proposal_total_paise`,
+              which is venue + food + add-ons and left the whole lodging charge off the one
+              figure most people on this page read (client, 31 Aug 2026).
+
+              Amount payable leads because it is what a counter collects and what staff quote
+              (see the manual); the printed Total sits under it because a document carries
+              both and showing one alone is how 18% too much gets taken (rule 11). This is a
+              staff screen, so the shown-not-collected 18% is spelt out in words — on a
+              guest-facing document it never is. */}
+          <Card className="min-w-64">
+            <CardContent className="space-y-1 py-3">
+              <div className="text-xs text-muted-foreground">Amount payable</div>
+              <div className="text-xl font-semibold tabular-nums">{formatPaise(totals.payablePaise)}</div>
+              <div className="flex items-baseline justify-between gap-4 text-xs text-muted-foreground">
+                <span>Total</span>
+                <span className="tabular-nums">{formatPaise(totals.displayTotalPaise)}</span>
+              </div>
+              <div className="text-xs leading-snug text-muted-foreground">
+                The difference is the 18% GST shown on the proposal and collected from nobody.
+              </div>
               {advancePaid > 0 && (
                 <div className="text-xs text-muted-foreground tabular-nums">
                   Advance recorded: {formatPaise(advancePaid)}
@@ -473,6 +507,7 @@ export function EventDetailView({
                 canEditRooms &&
                 ['enquiry', 'confirmed', 'in_progress', 'completed'].includes(event.status)
               }
+              onChanged={refreshTotal}
             />
             {isEnquiry && (
               <p className="text-sm text-muted-foreground">
@@ -538,6 +573,7 @@ export function EventDetailView({
               <EventBilling
                 eventId={event.id}
                 editable={canEditBilling && !['locked', 'billed', 'closed'].includes(event.status)}
+                onChanged={refreshTotal}
               />
             )}
           </div>
