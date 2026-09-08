@@ -117,6 +117,8 @@ beforeAll(async () => {
 }, 90_000)
 
 async function cleanup() {
+  // Venue holds first — they reference the event and do not cascade with it.
+  await db.delete(schema.venueBookings)
   await db.delete(schema.events)
 }
 afterEach(async () => { if (hasDb) await cleanup() })
@@ -189,6 +191,47 @@ d('editing a function on an enquiry', () => {
     })
     expect(res.status).toBe(409)
     expect((await res.json()).error.message).toMatch(/change request/i)
+  })
+
+  /**
+   * … but not for the Auditor (client, 8 Sep 2026: "an auditor can edit any confirmed booking
+   * same as enquiry"). Same route, same screen — a different WRITE underneath, because a
+   * confirmed function is a held slot: the move has to release the old venue window and take
+   * the new one under the GiST exclusion, which is what `applyGmProposalEdits` does.
+   */
+  it('lets the Auditor move a CONFIRMED function, and the venue hold moves with it', async () => {
+    const { eventId, subId, venueB } = await makeEnquiry()
+    // Hold the original window, the way confirm does.
+    await db.execute(sql`
+      INSERT INTO venue_bookings (event_id, sub_event_id, venue_id, occupancy)
+      SELECT ${eventId}, ${subId}, se.venue_id,
+             tsrange((se.event_date + se.start_time)::timestamp, (se.event_date + se.end_time)::timestamp, '[)')
+        FROM sub_events se WHERE se.id = ${subId}
+    `)
+    await db.update(schema.events).set({ status: 'confirmed' }).where(eq(schema.events.id, eventId))
+
+    sessionState.userId = auditor.id
+    const res = await putSubEvent(
+      req({ name: 'Moved', event_date: '2026-11-09', start_time: '18:00', end_time: '23:00', venue_id: venueB, pax: 260 }),
+      { params: Promise.resolve({ id: subId }) },
+    )
+    expect(res.status).toBe(200)
+
+    const [sub] = await db.select().from(schema.subEvents).where(eq(schema.subEvents.id, subId))
+    expect(sub!.name).toBe('Moved')
+    expect(sub!.eventDate).toBe('2026-11-09')
+    expect(sub!.venueId).toBe(venueB)
+    expect(sub!.pax).toBe(260)
+
+    // The HOLD moved with it — one row, on the new venue and the new day. A plain UPDATE would
+    // have left the calendar holding the old window and the booking claiming the new one.
+    const holds = (await db.execute(sql`
+      SELECT venue_id AS "venueId", lower(occupancy)::text AS "from"
+        FROM venue_bookings WHERE sub_event_id = ${subId}
+    `)) as unknown as { venueId: string; from: string }[]
+    expect(holds).toHaveLength(1)
+    expect(holds[0]!.venueId).toBe(venueB)
+    expect(holds[0]!.from).toContain('2026-11-09')
   })
 })
 
@@ -324,6 +367,18 @@ d('correcting the event type', () => {
       `)) as unknown as { oldValue: string; newValue: string }[]
       expect(row!.oldValue).toContain('engagement')
       expect(row!.newValue).toContain('wedding')
+
+      // AND BACK AGAIN (client, 8 Sep 2026: "same vice versa"). A re-type that only ever added
+      // money would be half a feature — correcting a booking wrongly typed as a WEDDING has to
+      // take the hall's wedding rate and the plate surcharge back off it.
+      expect((await editEvent(eventId, { event_type: 'engagement' })).status).toBe(200)
+      const [back] = await db.select().from(schema.subEvents).where(eq(schema.subEvents.id, subId))
+      const [backMenu] = await db.select().from(schema.subEventMenus).where(eq(schema.subEventMenus.subEventId, subId))
+      expect(Number(back!.venueRatePaise)).toBe(engagement)
+      expect(Number(backMenu!.surchargePaise)).toBe(0)
+      const [backEv] = await db.select().from(schema.events).where(eq(schema.events.id, eventId))
+      expect(backEv!.eventType).toBe('engagement')
+      expect(Number(backEv!.proposalTotalPaise)).toBe(engagement + sub!.pax * Number(tierPrice!.base))
     } finally {
       // `afterEach` clears events, not masters. Leaving this card behind re-prices every
       // wedding in every test that runs after this one.
