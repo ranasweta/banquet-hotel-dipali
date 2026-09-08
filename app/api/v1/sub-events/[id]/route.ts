@@ -7,6 +7,7 @@ import { conflict, notFound, ok, route } from '@/lib/api'
 import { subEventSchema } from '@/app/api/v1/events/[id]/sub-events/route'
 import { canAuthorityEditConfirmed, removeConfirmedFunction } from '@/lib/post-confirm'
 import { recomputeProposalTotal } from '@/lib/pricing'
+import { applyGmProposalEdits } from '@/lib/gm-authority'
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
@@ -30,13 +31,6 @@ async function loadEditableSub(subId: string, exec: typeof db | Tx = db) {
     .where(eq(schema.subEvents.id, subId))
     .limit(1)
   if (!sub) throw notFound('Sub-event not found')
-  // Enquiry only, and deliberately so: an enquiry holds no `venue_bookings` (they are written
-  // at confirm), so moving its date, time or venue moves nothing and can clash with nothing.
-  // A confirmed booking's function is a held slot — that path is the change-request flow, or
-  // the Authority's own editor, both of which re-book the hold.
-  if (sub.status !== 'enquiry') {
-    throw conflict('This booking is confirmed. Changing a function needs a change request.')
-  }
   return sub
 }
 
@@ -59,6 +53,49 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
 
   const total = await db.transaction(async (tx) => {
     const sub = await loadEditableSub(id, tx)
+
+    /**
+     * A CONFIRMED booking is the Authority's to edit here, exactly as an enquiry is (client,
+     * 8 Sep 2026: "an auditor can edit any confirmed booking same as enquiry").
+     *
+     * It is not the same WRITE, though, and that is the whole point of routing rather than
+     * relaxing the guard. An enquiry holds no `venue_bookings` — they are written at confirm —
+     * so moving its date, venue or time moves nothing and can clash with nothing, and the plain
+     * UPDATE below is honest. A confirmed function is a HELD SLOT: moving it has to release the
+     * old window and take the new one, under the GiST exclusion, or the calendar and the booking
+     * part company. `applyGmProposalEdits` already does exactly that (it is what the approvals
+     * screen calls), so this hands over to it rather than growing a second copy that could
+     * drift. It also re-checks the Authority role, audits field by field, recomputes the total
+     * and — past billing — re-issues the guest's document.
+     *
+     * Everyone else still meets the old refusal: a held slot is not a Booking Manager's to move.
+     */
+    if (sub.status !== 'enquiry') {
+      if (!canAuthorityEditConfirmed(sub.status, actor)) {
+        throw conflict('This booking is confirmed. Changing a function needs a change request.')
+      }
+      await applyGmProposalEdits(tx, actor, sub.eventId, {
+        functions: [
+          {
+            id,
+            name: input.name,
+            eventDate: input.event_date,
+            startTime: input.start_time,
+            endTime: input.end_time,
+            venueId: input.venue_id ?? null,
+            bundleId: input.bundle_id ?? null,
+            pax: input.pax,
+          },
+        ],
+      })
+      const [ev] = await tx
+        .select({ total: schema.events.proposalTotalPaise })
+        .from(schema.events)
+        .where(eq(schema.events.id, sub.eventId))
+        .limit(1)
+      return Number(ev?.total ?? 0)
+    }
+
     const after = {
       name: input.name,
       eventDate: input.event_date,

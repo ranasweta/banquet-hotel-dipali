@@ -127,7 +127,7 @@ export function BookingWizard({
    * against it so a plain page-turn costs nothing and only a real edit is written — and so the
    * "saved" toast means something rather than firing on every click.
    */
-  const savedStep1 = useRef({ fromDate: '', toDate: '', guestName: '' })
+  const savedStep1 = useRef({ fromDate: '', toDate: '', guestName: '', eventType: '' })
   const [eventType, setEventType] = useState('')
   const [guestName, setGuestName] = useState('')
 
@@ -201,6 +201,7 @@ export function BookingWizard({
           fromDate: roomRes.window.firstDate ?? '',
           toDate: roomRes.window.lastDate ?? '',
           guestName: ev.guestName,
+          eventType: ev.eventType,
         }
         setRooms(roomRes.requirements)
 
@@ -288,7 +289,7 @@ export function BookingWizard({
         toast.success('Proposal created — now add the Aadhaar images.')
       } else {
         await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, event_type: eventType, from_date: fromDate, to_date: toDate, contacts: contactsPayload }) })
-        savedStep1.current = { fromDate, toDate, guestName }
+        savedStep1.current = { fromDate, toDate, guestName, eventType }
         toast.success('Contacts saved.')
       }
     } catch (e) {
@@ -313,18 +314,36 @@ export function BookingWizard({
   async function saveStep1(): Promise<boolean> {
     if (!eventId) return true
     const prev = savedStep1.current
-    if (prev.fromDate === fromDate && prev.toDate === toDate && prev.guestName === guestName) return true
+    // The event type is in BOTH the comparison and the body. It was in neither, so changing
+    // only the type left this thinking nothing had moved: Continue returned early, no request
+    // was made, and the picker showed Wedding over a booking the server still had as Other —
+    // priced, held and billed as Other, with nothing on screen to say so.
+    const typeChanged = prev.eventType !== eventType
+    if (prev.fromDate === fromDate && prev.toDate === toDate && prev.guestName === guestName && !typeChanged) {
+      return true
+    }
     setBusy(true)
     try {
       await api(`/events/${eventId}`, {
         method: 'PUT',
-        body: JSON.stringify({ guest_name: guestName, from_date: fromDate, to_date: toDate }),
+        body: JSON.stringify({
+          guest_name: guestName,
+          event_type: eventType,
+          from_date: fromDate,
+          to_date: toDate,
+        }),
       })
-      savedStep1.current = { fromDate, toDate, guestName }
-      toast.success('Dates saved.')
+      savedStep1.current = { fromDate, toDate, guestName, eventType }
+      if (typeChanged) {
+        // The whole proposal has just been re-priced server-side; the review step reads this.
+        await loadQuote(eventId)
+        toast.success('Event type changed — every function re-priced.')
+      } else {
+        toast.success('Dates saved.')
+      }
       return true
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Could not save the dates')
+      toast.error(e instanceof Error ? e.message : 'Could not save')
       return false
     } finally {
       setBusy(false)
@@ -613,7 +632,7 @@ export function BookingWizard({
             pools={pools}
             fromDate={fromDate}
             toDate={toDate}
-            canEditRows={eventStatus === 'enquiry'}
+            canEditRows={eventStatus === 'enquiry' || eventStatus === 'confirmed'}
             onEdited={async () => { if (eventId) await refreshFunctions(eventId) }}
             rows={subEvents.map((s) => ({
               id: s.id,
