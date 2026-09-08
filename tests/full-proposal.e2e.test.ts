@@ -43,7 +43,7 @@
  *
  *   MILESTONES on the payable amount: 25% = 4,68,862.50 · 50% = 9,37,725 · 100% = 18,75,450.
  *   The guest brings ₹3,00,000 — short of the advance, which is the whole point: the dates are
- *   held anyway and ₹1,68,862.50 is carried as Downpayment due.
+ *   held anyway and ₹1,68,862.50 stays owed on the Billing panel.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
@@ -231,9 +231,9 @@ d('a four-function wedding with rooms', () => {
     )) as unknown as { n: number }[]
     expect(n).toBe(5)
 
-    // And the shortfall is what the calendar will mark Downpayment due.
-    const short = await schedule.advanceShortfallByEvent([eventId])
-    expect(short.get(eventId)).toBe(16_886_250)
+    // Short, and confirmed regardless: the debt lives on the 25% milestone, not on the board.
+    const s = await schedule.paymentSchedule(eventId, '2026-08-05')
+    expect(s.milestones.find((m) => m.key === 'advance')!.shortfallPaise).toBe(16_886_250)
   }, 180_000)
 
   it('7 · reports a ledger that counts the rooms it used to forget', async () => {
@@ -249,16 +249,16 @@ d('a four-function wedding with rooms', () => {
     expect(led.displayTotalPaise).toBe(R(21_38_610))
   }, 120_000)
 
-  it('8 · tops up to the 25% and the marker clears', async () => {
+  it('8 · tops up to the 25% and the milestone is met', async () => {
     await payments.recordPayment(bm, eventId, {
       kind: 'part_payment', amountPaise: 16_886_250, mode: 'upi',
       receiptNo: `FP-TOP-${Date.now()}`, receivedOn: '2026-08-05',
     })
-    const short = await schedule.advanceShortfallByEvent([eventId])
-    expect(short.has(eventId)).toBe(false)
+
+    const s = await schedule.paymentSchedule(eventId, '2026-08-05')
+    expect(s.milestones.find((m) => m.key === 'advance')!.shortfallPaise).toBe(0)
 
     // The wedding's 50% is still ahead of them: 9,37,725 needed, 4,68,862.50 in.
-    const s = await schedule.paymentSchedule(eventId, '2026-08-05')
     const wb = s.milestones.find((m) => m.key === 'wedding_balance')!
     expect(wb.shortfallPaise).toBe(R(9_37_725) - 46_886_250)
     expect(wb.overdue).toBe(false)                          // D-30 is 28 Oct, still to come

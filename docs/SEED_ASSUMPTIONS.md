@@ -914,8 +914,9 @@ stands as written.
 
 The single implementation moved from `lib/pricing.ts:roomEstimatePaise` to
 `lib/payment-schedule.ts:payableBreakdown`, which is now what the quote endpoint, the confirm
-gate, the ledger, the wedding reminders and the calendar's Downpayment-due marker all read, so
-the number quoted and the number enforced cannot drift. `roomEstimatePaise` remains as the
+gate, the ledger and the wedding reminders all read, so the number quoted and the number
+enforced cannot drift. (It also fed the calendar's Downpayment-due marker until that was
+withdrawn on 8 Sep 2026 — see F20.) `roomEstimatePaise` remains as the
 wizard's live rooms-only estimate and computes the tax identically — rounded per line, then
 summed.
 
@@ -1149,11 +1150,26 @@ design has no cron, no `overdue_advance` exception kind and no extra column. The
 authority already existed (`lib/events.ts:cancelEvent`, pre-lock, releases venues and rooms);
 what was missing was the trigger, and the trigger is a person looking at a calendar.
 
-The chip is rose (amber already means carryover) and always carries the words *Downpayment
-due* — colour is never the only signal. The day panel adds the shortfall and the guest's
-primary number, and that number is sent **only** for short bookings: everyone with
-`calendar: view` opens that board, including the Banquet Manager, and a paid-up guest's phone
-number has no business travelling to a screen with no use for it.
+**Amended 8 Sep 2026: the marker is withdrawn, the hold is not.** *"we want to only remove the
+downpayment due."* Everything above about taking the money and holding the dates stands — that
+is the rule the client asked for and it is unchanged. What goes is the SURFACING: the rose chip
+and its legend entry, the words on the calendar, the shortfall and the guest's phone number on
+the day panel, the amber note at the advance field, and the warning toast after confirming. A
+booking confirmed on a part payment is now drawn and read exactly like a paid-up one.
+
+That takes the contention-driven escalation described above with it, deliberately: the Booking
+Manager pricing a competing enquiry no longer sees anything on the board to ring the GM about.
+The client's instruction was explicit — *"don't even warn"* — and the reason is that the guest
+is present and paying, so the hotel is not treating the booking as provisional. The debt itself
+is untouched and is read where money is read: the 25% is a milestone on the booking's Billing
+panel (FR-11.5a), and `confirmEvent` still writes what was owed at the moment the dates were
+held into the audit trail. `advanceShortfallByEvent`, which existed only to feed the marker, is
+gone; `payment_reminders` never covered the advance and is unaffected.
+
+**Flagged, not settled:** a shortfall that nothing surfaces is a shortfall somebody has to
+remember to look for. The milestone on the Billing panel is the only place it now appears, and
+no notification points at it. Recorded here because it is a control the hotel chose to give up,
+not an oversight.
 
 ### F21. A discount is money now, and what that costs
 Client's lead, 4 Aug 2026, reversing the 25 Jul percentage-of-a-head input. The manager types

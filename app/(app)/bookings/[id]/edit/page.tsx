@@ -45,7 +45,8 @@ export default async function EditBookingPage({
           Back to booking →
         </Link>
       </div>
-      <BookingWizard resumeEventId={id} />
+      {/* Re-typing an existing proposal is the Auditor's: it re-prices every function. */}
+      <BookingWizard resumeEventId={id} canChangeEventType={user.roleName === 'auditor'} />
     </div>
   )
 }

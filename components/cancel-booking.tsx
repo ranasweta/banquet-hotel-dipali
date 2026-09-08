@@ -12,10 +12,9 @@ import { Label } from '@/components/ui/label'
 /**
  * Cancelling a booking (PRD §4.1). The service and its route have existed since 2 Aug 2026 with
  * 217 lines of tests behind them, and nothing in the app could reach them — every "Cancel" in
- * the UI dismissed a dialog. That gap mattered more than it looked: the escalation path for a
- * part-paid booking (client's lead, 4 Aug 2026) is the Booking Manager seeing **Downpayment
- * due** on the calendar and ringing the Higher Authority, "who has the authority to cancel".
- * There was no button for him to do it with.
+ * the UI dismissed a dialog. That gap mattered more than it looked: releasing a date a guest
+ * has stopped paying for is the Higher Authority's call, "who has the authority to cancel", and
+ * there was no button for him to do it with.
  *
  * Three things it is careful about:
  *

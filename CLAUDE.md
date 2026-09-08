@@ -84,11 +84,16 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      refuse an early slot that the board shows as free.
    - Confirm requires **some** recorded advance BEFORE inserting `venue_bookings`
      rows (BR-P1, amended 4 Aug 2026). The 25% is a debt now, not a gate: a guest who
-     brings part of it confirms all the same, holds the venues like any other booking,
-     and carries the rest as **Downpayment due** — on the calendar, on the booking, in
-     the audit trail. What is still refused is a hold for nothing (zero, or no receipt).
-     The shortfall has no timer and raises no exception: it is chased when a competing
-     enquiry appears, by the Booking Manager phoning the GM, who can cancel.
+     brings part of it confirms all the same and holds the venues and rooms like any
+     other booking. What is still refused is a hold for nothing (zero, or no receipt).
+     **A short booking is not marked anywhere** (client, 8 Sep 2026): the "Downpayment
+     due" chip, the calendar's rose rule, the guest's number on the day panel and the
+     warning at the advance field are all withdrawn, and a booking confirmed on a part
+     payment is drawn and read exactly like a paid-up one. The debt is not forgiven, only
+     unadvertised — the 25% is still measured, by `paymentSchedule`'s milestones on the
+     booking's own Billing panel, which is where money is looked at. The shortfall has no
+     timer and raises no exception. `confirmEvent` still records it in the audit trail,
+     because what was owed at the moment the dates were held is a fact worth keeping.
      The base is the **payable amount** — `proposal_total_paise` + rooms + the 5% room
      tax, less discounts. The 18% GST is not in it (see rule 10).
    - Combined discounts ≤ 10% of the **total bill** — `proposal_total_paise` + rooms,
@@ -324,7 +329,19 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
 16. **An enquiry is editable in place, everywhere, until it is confirmed** (client, 15 Aug 2026:
    *"if someone wants to change the no. of pax or venue or date or timing"*). The booking page
    edits guest, contacts, the declared run, and each function's name / date / time / venue /
-   pax, alongside the menus and rooms it already edited. **Rooms are shown on an enquiry** — the
+   pax, alongside the menus and rooms it already edited.
+   **The event TYPE is editable too, and only by the Auditor** (client, 8 Sep 2026: *"should be
+   only given to the auditor only … as he changes the pricing and all gets changed too"*). It
+   was fixed the instant the proposal existed, so a wedding typed as an engagement had to be
+   thrown away and re-entered. It is not really a field on a booking — it is the key every
+   venue rate card is filed under (BR-R1), so moving it re-prices every function at once;
+   `PUT /events/:id` therefore recomputes `proposal_total_paise` in the same transaction and
+   403s anybody but the Auditor. The food surcharge and the wedding 50% follow on their own,
+   being derived from the type on every read. The contact rule is deliberately NOT enforced on
+   the correction — `confirmEvent` still refuses a wedding without three numbers, and blocking
+   the correction would trap a mis-typed booking in the wrong type for ever. Past confirmation
+   it is refused for everyone: the hall is by then held at a rate snapshotted from the OLD type,
+   and the guest's document was printed from that snapshot. **Rooms are shown on an enquiry** — the
    requirements ARE the booking (rule 9) and the wizard has always captured them at step 4; the
    page used to say "Rooms can be allocated once the booking is confirmed", which was wrong.
    **The boundary is confirmation, and it is the server's.** `PUT /sub-events/:id` refuses
@@ -358,10 +375,9 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
   the bill at list price. The same standing figures beside a guest at a counter tell them there
   is a bigger discount to push for, which is why the headroom notice elsewhere speaks only when
   the cap is crossed (11 Aug 2026).
-- A booking short of its 25% shows **Downpayment due** on the calendar in rose, with the
-  words beside the colour, and the day panel carries the shortfall and the guest's number so
-  the call to the GM can be made from that screen (4 Aug 2026). The number rides along only
-  for short bookings — everyone with `calendar: view` can open that board.
+- The calendar draws **one kind of confirmed booking** (client, 8 Sep 2026, withdrawing the
+  4 Aug "Downpayment due" marker). It asks nothing about what has been paid, and no guest's
+  phone number travels to it — the number rode along only to make the chasing call.
 - Anywhere money is totalled for a human, **Total** and **Amount payable** appear together
   (rule 11). Never one alone.
 - Inline availability feedback on every sub-event form the moment

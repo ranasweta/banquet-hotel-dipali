@@ -164,9 +164,14 @@ d('confirm gates', () => {
     expect(ev!.status).toBe('confirmed')
   })
 
-  it('takes a part advance, holds the dates, and carries the rest as due (4 Aug 2026)', async () => {
+  it('takes a part advance and holds the dates like any other booking (8 Sep 2026)', async () => {
     // BR-P1 used to 402 here and leave the dates open to anyone. The hotel's answer: take the
-    // money, hold the venue, show the debt. "we cant let them go."
+    // money and hold the venue. "we cant let them go."
+    //
+    // From 4 Aug to 8 Sep the shortfall was also drawn on the calendar as "Downpayment due" and
+    // the booking read differently from a paid-up one. That distinction is withdrawn — a guest
+    // who is present and pays something is confirmed, full stop — so what is asserted here is
+    // that the hold is REAL and that the 25% is still measured on the Billing panel.
     const id = await makeEnquiry()
     const res = await confirmEvent(actor, id, advance(1_000_000))
     expect(res.advanceRequiredPaise).toBe(3_775_000) // 25% of 1,51,00,000
@@ -175,15 +180,62 @@ d('confirm gates', () => {
     // The hold is real — the GiST exclusion protects this slot exactly as for a paid booking.
     const bookings = await db.select({ id: schema.venueBookings.id }).from(schema.venueBookings).where(eq(schema.venueBookings.eventId, id))
     expect(bookings).toHaveLength(1)
+    const [ev] = await db.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, id))
+    expect(ev!.status).toBe('confirmed')
 
-    // And it is visible where a manager pricing a competing enquiry will be looking.
-    const { advanceShortfallByEvent } = await import('@/lib/payment-schedule')
-    expect((await advanceShortfallByEvent([id])).get(id)).toBe(2_775_000)
+    // The debt is still on the books — it is just not on the calendar any more.
+    const { paymentSchedule } = await import('@/lib/payment-schedule')
+    const advanceMilestone = (s: Awaited<ReturnType<typeof paymentSchedule>>) =>
+      s.milestones.find((m) => m.key === 'advance')!
+    expect(advanceMilestone(await paymentSchedule(id)).shortfallPaise).toBe(2_775_000)
 
-    // Topping it up clears the marker; the milestone is a floor on the cumulative total.
+    // Topping it up meets it; the milestone is a floor on the cumulative total.
     const { recordPayment } = await import('@/lib/payments')
     await recordPayment(actor, id, { kind: 'part_payment', amountPaise: 2_775_000, mode: 'cash', receiptNo: `TOP-${Date.now()}`, receivedOn: '2026-08-04' })
-    expect((await advanceShortfallByEvent([id])).has(id)).toBe(false)
+    expect(advanceMilestone(await paymentSchedule(id)).shortfallPaise).toBe(0)
+  })
+
+  it('holds the venue AND the rooms on one rupee (client, 8 Sep 2026)', async () => {
+    // *"if u pay even 1 ruppee that also will confirm that venu day room and all."* The floor
+    // is not a fraction of anything — it is the difference between money and no money. ₹1 is
+    // 0.0026% of this booking's 25% and holds exactly what a full advance holds.
+    const id = await makeEnquiry()
+    // A room line, so "and rooms" is actually asserted rather than assumed.
+    const [lodge] = (await db.execute(sql`
+      SELECT u.id FROM lodging_units u JOIN rooms r ON r.unit_id = u.id
+       WHERE r.room_type = 'deluxe' AND r.is_active LIMIT 1
+    `)) as unknown as { id: string }[]
+    await db.insert(schema.roomRequirements).values({
+      eventId: id, unitId: lodge!.id, roomType: 'deluxe', count: 4,
+      checkIn: '2026-09-01', checkOut: '2026-09-02',
+    })
+
+    const res = await confirmEvent(actor, id, advance(100)) // one rupee
+    expect(res.advanceShortfallPaise).toBeGreaterThan(0)
+
+    // The venue window is held by a real `venue_bookings` row — the GiST exclusion protects
+    // this slot from every other booking exactly as it would a fully paid one.
+    const held = await db.select({ id: schema.venueBookings.id }).from(schema.venueBookings).where(eq(schema.venueBookings.eventId, id))
+    expect(held).toHaveLength(1)
+
+    const [ev] = await db.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, id))
+    expect(ev!.status).toBe('confirmed')
+
+    // The rooms are held too, and their rate is frozen at confirm like a venue's (rule 9) —
+    // one rupee buys the same commitment the hotel gives a guest who paid the lot.
+    const [rr] = await db
+      .select({ count: schema.roomRequirements.count, ratePaise: schema.roomRequirements.ratePaise })
+      .from(schema.roomRequirements)
+      .where(eq(schema.roomRequirements.eventId, id))
+    expect(rr!.count).toBe(4)
+    expect(rr!.ratePaise).toBeGreaterThan(0)
+
+    // And those rooms are off the shelf for anyone else on that night.
+    const { getRoomAvailability } = await import('@/lib/rooms')
+    const [free] = await getRoomAvailability([
+      { unitId: lodge!.id, roomType: 'deluxe', count: 1, checkIn: '2026-09-01', checkOut: '2026-09-02' },
+    ])
+    expect(free!.peakBooked).toBeGreaterThanOrEqual(4)
   })
 
   it('still refuses a hold for nothing — no advance at all is a 402', async () => {

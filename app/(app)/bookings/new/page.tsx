@@ -18,7 +18,7 @@ export default async function NewBookingPage() {
           Past proposals →
         </Link>
       </div>
-      <BookingWizard />
+      <BookingWizard canChangeEventType={user.roleName === 'auditor'} />
     </div>
   )
 }

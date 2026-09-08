@@ -53,14 +53,18 @@ function pgCode(err: unknown): string | undefined {
  *
  * THE 25% IS A DEBT NOW, NOT A GATE (client's lead, 4 Aug 2026). A guest who brings ₹1 lakh
  * against a ₹3 lakh advance used to be turned away with a 402 and the dates left open for
- * anyone. The hotel's answer is to take the money and hold the dates: the booking confirms,
- * blocks its venues like any other, and carries the shortfall as **Downpayment due** — on the
- * calendar, on the booking, and in the audit trail. What is still refused is a hold for
- * nothing: an advance of zero, or one with no receipt number, blocks no dates at all.
+ * anyone. The hotel's answer is to take the money and hold the dates: the booking confirms and
+ * blocks its venues and rooms like any other. What is still refused is a hold for nothing: an
+ * advance of zero, or one with no receipt number, blocks no dates at all.
  *
- * The shortfall is deliberately given no timer. Chasing it is a phone call, not a cron: when a
- * second guest wants the same venue, the Booking Manager sees the marker on the calendar and
- * rings the GM, who has the authority to cancel (lib/events.ts, cancelEvent).
+ * AND NOTHING MARKS IT SHORT (client, 8 Sep 2026). Between 4 Aug and now the shortfall was
+ * drawn on the calendar as "Downpayment due" so a competing enquiry could trigger a call to the
+ * GM. That surfacing is withdrawn — the guest is present and paying, and the booking is a
+ * booking. The shortfall keeps its audit row below, because what was owed at the moment the
+ * dates were held is a fact worth keeping, and it stays measurable through
+ * `paymentSchedule`'s 25% milestone on the Billing panel. It has no timer and raises no
+ * exception; releasing a date a guest has stopped paying for remains the GM's call
+ * (lib/events.ts, cancelEvent).
  */
 export async function confirmEvent(
   actor: Actor,

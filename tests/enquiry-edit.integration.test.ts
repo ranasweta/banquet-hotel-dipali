@@ -32,6 +32,7 @@ vi.mock('@/lib/session', () => ({
 }))
 
 const { PUT: putSubEvent } = await import('@/app/api/v1/sub-events/[id]/route')
+const { PUT: putEvent } = await import('@/app/api/v1/events/[id]/route')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -42,6 +43,7 @@ const d = hasDb ? describe : describe.skip
 if (!hasDb) console.warn('\n  ! TEST_DATABASE_URL unset — skipping enquiry-edit tests\n')
 
 const bm = { id: '', roleName: 'booking_manager' }
+const auditor = { id: '', roleName: 'auditor' }
 
 async function userId(role: string): Promise<string> {
   const [u] = await db
@@ -65,6 +67,12 @@ function req(body: unknown): NextRequest {
 function edit(subId: string, body: unknown) {
   sessionState.userId = bm.id
   return putSubEvent(req(body), { params: Promise.resolve({ id: subId }) })
+}
+
+/** The same, for the event itself. The event type is the Auditor's, so `as` picks the caller. */
+function editEvent(eventId: string, body: unknown, as = auditor) {
+  sessionState.userId = as.id
+  return putEvent(req(body), { params: Promise.resolve({ id: eventId }) })
 }
 
 async function makeEnquiry(): Promise<{ eventId: string; subId: string; venueA: string; venueB: string }> {
@@ -104,6 +112,7 @@ beforeAll(async () => {
     await setup.end()
   }
   bm.id = await userId('booking_manager')
+  auditor.id = await userId('auditor')
 }, 90_000)
 
 async function cleanup() {
@@ -179,5 +188,80 @@ d('editing a function on an enquiry', () => {
     })
     expect(res.status).toBe(409)
     expect((await res.json()).error.message).toMatch(/change request/i)
+  })
+})
+
+/**
+ * The event TYPE, which is the same rule one level up (client, 8 Sep 2026: "make the event type
+ * editable just incase we fill it mistakenly").
+ *
+ * It was fixed the instant the proposal existed, so a wedding typed as an engagement had to be
+ * abandoned and re-entered from scratch. Two things decide whether the correction is safe:
+ * every venue rate card is keyed by event type, so the proposal total must move with it; and
+ * past confirmation the hall is held at a rate snapshotted from the OLD type, so it must not be
+ * changeable there at all.
+ */
+d('correcting the event type', () => {
+  it('re-types an enquiry and re-prices it off the new rate card', async () => {
+    const { eventId } = await makeEnquiry()
+    const before = (await db.select().from(schema.events).where(eq(schema.events.id, eventId)))[0]!
+
+    const res = await editEvent(eventId, { event_type: 'wedding' })
+    expect(res.status).toBe(200)
+
+    const after = (await db.select().from(schema.events).where(eq(schema.events.id, eventId)))[0]!
+    expect(after.eventType).toBe('wedding')
+    // A wedding is dearer than an engagement in the seed's rate cards, and the quoted figure
+    // has to say so — a correction that left the old total is a booking quoting the old type.
+    expect(Number(after.proposalTotalPaise)).not.toBe(Number(before.proposalTotalPaise))
+
+    const [row] = (await db.execute(sql`
+      SELECT old_value AS "oldValue", new_value AS "newValue" FROM audit_log
+       WHERE event_id = ${eventId} AND field = 'event_type' ORDER BY seq DESC LIMIT 1
+    `)) as unknown as { oldValue: string; newValue: string }[]
+    expect(row).toMatchObject({ oldValue: 'engagement', newValue: 'wedding' })
+  })
+
+  it('does not hold the correction to the new type\u2019s contact rule', async () => {
+    // A wedding needs three numbers. Enforcing that HERE would trap a booking mis-typed as an
+    // engagement with one contact in the wrong type for ever; `confirmEvent` is where the rule
+    // belongs, and it still refuses.
+    const { eventId } = await makeEnquiry()
+    expect((await editEvent(eventId, { event_type: 'wedding' })).status).toBe(200)
+    const [{ n }] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM event_contacts WHERE event_id = ${eventId}
+    `)) as unknown as { n: number }[]
+    expect(n).toBe(0)
+  })
+
+  it('is the Auditor\u2019s alone \u2014 the manager who typed it cannot re-price by correcting it', async () => {
+    // Client, 8 Sep 2026: "should be only given to the auditor only \u2026 as he changes the pricing
+    // and all gets changed too." The type is the key every venue rate card is filed under, so
+    // moving it moves the money \u2014 that is the Auditor's authority, the same as the venue master.
+    const { eventId } = await makeEnquiry()
+    const res = await editEvent(eventId, { event_type: 'wedding' }, bm)
+    expect(res.status).toBe(403)
+    const [ev] = await db.select().from(schema.events).where(eq(schema.events.id, eventId))
+    expect(ev!.eventType).toBe('engagement')
+
+    // Everything else on the same route is still the Booking Manager's.
+    expect((await editEvent(eventId, { guest_name: 'Renamed By BM' }, bm)).status).toBe(200)
+  })
+
+  it('refuses an unknown type rather than writing it', async () => {
+    const { eventId } = await makeEnquiry()
+    expect((await editEvent(eventId, { event_type: 'birthday-party' })).status).toBe(400)
+    const [ev] = await db.select().from(schema.events).where(eq(schema.events.id, eventId))
+    expect(ev!.eventType).toBe('engagement')
+  })
+
+  it('refuses once the dates are held', async () => {
+    const { eventId } = await makeEnquiry()
+    await db.update(schema.events).set({ status: 'confirmed' }).where(eq(schema.events.id, eventId))
+
+    const res = await editEvent(eventId, { event_type: 'wedding' })
+    expect(res.status).toBe(409)
+    const [ev] = await db.select().from(schema.events).where(eq(schema.events.id, eventId))
+    expect(ev!.eventType).toBe('engagement')
   })
 })

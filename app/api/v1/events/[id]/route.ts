@@ -4,9 +4,10 @@ import { z } from 'zod'
 import { db, schema } from '@/db/drizzle'
 import { requirePermission } from '@/lib/auth'
 import { audit } from '@/lib/audit'
-import { badRequest, conflict, notFound, ok, route } from '@/lib/api'
+import { badRequest, conflict, forbidden, notFound, ok, route } from '@/lib/api'
 import { loadEventDetail } from '@/lib/events'
 import { canAuthorityEditConfirmed } from '@/lib/post-confirm'
+import { recomputeProposalTotal } from '@/lib/pricing'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -22,6 +23,9 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
 const updateSchema = z
   .object({
     guest_name: z.string().trim().min(1).max(160).optional(),
+    // A mis-picked event type, corrected (client, 8 Sep 2026: "just in case we fill it
+    // mistakenly"). Enquiry only — see the handler.
+    event_type: z.string().trim().min(1).max(40).optional(),
     // The proposal's declared run (client, 22 Jul 2026): rooms are bounded by this window.
     from_date: z.string().regex(ISO_DATE).optional(),
     to_date: z.string().regex(ISO_DATE).optional(),
@@ -89,6 +93,67 @@ export const PUT = route(async (req: NextRequest, ctx: { params: Promise<{ id: s
         oldValue: `${event.plannedFrom ?? '—'} → ${event.plannedTo ?? '—'}`,
         newValue: `${input.from_date ?? '—'} → ${input.to_date ?? '—'}`,
       })
+    }
+
+    /**
+     * The event type, which is a correction and not a re-negotiation.
+     *
+     * THE AUDITOR'S, AND NOBODY ELSE'S (client, 8 Sep 2026: "should be only given to the
+     * auditor only … as he changes the pricing and all gets changed too"). It is not really a
+     * field on a booking — it is the key every venue rate card is filed under (BR-R1), so
+     * moving it re-prices every function on the proposal at once. That is the same authority
+     * the Auditor already holds over the venue master, the menu master and the lodge master,
+     * and it is why the Booking Manager who typed it cannot quietly change what the hall
+     * costs by correcting his own mistake.
+     *
+     * ENQUIRY ONLY, and deliberately narrower than the guest name and the dates beside it.
+     * Those were opened to the Authority on a confirmed booking because "none of these touch
+     * venue holds"; the type does. On a confirmed booking the hall is already held at a rate
+     * snapshotted from the OLD type, so re-typing it would leave the booking quoting one
+     * figure and holding another — and the snapshot is what the guest's document was printed
+     * from. Past confirmation this is a re-quote, not a typo, and belongs in the approvals
+     * screen where the whole bill is in front of him.
+     *
+     * WHAT MOVES WITH IT, since the point is that everything stays connected:
+     *   • every function's venue charge, off the new type's rate card, and with it
+     *     `events.proposal_total_paise` — recomputed below rather than left to drift until
+     *     something else happens to save;
+     *   • the food surcharge and the wedding 50% milestone, both derived from the type on
+     *     every read, so they follow with no work here;
+     *   • the contact rule, which is NOT enforced here on purpose. Switching to `wedding`
+     *     needs three numbers, and `confirmEvent` already refuses without them — blocking the
+     *     correction itself would trap a booking mis-typed as an engagement with one contact
+     *     in the wrong type for ever.
+     */
+    if (input.event_type && input.event_type !== event.eventType) {
+      if (actor.roleName !== 'auditor') {
+        throw forbidden('Only the Auditor can change a booking’s event type — it re-prices every function.')
+      }
+      if (event.status !== 'enquiry') {
+        throw conflict('The event type can only be corrected while the booking is still an enquiry.')
+      }
+      const [type] = await tx
+        .select({ code: schema.eventTypes.code })
+        .from(schema.eventTypes)
+        .where(eq(schema.eventTypes.code, input.event_type))
+        .limit(1)
+      if (!type) throw badRequest('That is not an event type on file.')
+
+      await tx
+        .update(schema.events)
+        .set({ eventType: input.event_type, updatedAt: new Date().toISOString() })
+        .where(eq(schema.events.id, id))
+      await audit(tx, actor, {
+        entity: 'events',
+        entityId: id,
+        eventId: id,
+        action: 'update',
+        field: 'event_type',
+        oldValue: event.eventType,
+        newValue: input.event_type,
+      })
+      // Rate cards are per event type, so the running total is stale the moment this changes.
+      await recomputeProposalTotal(tx, id, input.event_type)
     }
 
     if (input.guest_name && input.guest_name !== event.guestName) {
