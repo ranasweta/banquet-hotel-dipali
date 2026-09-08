@@ -53,6 +53,13 @@ const discountEditSchema = z
     message: 'give either a rupee amount or a percentage — exactly one',
   })
 
+// The Discounted column, in the same shape `PUT /events/:id/discounts` takes — the price being
+// charged for each line, in paise, never a rupee figure and never an amount off.
+const lineDiscountSchema = z.object({
+  key: z.string().min(1).max(200),
+  discountedPaise: z.number().int().min(0),
+})
+
 const editsSchema = z.object({
   event: z
     .object({
@@ -66,6 +73,8 @@ const editsSchema = z.object({
   rooms: z.array(roomEditSchema).max(100).optional(),
   addDiscounts: z.array(discountEditSchema).max(20).optional(),
   removeDiscountIds: z.array(z.string().uuid()).max(20).optional(),
+  lineDiscounts: z.array(lineDiscountSchema).max(200).optional(),
+  discountRemark: z.string().trim().max(300).optional(),
   reason: z.string().max(500).optional(),
 })
 

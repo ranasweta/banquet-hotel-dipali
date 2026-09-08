@@ -114,6 +114,19 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      save, never one per cell. Per-room caps (BR-D1) are retired now
      that rooms are booked in bulk. Because a frozen rupee figure cannot shrink with the
      bill the way a percentage did, `confirmEvent` re-tests the same cap once more.
+     **The base is priced through `lib/pricing.ts`, never a second copy** (client, 8 Sep 2026:
+     "the cap calculation is also coming wrong"). The copy it replaced summed a rate for every
+     function, so a hall hired for a day and used three times counted three times, and it left
+     out the Chef's priced delicacies and the bar though both are inside `proposal_total_paise`
+     — so the enquiry branch and the confirmed branch measured different bills and the cap moved
+     at confirmation without a price changing. **A superseded request goes whole**: one save over
+     the cap raises ONE exception covering every cell in it, so re-pricing any one of those cells
+     retires the request and every cell of it (none was in force). A request already DECIDED is
+     left alone — its rows are in force on lines the new save never mentioned.
+     **A pending price is shown as a price**: `SheetLine.requestedPaise` carries what an
+     undecided request asks for, beside the `discountedPaise` still in force, because for three
+     weeks the asked-for figure lived only inside the exception payload and the Authority was
+     deciding a ₹1,41,000 hall from the words "over the cap".
      Discounts are the **Booking Manager's** to give (he has `billing` edit) and the
      **Authority's** — both, from the Payment review or the event's Billing panel.
      **The cap does not bind the Authority himself** (amended 1 Aug 2026; widened 3 Aug 2026
@@ -191,12 +204,18 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
 11. **Two GSTs, and only one of them is money** (client's lead, 4 Aug 2026).
    **Rooms** — printed and collected, at **5%** up to ₹7,500 a night and **18%
    above it** (client, 17 Aug 2026; strictly above, so ₹7,500 exactly is 5%).
-   **A dormitory is exempt whatever it costs** (same instruction): its rate buys a
-   room of 18–30 beds, not a bed, so the threshold does not speak to it. The
+   **A dormitory carries NO room GST at all** (client, 8 Sep 2026, replacing the
+   17 Aug 5%: *"for the dormitory we don't want to take 5% tax"*). Its rate buys a
+   room of 18–30 beds, not a bed, so the threshold never spoke to it either. Nil,
+   not hidden: the line is still a `rooms` line, still collected, and the tax it
+   draws is simply zero — nothing moves between the collected and shown buckets, and
+   the room itself is charged exactly as before. It gets its OWN band on a document
+   (`roomTaxSplit.exempt`), because a dormitory left inside the 5% base would print
+   "GST 5% — rooms on ₹70,000" beside ₹0.00 of tax. The
    carve-out is keyed on the category NAME — anything containing `dorm` — because
    `room_type` is free text; renaming a dormitory away from that word moves it into
-   the 18% band, which is why the lodge master shows each category's band beside
-   its rate. `lib/tax.ts` owns both halves (`roomGstBp`, `roomGstBpSql`,
+   the 5%/18% bands, which is why the lodge master shows each category's band beside
+   its rate. `lib/tax.ts` owns all three (`roomGstBp`, `roomGstBpSql`,
    `isDormitory`) and nothing re-derives them, client components included: the
    band travels down on the row (`gstRateBp`) instead.
    **Everything else 18%** (venue, food, add-ons, maintenance) — printed and
@@ -327,6 +346,18 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
   asks grouped by section and, below them, the whole proposal as an editable form. Requested
   items are marked in **violet** — always with the word "Requested" beside them, never colour
   alone, since a decision hangs on seeing them.
+- That proposal **collapses per function** (client, 8 Sep 2026), each function plus Rooms plus
+  Prices closed by default with its request count on the header, and the asks above it are an
+  INDEX: no Approve/Decline, just one button per ask that opens the section it belongs to and
+  scrolls there. **The edit is the verdict** — a dish unticked refuses an increase, the actual
+  price typed back refuses a discount — and everything commits under one **Save & approve**,
+  the price grid included (`DiscountGrid`'s controlled mode). The services still take a
+  rejection; the screen no longer offers a verdict that can disagree with the booking under it.
+- On that screen and nowhere else, the price grid states **what share of the bill is
+  discounted** — in force, requested, and what the column being typed comes to, each against
+  the bill at list price. The same standing figures beside a guest at a counter tell them there
+  is a bigger discount to push for, which is why the headroom notice elsewhere speaks only when
+  the cap is crossed (11 Aug 2026).
 - A booking short of its 25% shows **Downpayment due** on the calendar in rose, with the
   words beside the colour, and the day panel carries the shortfall and the guest's number so
   the call to the GM can be made from that screen (4 Aug 2026). The number rides along only

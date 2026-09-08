@@ -7,7 +7,7 @@ import { prevDay } from '@/lib/occupancy'
 import { VENUE_DAY_START_TIME } from '@/lib/pricing'
 import { percentOfPaise } from '@/lib/money'
 import { ADVANCE_PCT, WEDDING_MILESTONE_PCT } from '@/lib/payment-schedule'
-import { ROOM_GST_HIGH_BP, STANDARD_GST_BP, roomGstBp, taxOf } from '@/lib/tax'
+import { ROOM_GST_DORM_BP, ROOM_GST_HIGH_BP, STANDARD_GST_BP, roomGstBp, taxOf } from '@/lib/tax'
 
 /**
  * The guest-facing proposal, shaped exactly like `Hotel-Dipali-Proposal-TEMPLATE_1.html`.
@@ -25,7 +25,8 @@ import { ROOM_GST_HIGH_BP, STANDARD_GST_BP, roomGstBp, taxOf } from '@/lib/tax'
  *    same order of operations as lib/invoice.ts, so this document and the Draft cannot differ
  *    by a rounding paisa.
  *  • A room's own rate decides its band — 18% above ₹7,500 a night, 5% at or under it (client,
- *    17 Aug 2026), and BOTH are collected. `totals.roomTaxSplit` carries the two halves with
+ *    17 Aug 2026), nil for a dormitory (client, 8 Sep 2026), and all of them are collected.
+ *    `totals.roomTaxSplit` carries the three parts with
  *    the money each was charged on, because the guest has to be able to see WHICH rooms took
  *    18% rather than read one blended figure and wonder.
  *  • Because the 18% is never taken, the document carries TWO totals: `displayTotalPaise`, the
@@ -210,8 +211,12 @@ export type RoomTaxBand = { basePaise: number; taxPaise: number }
  * Both halves are COLLECTED and both are already inside `roomsTaxPaise` / `extraRoomsTaxPaise`;
  * this exists so the document can say which is which. `high.basePaise` is zero on the ordinary
  * booking, and the 18% line is then simply not printed.
+ *
+ * `exempt` is the third band and draws no tax at all: a dormitory (client, 8 Sep 2026). It is
+ * kept apart rather than folded into `low` because the guest reads "GST 5% — rooms on ₹X" and
+ * ₹X has to be the money the 5% was actually charged on.
  */
-export type RoomTaxSplit = { low: RoomTaxBand; high: RoomTaxBand }
+export type RoomTaxSplit = { low: RoomTaxBand; high: RoomTaxBand; exempt: RoomTaxBand }
 
 export type ProposalPayment = {
   id: string
@@ -563,12 +568,14 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   const roomTaxSplit: RoomTaxSplit = {
     low: { basePaise: 0, taxPaise: 0 },
     high: { basePaise: 0, taxPaise: 0 },
+    exempt: { basePaise: 0, taxPaise: 0 },
   }
   /** Adds one room line to the band its nightly rate and category put it in; returns its tax. */
   const bandRoomTax = (ratePaise: number, amountPaise: number, roomType: string): number => {
     const bp = roomGstBp(ratePaise, roomType)
     const taxPaise = taxOf(amountPaise, bp)
-    const band = bp === ROOM_GST_HIGH_BP ? roomTaxSplit.high : roomTaxSplit.low
+    const band =
+      bp === ROOM_GST_HIGH_BP ? roomTaxSplit.high : bp === ROOM_GST_DORM_BP ? roomTaxSplit.exempt : roomTaxSplit.low
     band.basePaise += amountPaise
     band.taxPaise += taxPaise
     return taxPaise

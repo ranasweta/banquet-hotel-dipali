@@ -39,7 +39,15 @@ import { cn } from '@/lib/utils'
  * about what the guest owes.
  */
 
-type SheetLine = { key: string; label: string; actualPaise: number; discountedPaise: number; pending: boolean }
+type SheetLine = {
+  key: string
+  label: string
+  actualPaise: number
+  discountedPaise: number
+  pending: boolean
+  /** The price a still-undecided request asks for; null when nothing is pending on this line. */
+  requestedPaise: number | null
+}
 type SheetRoomLine = SheetLine & { count: number; nights: number; ratePaise: number; gstRateBp: number; taxPaise: number }
 type SheetFunction = {
   subEventId: string
@@ -70,11 +78,32 @@ export type Sheet = {
   actualTotalPaise: number
   discountedTotalPaise: number
   lineDiscountPaise: number
+  pendingDiscountPaise: number
   lumpDiscountPaise: number
   missing: { subEventId: string; name: string }[]
 }
 type LumpRow = { id: string; head: string; amountPaise: number; remark: string; status: string }
-type Cap = { capPct: number; capBasePaise: number; capPaise: number; usedPaise: number; headroomPaise: number }
+type Cap = {
+  capPct: number
+  capBasePaise: number
+  capPaise: number
+  usedPaise: number
+  pendingPaise: number
+  headroomPaise: number
+}
+export type LineDraft = { key: string; discountedPaise: number }
+/**
+ * What the page above needs to commit this column and to say what it comes to. `lines` is null
+ * when a cell is not a price, so the page can grey its own Save rather than post a NaN.
+ */
+export type GridDraft = {
+  lines: LineDraft[] | null
+  remark: string
+  /** Everything the column would give, lump rows included — the figure the cap is tested on. */
+  givenPaise: number
+  /** The bill at list price, so a share of it can be stated without a second copy of the sum. */
+  basePaise: number
+}
 
 /**
  * Rupees as a person types them: "750", not "750.00", but "755.56" when the paise matter.
@@ -84,6 +113,12 @@ function rupeeText(paise: number): string {
   const r = paise / 100
   return Number.isInteger(r) ? String(r) : r.toFixed(2)
 }
+/** A share of the bill, to one decimal — a percentage read at a glance, never money. */
+function pctOf(paise: number, basePaise: number): string {
+  if (basePaise <= 0) return '—'
+  return `${((paise / basePaise) * 100).toFixed(1)}%`
+}
+
 const toPaise = (text: string): number | null => {
   if (text.trim() === '') return null
   const n = Math.round(Number(text) * 100)
@@ -122,7 +157,12 @@ function MoneyRow({
   const given = line ? line.actualPaise - line.discountedPaise : 0
   const charged = unit && unit.count > 0 && line ? Math.round(line.discountedPaise / unit.count) : null
   return (
-    <tr className={cn(tone === 'strong' && 'font-medium', tone === 'muted' && 'text-xs text-muted-foreground')}>
+    // `data-requested` is what the approvals page's jump button aims at when a section is too
+    // long for its header and the asked-for row to share a screen.
+    <tr
+      data-requested={line?.pending || undefined}
+      className={cn(tone === 'strong' && 'font-medium', tone === 'muted' && 'text-xs text-muted-foreground')}
+    >
       <td className={cn('px-2 py-2 sm:px-3', indent && 'pl-6')}>
         {label}
         {sub}
@@ -167,6 +207,13 @@ function MoneyRow({
                 onChange={(e) => onDraft(line.key, e.target.value)}
               />
             </span>
+            {/* Still shown once the box is open: the Authority types over the asked-for price,
+                and has to be able to see what he moved it FROM. */}
+            {line.requestedPaise != null && (
+              <span className="w-full text-xs font-normal text-violet-700 dark:text-violet-400">
+                asked for {formatPaise(line.requestedPaise)}
+              </span>
+            )}
           </span>
         ) : (
           <span className={cn(given > 0 && 'font-medium text-emerald-700 dark:text-emerald-400')}>
@@ -178,11 +225,71 @@ function MoneyRow({
                 {formatPaise(charged)}/{unit!.noun}
               </span>
             )}
+            {/* THE NUMBER, not just the badge (client, 8 Sep 2026). A price waiting on the
+                Authority used to show as the actual with "Requested" beside the label, so the
+                one figure the decision turns on — what the guest was quoted — appeared on no
+                screen at all. It is printed under the price in force, which is still what a
+                counter collects until he says yes. */}
+            {line?.requestedPaise != null && (
+              <span className="block text-xs font-medium text-violet-700 dark:text-violet-400">
+                Requested {formatPaise(line.requestedPaise)}
+              </span>
+            )}
           </span>
         )}
       </td>
     </tr>
   )
+}
+
+/** Every discountable line of a sheet, in the order they are drawn — the source of the prefill. */
+function linesOf(sheet: Sheet): SheetLine[] {
+  return [
+    ...sheet.functions.flatMap((f) => (f.food ? [f.venue, f.food] : [f.venue])),
+    ...sheet.roomGroups.flatMap((g) => g.lines),
+  ]
+}
+
+/**
+ * What one unit of a line is, for the lines that have one: a food line is priced per plate,
+ * a room line per room-night. A venue is hired whole and has none, so it keeps the single box.
+ */
+function unitsOf(sheet: Sheet): Map<string, { count: number; noun: string }> {
+  const units = new Map<string, { count: number; noun: string }>()
+  for (const f of sheet.functions) {
+    if (f.food && f.pax > 0) units.set(f.food.key, { count: f.pax, noun: 'plate' })
+  }
+  for (const g of sheet.roomGroups) {
+    for (const l of g.lines) {
+      const n = l.count * l.nights
+      if (n > 0) units.set(l.key, { count: n, noun: 'night' })
+    }
+  }
+  return units
+}
+
+/**
+ * The boxes as they open. The price as it stands — the actual on an undiscounted line, what is
+ * already given on a discounted one — EXCEPT for a line waiting on the Authority, where the
+ * Authority himself gets the price that was asked for.
+ *
+ * That exception is the whole point of the redesign (client, 8 Sep 2026): "if he keeps it he
+ * can simply save the changes, or if he doesn't then simply change the numbers". Prefilling him
+ * with the asked-for figure makes approving-as-requested the do-nothing answer and typing over
+ * it the deliberate one. Nobody else is prefilled with it: a Booking Manager who saved the grid
+ * unchanged would otherwise re-raise the very request he is waiting on.
+ */
+function seedDrafts(sheet: Sheet, uncapped: boolean) {
+  const units = unitsOf(sheet)
+  const draft: Record<string, string> = {}
+  const rates: Record<string, string> = {}
+  for (const l of linesOf(sheet)) {
+    const start = uncapped && l.requestedPaise != null ? l.requestedPaise : l.discountedPaise
+    draft[l.key] = rupeeText(start)
+    const u = units.get(l.key)
+    if (u) rates[l.key] = rupeeText(Math.round(start / u.count))
+  }
+  return { draft, rates }
 }
 
 export function DiscountGrid({
@@ -191,6 +298,7 @@ export function DiscountGrid({
   onChanged,
   children,
   reloadKey,
+  onDraftChange,
 }: {
   eventId: string
   editable: boolean
@@ -200,6 +308,16 @@ export function DiscountGrid({
   children?: ReactNode
   /** Bump to force a re-fetch when the booking changed elsewhere on the page. */
   reloadKey?: number
+  /**
+   * CONTROLLED MODE, for the approvals screen. When given, the column is open from the start
+   * and this grid saves nothing of its own: every keystroke is reported up and the page commits
+   * it with its own button. The Authority answers a price request by typing the price and
+   * pressing one "Save & approve", rather than saving the grid and then deciding the ask —
+   * two buttons for one decision, which is what he had before (client, 8 Sep 2026).
+   *
+   * Must be referentially stable (`useCallback`) — it is an effect dependency.
+   */
+  onDraftChange?: (draft: GridDraft) => void
 }) {
   const [sheet, setSheet] = useState<Sheet | null>(null)
   const [lump, setLump] = useState<LumpRow[]>([])
@@ -214,6 +332,9 @@ export function DiscountGrid({
   const [remark, setRemark] = useState('')
   const [busy, setBusy] = useState(false)
 
+  /** The page owns the button; this grid only reports what has been typed. */
+  const controlled = Boolean(onDraftChange)
+
   const load = useCallback(async () => {
     try {
       const d = await api<{ sheet: Sheet; lumpDiscounts: LumpRow[]; cap: Cap; uncapped: boolean }>(`/events/${eventId}/discounts`)
@@ -221,53 +342,34 @@ export function DiscountGrid({
       setLump(d.lumpDiscounts)
       setCap(d.cap)
       setUncapped(d.uncapped)
+      // Controlled mode has no toggle to open the column, so the boxes are seeded on every
+      // load — including the reload after the page's own save, which must not leave the
+      // previous draft sitting over prices that have moved.
+      if (controlled) {
+        const seeded = seedDrafts(d.sheet, d.uncapped)
+        setDraft(seeded.draft)
+        setRateDraft(seeded.rates)
+        setRemark('')
+        setEditing(true)
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load prices')
     }
-  }, [eventId])
+  }, [eventId, controlled])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load()
   }, [load, reloadKey])
 
-  /** Every discountable line, in the order they are drawn — the source of the prefill. */
-  const allLines: SheetLine[] = sheet
-    ? [
-        ...sheet.functions.flatMap((f) => (f.food ? [f.venue, f.food] : [f.venue])),
-        ...sheet.roomGroups.flatMap((g) => g.lines),
-      ]
-    : []
-
-  /**
-   * What one unit of a line is, for the lines that have one: a food line is priced per plate,
-   * a room line per room-night. A venue is hired whole and has none, so it keeps the single box.
-   */
-  const unitByKey = new Map<string, { count: number; noun: string }>()
-  if (sheet) {
-    for (const f of sheet.functions) {
-      if (f.food && f.pax > 0) unitByKey.set(f.food.key, { count: f.pax, noun: 'plate' })
-    }
-    for (const g of sheet.roomGroups) {
-      for (const l of g.lines) {
-        const n = l.count * l.nights
-        if (n > 0) unitByKey.set(l.key, { count: n, noun: 'night' })
-      }
-    }
-  }
+  const allLines: SheetLine[] = sheet ? linesOf(sheet) : []
+  const unitByKey = sheet ? unitsOf(sheet) : new Map<string, { count: number; noun: string }>()
 
   function startEditing() {
-    // Prefilled with the price as it stands — the actual on an undiscounted line, what was
-    // already given on a discounted one. Rupees, because that is what a person types.
-    const seed: Record<string, string> = {}
-    const rates: Record<string, string> = {}
-    for (const l of allLines) {
-      seed[l.key] = String(l.discountedPaise / 100)
-      const u = unitByKey.get(l.key)
-      if (u) rates[l.key] = rupeeText(Math.round(l.discountedPaise / u.count))
-    }
-    setDraft(seed)
-    setRateDraft(rates)
+    if (!sheet) return
+    const seeded = seedDrafts(sheet, uncapped)
+    setDraft(seeded.draft)
+    setRateDraft(seeded.rates)
     setRemark('')
     setEditing(true)
   }
@@ -285,7 +387,23 @@ export function DiscountGrid({
     return { line: l, paise: paise != null && Number.isFinite(paise) ? paise : null }
   })
   const badCell = parsed.find((p) => p.paise == null || p.paise < 0 || p.paise > p.line.actualPaise)
-  const changed = parsed.filter((p) => p.paise != null && p.paise !== p.line.discountedPaise)
+  /**
+   * Which cells the save carries.
+   *
+   * Normally: the ones that differ from the price in force. But a line with a REQUEST on it is
+   * decided by this save whatever the Authority does with it, so it always travels. Leaving the
+   * prefill alone gives the guest the asked-for price; typing the actual back refuses it — and
+   * the actual is what the line is charging RIGHT NOW, so "differs from what is in force" is
+   * false for exactly the refusal. Sending nothing there would leave the ask to be approved by
+   * the decision list a moment later, which is the opposite of what he typed.
+   *
+   * Only for the Authority, who is the one deciding. A counter's boxes are prefilled with the
+   * price in force, and re-sending a colleague's pending line on an unrelated save would
+   * silently cancel the request he is waiting on.
+   */
+  const changed = parsed.filter(
+    (p) => p.paise != null && (p.paise !== p.line.discountedPaise || (uncapped && p.line.requestedPaise != null)),
+  )
   // What this column comes to, so the manager sees the consequence before saving rather than
   // after. The cap is announced only when it is crossed — a standing headroom figure on a screen
   // read beside the guest tells them there is a bigger discount to push for (client, 11 Aug 2026).
@@ -295,6 +413,23 @@ export function DiscountGrid({
   const wouldExceed = Boolean(
     editing && cap && !uncapped && !badCell && draftGivenPaise + (sheet?.lumpDiscountPaise ?? 0) > cap.capPaise,
   )
+
+  // Reported up on every keystroke in controlled mode. `null` for a cell that is not a price,
+  // so the page can grey its own Save rather than post a NaN. The signature is a string because
+  // `changed` is a fresh array each render and would re-fire the effect for ever.
+  const changedSig = changed.map((c) => `${c.line.key}=${c.paise}`).join(',')
+  const givenNow = draftGivenPaise + (sheet?.lumpDiscountPaise ?? 0)
+  const basePaise = cap?.capBasePaise ?? 0
+  useEffect(() => {
+    if (!onDraftChange) return
+    onDraftChange({
+      lines: badCell ? null : changed.map((c) => ({ key: c.line.key, discountedPaise: c.paise! })),
+      remark: remark.trim(),
+      givenPaise: givenNow,
+      basePaise,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changedSig, remark, Boolean(badCell), givenNow, basePaise, onDraftChange])
 
   async function save() {
     if (badCell) {
@@ -362,7 +497,7 @@ export function DiscountGrid({
     return p?.paise != null && p.paise >= 0 && p.paise <= l.actualPaise ? p.paise : l.discountedPaise
   }
   const totalRow = (actualPaise: number, discountedPaise: number): SheetLine => ({
-    key: '', label: '', actualPaise, discountedPaise, pending: false,
+    key: '', label: '', actualPaise, discountedPaise, pending: false, requestedPaise: null,
   })
 
   /** Clears a lump discount recorded before 20 Aug 2026 — the only kind that can be removed
@@ -398,7 +533,7 @@ export function DiscountGrid({
         </p>
       )}
 
-      {editable && (
+      {editable && !controlled && (
         <label className="flex items-center gap-2 text-sm font-medium">
           <Checkbox
             checked={editing}
@@ -487,8 +622,13 @@ export function DiscountGrid({
                           <span className="ml-2 text-xs text-muted-foreground">
                             × {formatPaise(l.ratePaise)}
                             {/* The band beside the rate that decides it — and it is decided by
-                                what the night is CHARGED at now, so a discount can move it. */}
+                                what the night is CHARGED at now, so a discount can move it.
+                                The exempt note is not decoration: a dormitory draws no room GST
+                                at all (client, 8 Sep 2026), so without it the "Tax on rooms — 5%"
+                                below is charged on a base that does not match the rooms above it
+                                and reads as an arithmetic error. */}
                             {l.gstRateBp === 1800 && ' · GST 18%'}
+                            {l.gstRateBp === 0 && ' · GST exempt'}
                           </span>
                         }
                         actualPaise={l.actualPaise}
@@ -554,6 +694,61 @@ export function DiscountGrid({
         </table>
       </div>
 
+      {/* HOW MUCH OF THIS BOOKING IS BEING GIVEN AWAY, as a percentage (client, 8 Sep 2026:
+          "it should also show the current total % discounted from total so that GM can get the
+          idea how much is discounted on that event").
+
+          The Authority only. The same figures on a counter screen would be a standing headroom
+          notice read across the desk from the guest, which is the thing the 11 Aug decision took
+          off this component: it tells them there is a bigger discount to push for. He is the one
+          person who has to see the whole picture before deciding, and the cap does not bind him
+          anyway (FR-11.3a). */}
+      {uncapped && cap && cap.capBasePaise > 0 && (
+        <div className="rounded-lg border p-3 text-sm">
+          <div className="mb-2 font-medium">Discount on this booking</div>
+          <table className="w-full">
+            <tbody className="[&>tr>td]:py-0.5">
+              <tr className="text-muted-foreground">
+                <td>Bill at list price</td>
+                <td className="text-right tabular-nums">{formatPaise(cap.capBasePaise)}</td>
+                <td className="w-16 text-right tabular-nums">100%</td>
+              </tr>
+              <tr>
+                <td>Given, in force now</td>
+                <td className="text-right tabular-nums">{formatPaise(cap.usedPaise)}</td>
+                <td className="text-right tabular-nums">{pctOf(cap.usedPaise, cap.capBasePaise)}</td>
+              </tr>
+              {cap.pendingPaise > 0 && (
+                <tr className="text-violet-700 dark:text-violet-400">
+                  <td>Requested, awaiting you</td>
+                  <td className="text-right tabular-nums">{formatPaise(cap.pendingPaise)}</td>
+                  <td className="text-right tabular-nums">{pctOf(cap.pendingPaise, cap.capBasePaise)}</td>
+                </tr>
+              )}
+              {editing && !badCell && (
+                <tr className="font-medium">
+                  <td>If you save this column</td>
+                  <td className="text-right tabular-nums">
+                    {formatPaise(draftGivenPaise + (sheet.lumpDiscountPaise ?? 0))}
+                  </td>
+                  <td className="text-right tabular-nums">
+                    {pctOf(draftGivenPaise + (sheet.lumpDiscountPaise ?? 0), cap.capBasePaise)}
+                  </td>
+                </tr>
+              )}
+              <tr className="text-muted-foreground">
+                <td>
+                  The cap on everyone else
+                  <span className="ml-1 text-xs">— it does not bind you</span>
+                </td>
+                <td className="text-right tabular-nums">{formatPaise(cap.capPaise)}</td>
+                <td className="text-right tabular-nums">{cap.capPct}%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {editing && (
         <div className="flex flex-wrap items-end gap-2 rounded-lg border p-3">
           {/* basis-48, not bare grow: on a phone the buttons already eat the row, and a
@@ -562,15 +757,20 @@ export function DiscountGrid({
             <Label className="text-xs">Remark (optional)</Label>
             <Input value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="e.g. owner's guest" />
           </div>
-          <Button onClick={save} disabled={busy || changed.length === 0 || Boolean(badCell)}>
-            Save {changed.length > 0 && `(${changed.length})`}
-          </Button>
-          <Button variant="ghost" onClick={stopEditing} disabled={busy}>
-            Cancel
-          </Button>
+          {!controlled && (
+            <>
+              <Button onClick={save} disabled={busy || changed.length === 0 || Boolean(badCell)}>
+                Save {changed.length > 0 && `(${changed.length})`}
+              </Button>
+              <Button variant="ghost" onClick={stopEditing} disabled={busy}>
+                Cancel
+              </Button>
+            </>
+          )}
           <p className="w-full text-xs text-muted-foreground">
             Type what the guest is actually paying for each line. The actual price stays beside it.
             Sub-totals follow as you type; the tax and the totals below settle when you save.
+            {controlled && ' These prices are saved with the rest of your decision, at the bottom of the page.'}
             {draftGivenPaise > 0 && (
               <span className="ml-1 font-medium text-foreground">Giving {formatPaise(draftGivenPaise)}.</span>
             )}

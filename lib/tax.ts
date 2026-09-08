@@ -33,11 +33,15 @@ import { sql, type SQL } from 'drizzle-orm'
  * ₹24,000 of accommodation at 5%, not a ₹24,000 room at 18%. Every caller therefore passes the
  * per-night rate, never `amountPaise`.
  *
- * DORMITORIES ARE OUT OF IT (client, 17 Aug 2026). A dormitory is one bookable unit of 18 to 30
- * beds and its rate is the whole room's — Palace's is ₹35,000 a night, Regency's ₹50,000 — so
- * the threshold, which is written for a room somebody sleeps in alone, would put every
- * dormitory in the country in the top band on a per-head price of about ₹1,900. It stays at 5%
- * whatever it costs.
+ * DORMITORIES ARE OUT OF IT ALTOGETHER (client, 17 Aug 2026; the rate settled at NIL on
+ * 8 Sep 2026). A dormitory is one bookable unit of 18 to 30 beds and its rate is the whole
+ * room's — Palace's is ₹35,000 a night, Regency's ₹50,000 — so the threshold, which is written
+ * for a room somebody sleeps in alone, would put every dormitory in the country in the top band
+ * on a per-head price of about ₹1,900. It was held at 5% for three weeks and is now EXEMPT:
+ * "for the dormitory we don't want to take 5% tax". Nil, not hidden — the line is still a
+ * `rooms` line, still collected, and its collected tax is simply zero, so it drops out of the
+ * 5% band's base as well as out of its tax. A document that showed a dormitory inside "GST 5%
+ * — rooms on ₹X" would print a base its own 5% no longer explains.
  *
  * That carve-out is keyed on the CATEGORY NAME, which is the only thing the schema gives us:
  * `room_type` is free text and a lodge names its own categories. Anything reading `dorm` is a
@@ -62,6 +66,8 @@ export const GST_BP: Record<string, number> = {
 
 /** The 5% on rooms at or under the threshold. Collected. */
 export const ROOM_GST_BP = 500
+/** A dormitory is charged no room GST at all (client, 8 Sep 2026). */
+export const ROOM_GST_DORM_BP = 0
 /** The 18% on rooms above the threshold. Collected too — see `isCollectedSection`. */
 export const ROOM_GST_HIGH_BP = 1800
 /**
@@ -73,8 +79,8 @@ export const ROOM_GST_THRESHOLD_PAISE = 750_000
 export const STANDARD_GST_BP = 1800
 
 /**
- * A dormitory, whatever a lodge chose to call it — the one category the ₹7,500 threshold does
- * not apply to, because its rate buys a room of 18–30 beds rather than a bed.
+ * A dormitory, whatever a lodge chose to call it — the one category that carries no room GST at
+ * all, because its rate buys a room of 18–30 beds rather than a bed.
  */
 export function isDormitory(roomType: string): boolean {
   return roomType.toLowerCase().includes('dorm')
@@ -82,10 +88,10 @@ export function isDormitory(roomType: string): boolean {
 
 /**
  * The GST a room carries, from what it costs for ONE night — never from the line total — and
- * from its category, since a dormitory stays at 5% however expensive it is.
+ * from its category, since a dormitory is exempt however expensive it is.
  */
 export function roomGstBp(nightlyRatePaise: number, roomType: string): number {
-  if (isDormitory(roomType)) return ROOM_GST_BP
+  if (isDormitory(roomType)) return ROOM_GST_DORM_BP
   return nightlyRatePaise > ROOM_GST_THRESHOLD_PAISE ? ROOM_GST_HIGH_BP : ROOM_GST_BP
 }
 
@@ -99,9 +105,9 @@ export function roomGstBp(nightlyRatePaise: number, roomType: string): number {
  * does not exist: numeric * text" — at runtime, on a screen, not at build.
  */
 export function roomGstBpSql(nightlyRate: SQL, roomType: SQL): SQL {
-  return sql`(CASE WHEN ${nightlyRate} > ${ROOM_GST_THRESHOLD_PAISE}::bigint
-                    AND lower(${roomType}) NOT LIKE '%dorm%'
-                   THEN ${ROOM_GST_HIGH_BP}::int ELSE ${ROOM_GST_BP}::int END)`
+  return sql`(CASE WHEN lower(${roomType}) LIKE '%dorm%' THEN ${ROOM_GST_DORM_BP}::int
+                   WHEN ${nightlyRate} > ${ROOM_GST_THRESHOLD_PAISE}::bigint THEN ${ROOM_GST_HIGH_BP}::int
+                   ELSE ${ROOM_GST_BP}::int END)`
 }
 
 /**

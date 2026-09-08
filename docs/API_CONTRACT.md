@@ -313,8 +313,14 @@ and collected from nobody.
   request. PUT rather than POST: it sets prices to a state, so sending the same column twice
   leaves the same bill. `percent_bp` is still accepted for the approval-bundle path
   and older callers. Over cap → 202 { exception_id } (BR-D2). GET adds `cap`
-  { capPct, capBasePaise, capPaise, usedPaise, headroomPaise } so a screen can state the
-  remaining headroom in rupees.
+  { capPct, capBasePaise, capPaise, usedPaise, pendingPaise, headroomPaise } so a screen can
+  state the remaining headroom in rupees, and the Authority's can state what share of the bill
+  is already given and what share is being asked for (FR-6.2d).
+  Every sheet line also carries `requestedPaise` — the price a still-undecided over-cap request
+  is asking for, or null (8 Sep 2026). `discountedPaise` remains what is IN FORCE, so a counter
+  never collects on a price nobody has agreed to; `requestedPaise` is what the Authority is
+  being asked to decide, and before this it appeared on no screen at all. The sheet's
+  `pendingDiscountPaise` is the same figure summed.
 - `DELETE /discounts/:id` — remove a discount (and its pending exception)
 - `GET  /events/:id/ledger` — the payable amount (venue + food + rooms + room GST at whichever
   band each room falls in, less discounts), the 18% shown-not-collected GST beside it,
@@ -340,11 +346,18 @@ single-request flow; the bundle endpoints are what the approvals screen uses.
 - `POST /approvals/bundles/:eventId/decide`
   { decisions[]: { id, source: exception|change_request, action, remark?, modified? },
     edits?: { event?, functions[]?, menus[]?, rooms[]?, addDiscounts[]?, removeDiscountIds[]?,
-              reason? } }
+              lineDiscounts[]?, discountRemark?, reason? } }
   → ONE transaction. Edits apply first (they are the GM's real answer), then each ask is
   settled; an ask answered by editing is recorded, not applied twice. `reason` is mandatory
   when the booking is locked/billed/closed. 409 if a venue window was taken meanwhile — nothing
   is saved. Returns { settled[], skipped[], changes[], invoiceReissued, invoiceNo, remaining }.
+  `lineDiscounts[]: { key, discountedPaise }` is the Discounted column in the same shape
+  `PUT /events/:id/discounts` takes (8 Sep 2026). It travels here so the Authority answers a
+  price he was asked to approve with ONE button rather than saving the grid and then the
+  decision; it is applied LAST, because a line's key and its actual price both move with the
+  edits above. His prices carry no exception and are in force at once (FR-11.3a), which is also
+  what retires the `discount_over_cap` request they answer — that ask then comes back in
+  `skipped[]` rather than `settled[]`.
 - `GET  /exceptions?status=pending&mine=1` — flat queue (`mine=1` = raised by caller)
 - `GET  /approvals/dashboard` — pending load + biggest upcoming events (FR-6.3)
 - `POST /exceptions/:id/decide` { action: approve|reject|approve_modified, remark, modified? }

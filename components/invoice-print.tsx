@@ -200,7 +200,8 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
   // prints at zero, exactly as it did before the band existed.
   const roomTax = totals.roomTaxSplit
   const hasHighRoomTax = roomTax.high.basePaise > 0
-  const showLowRoomTax = roomTax.low.basePaise > 0 || !hasHighRoomTax
+  const hasExemptRooms = roomTax.exempt.basePaise > 0
+  const showLowRoomTax = roomTax.low.basePaise > 0 || (!hasHighRoomTax && !hasExemptRooms)
 
   return (
     <div className="pd" ref={ref}>
@@ -587,6 +588,17 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
                               <small>on {formatPaise(roomTax.high.basePaise)}</small>
                             </div>
                             <div className="v">+ {formatPaise(roomTax.high.taxPaise)}</div>
+                          </div>
+                        )}
+                        {/* A dormitory carries no room GST at all (client, 8 Sep 2026). Its
+                            money is printed on a line of its own so the 5% above is charged on
+                            a base the guest can multiply out. */}
+                        {hasExemptRooms && (
+                          <div className="sline tax">
+                            <div className="l">
+                              GST — dormitory <small>exempt, on {formatPaise(roomTax.exempt.basePaise)}</small>
+                            </div>
+                            <div className="v">+ {formatPaise(0)}</div>
                           </div>
                         )}
                         <div className="sline tax">
@@ -1214,8 +1226,12 @@ function Lodge({ lodge, multi, showActual }: { lodge: ProposalDocument['lodges']
                 {/* Named on the line itself, so the 18% figure in the Statement of Charges
                     points at the rooms it was charged on rather than appearing from nowhere.
                     The band is decided in lib/tax.ts and travels on the line — the threshold and
-                    the dormitory carve-out are not re-implemented here to drift out of step. */}
+                    the dormitory carve-out are not re-implemented here to drift out of step.
+                    The exempt line is named for the same reason: the statement's 5% is charged
+                    on a base that excludes it, and a guest adding the rooms up has to be able to
+                    see which one is outside. */}
                 {l.gstRateBp === 1800 && ' · GST 18%'}
+                {l.gstRateBp === 0 && ' · GST exempt'}
               </span>
             </span>
           </td>

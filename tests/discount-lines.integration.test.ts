@@ -365,3 +365,153 @@ d('the Discounted column', () => {
     expect(after.roomGroups[0]!.lines[0]!.discountedPaise).toBe(8_000_00)
   })
 })
+
+/**
+ * What the Authority is actually shown, and what he can do to it (client, 8 Sep 2026).
+ *
+ * An over-cap save writes the gap, links it to one `discount_over_cap` exception and applies
+ * nothing. For three weeks that meant the asked-for PRICE existed only inside the exception's
+ * payload: the sheet - the thing his screen draws - reported the line at its actual price with
+ * a "Requested" flag and no figure, so he was deciding "1,41,000 or not?" from the sentence
+ * "discount of 10,000 over the cap". These pin the two halves of the fix: the number reaches
+ * the sheet, and he can type over any one cell of the request without the save blowing up.
+ */
+d('an over-cap request, as the Authority sees it', () => {
+  it('carries the price it is asking for, without putting it in force', async () => {
+    // Venue 10,000 + food 70,000 = 80,000, so the 10% cap is 8,000.
+    const { eventId, subEventId } = await makeEvent({ venuePaise: 10_000_00, perPlatePaise: 700_00, pax: 100 })
+    const res = await discounts.setLineDiscounts(bm, eventId, [
+      { key: `venue:${subEventId}`, discountedPaise: 1_000_00 }, // a 9,000 gap - over the cap
+    ])
+    expect(res.deferred).toBe(true)
+
+    const sheet = await discounts.discountSheet(eventId)
+    const venue = sheet.functions[0]!.venue
+    expect(venue.pending).toBe(true)
+    // What a counter collects: unchanged, because nobody has agreed to anything yet.
+    expect(venue.discountedPaise).toBe(10_000_00)
+    // What the Authority is being asked for: on the line, in rupees, at last.
+    expect(venue.requestedPaise).toBe(1_000_00)
+    expect(sheet.lineDiscountPaise).toBe(0)
+    expect(sheet.pendingDiscountPaise).toBe(9_000_00)
+
+    // And the same split on the cap, which is what the screen prints as a percentage of the
+    // bill: nothing given, 9,000 asked for.
+    const cap = await discounts.discountCap(eventId)
+    expect(cap.capBasePaise).toBe(80_000_00)
+    expect(cap.capPaise).toBe(8_000_00)
+    expect(cap.usedPaise).toBe(0)
+    expect(cap.pendingPaise).toBe(9_000_00)
+  })
+
+  it('lets him re-price ONE cell of a multi-cell request', async () => {
+    // One save over the cap raises ONE exception covering every cell in it, so this request has
+    // two `discounts` rows pointing at one `exceptions` row. Re-pricing the venue alone used to
+    // delete that exception while the food row still referenced it - `discounts.exception_id`
+    // has no ON DELETE clause - and Postgres refused with a foreign-key violation. The save
+    // died with a 500, and the one thing the Authority opens the screen to do was impossible.
+    const { eventId, subEventId } = await makeEvent({ venuePaise: 10_000_00, perPlatePaise: 700_00, pax: 100 })
+    await discounts.setLineDiscounts(bm, eventId, [
+      { key: `venue:${subEventId}`, discountedPaise: 5_000_00 },
+      { key: `food:${subEventId}`, discountedPaise: 65_000_00 },
+    ])
+    const raised = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))
+    expect(raised).toHaveLength(1)
+
+    // He gives the hall at 6,000 rather than the 5,000 he was asked for, and says nothing
+    // about the food.
+    const res = await discounts.setLineDiscounts(auditor, eventId, [{ key: `venue:${subEventId}`, discountedPaise: 6_000_00 }])
+    expect(res.deferred).toBe(false)
+
+    const sheet = await discounts.discountSheet(eventId)
+    expect(sheet.functions[0]!.venue.discountedPaise).toBe(6_000_00)
+    expect(sheet.functions[0]!.venue.pending).toBe(false)
+    // The request went whole, as it was raised - the food cell was part of the same ask and no
+    // more in force than the venue one was.
+    expect(sheet.functions[0]!.food!.discountedPaise).toBe(70_000_00)
+    expect(sheet.pendingDiscountPaise).toBe(0)
+    expect(await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))).toHaveLength(0)
+  })
+
+  it('refuses the ask when the actual price is typed back, and says so in the trail', async () => {
+    // The screen has no Decline button: the edit IS the verdict (client, 8 Sep 2026). Refusing
+    // therefore means sending the line back at its ACTUAL price — which is also the price
+    // already in force, since a pending gap is not applied. Two things must survive that:
+    //
+    //   the request must go, not be left for the decision list to approve a moment later; and
+    //   something must be written down, or the one decision on that screen leaves no record.
+    const { eventId, subEventId } = await makeEvent({ venuePaise: 10_000_00, perPlatePaise: 700_00, pax: 100 })
+    await discounts.setLineDiscounts(bm, eventId, [{ key: `venue:${subEventId}`, discountedPaise: 1_000_00 }])
+    expect(await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))).toHaveLength(1)
+
+    const res = await discounts.setLineDiscounts(auditor, eventId, [
+      { key: `venue:${subEventId}`, discountedPaise: 10_000_00 }, // the actual, unchanged
+    ])
+    expect(res.changed).toBe(1) // recorded, though the price sits where it already sat
+
+    const sheet = await discounts.discountSheet(eventId)
+    expect(sheet.functions[0]!.venue.discountedPaise).toBe(10_000_00)
+    expect(sheet.functions[0]!.venue.pending).toBe(false)
+    expect(sheet.functions[0]!.venue.requestedPaise).toBeNull()
+    expect(sheet.pendingDiscountPaise).toBe(0)
+    expect(sheet.lineDiscountPaise).toBe(0)
+    expect(await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))).toHaveLength(0)
+
+    // The trail names what was asked for, not just where the price ended up.
+    const [row] = (await db.execute(sql`
+      SELECT old_value AS "oldValue", new_value AS "newValue" FROM audit_log
+       WHERE event_id = ${eventId} AND entity = 'discounts'
+       ORDER BY at DESC LIMIT 1
+    `)) as unknown as { oldValue: string; newValue: string }[]
+    expect(row!.oldValue).toContain('requested')
+    expect(row!.oldValue).toContain('1,000')
+    expect(row!.newValue).toContain('10,000')
+  })
+
+  it('leaves a DECIDED discount on an untouched line alone', async () => {
+    // The sweep above is for pending requests only. An approved exception's rows are in force
+    // on lines this save never mentioned, and taking them with it would cancel a discount the
+    // Authority granted.
+    const { eventId, subEventId } = await makeEvent({ venuePaise: 10_000_00, perPlatePaise: 700_00, pax: 100 })
+    await discounts.setLineDiscounts(bm, eventId, [
+      { key: `venue:${subEventId}`, discountedPaise: 5_000_00 },
+      { key: `food:${subEventId}`, discountedPaise: 65_000_00 },
+    ])
+    const [exc] = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))
+    await db.update(schema.exceptions).set({ status: 'approved' }).where(eq(schema.exceptions.id, exc!.id))
+
+    await discounts.setLineDiscounts(auditor, eventId, [{ key: `venue:${subEventId}`, discountedPaise: 7_000_00 }])
+
+    const sheet = await discounts.discountSheet(eventId)
+    expect(sheet.functions[0]!.venue.discountedPaise).toBe(7_000_00)
+    expect(sheet.functions[0]!.food!.discountedPaise).toBe(65_000_00) // still granted
+  })
+})
+
+d('the base the 10% is a percentage of', () => {
+  it('counts a hall hired twice in one day once, as the bill does', async () => {
+    // CLAUDE.md rule 3: the hall is charged once a DAY and the day's earliest function carries
+    // the let. The cap used to sum a rate for every function, so two functions in one hall on
+    // one day put two hall charges into the base and handed out an extra two-thirds of a hall's
+    // worth of headroom. `proposal_total_paise` is left at 0 here so the live branch is the one
+    // measured - the branch an enquiry always takes.
+    const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
+    const [e] = await db
+      .insert(schema.events)
+      .values({ code, guestName: 'One Hall Two Functions', eventType: 'engagement', createdBy: auditor.id })
+      .returning({ id: schema.events.id })
+    const [venue] = await db.select({ id: schema.venues.id }).from(schema.venues).limit(1)
+    for (const fn of [
+      { name: 'Haldi', startTime: '11:00', endTime: '15:00' },
+      { name: 'Reception', startTime: '19:00', endTime: '23:00' },
+    ]) {
+      await db.insert(schema.subEvents).values({
+        eventId: e!.id, eventDate: '2026-09-01', venueId: venue!.id, pax: 100, venueRatePaise: 10_000_00, ...fn,
+      })
+    }
+
+    const cap = await discounts.discountCap(e!.id)
+    expect(cap.capBasePaise).toBe(10_000_00) // one let, not two
+    expect(cap.capPaise).toBe(1_000_00)
+  })
+})
