@@ -41,9 +41,12 @@ races return 409 with a human-readable message.
   Returns `event.advanceShortfallPaise` / `advanceRequiredPaise` — a part payment confirms and
   holds the dates like any other booking (BR-P1, amended 4 Aug 2026). The shortfall is reported
   for the record, not for a warning: no screen marks a short booking (FR-1.7b, 8 Sep 2026)
-  `event_type` on that PUT is **Auditor-only and enquiry-only** (FR-1.8b, 8 Sep 2026): it
-  re-prices every function off a different rate card, so the handler recomputes
-  `proposal_total_paise` in the same transaction, 403s any other role and 409s once confirmed
+  `event_type` on that PUT is **Auditor-only** (FR-1.8b, 8 Sep 2026): it re-prices every
+  function off a different rate card, so the handler recomputes `proposal_total_paise` in the
+  same transaction and 403s any other role. On a CONFIRMED booking it also re-cuts each
+  function's frozen `venue_rate_paise` from the new card, and 400s naming the halls the new
+  type has no rate card for (BR-R1). 409s from `locked` onward — the guest holds a document
+  priced from those figures
 - `POST /events/:id/cancel` { reason }
 - `GET  /events/:id/proforma` — a live proforma estimate (same bill math, nothing persisted)
   for a confirmed-but-unlocked event; gated on `bookings` view so the Booking Manager can quote

@@ -33,6 +33,7 @@ vi.mock('@/lib/session', () => ({
 
 const { PUT: putSubEvent } = await import('@/app/api/v1/sub-events/[id]/route')
 const { PUT: putEvent } = await import('@/app/api/v1/events/[id]/route')
+const menus = await import('@/lib/menus')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -219,7 +220,8 @@ d('correcting the event type', () => {
       SELECT old_value AS "oldValue", new_value AS "newValue" FROM audit_log
        WHERE event_id = ${eventId} AND field = 'event_type' ORDER BY seq DESC LIMIT 1
     `)) as unknown as { oldValue: string; newValue: string }[]
-    expect(row).toMatchObject({ oldValue: 'engagement', newValue: 'wedding' })
+    expect(row!.oldValue).toContain('engagement')
+    expect(row!.newValue).toContain('wedding')
   })
 
   it('does not hold the correction to the new type\u2019s contact rule', async () => {
@@ -255,9 +257,155 @@ d('correcting the event type', () => {
     expect(ev!.eventType).toBe('engagement')
   })
 
-  it('refuses once the dates are held', async () => {
-    const { eventId } = await makeEnquiry()
+  /**
+   * A CONFIRMED booking too (client's lead, 8 Sep 2026, overruling the enquiry-only limit this
+   * shipped with). The objection was that a held function's `venue_rate_paise` is frozen from
+   * the OLD type's card, so a cosmetic re-type would leave the booking quoting one figure and
+   * holding another. These pin the answer: the frozen rates are re-cut, and a type with no card
+   * for one of the halls is refused rather than zeroed.
+   */
+  it('re-cuts the FROZEN venue rates AND the plate surcharge on a confirmed booking', async () => {
+    const { eventId, subId } = await makeEnquiry()
+    // A saved menu, so both halves of the money the type decides are on this booking.
+    const [tier] = await db.select().from(schema.menuTiers).where(eq(schema.menuTiers.name, 'Silver')).limit(1)
+    await menus.saveSubEventMenu(bm, subId, { tierId: tier!.id, selections: {} })
+    const [tierPrice] = (await db.execute(sql`
+      SELECT base_rate_paise AS base, wedding_surcharge_paise AS surcharge FROM menu_tier_prices
+       WHERE tier_id = ${tier!.id} ORDER BY effective_from DESC LIMIT 1
+    `)) as unknown as { base: number; surcharge: number }[]
+
+    // The seed charges every hall the same for both types, so the difference this test is
+    // measuring has to be created: a dearer wedding card, dated after the seed's, for the hall
+    // this function is in. Without it "the snapshot moved" could not fail.
+    const [sub0] = await db.select({ venueId: schema.subEvents.venueId }).from(schema.subEvents).where(eq(schema.subEvents.id, subId))
+    const [rates] = (await db.execute(sql`
+      SELECT rate_paise AS rate FROM venue_rate_cards
+       WHERE venue_id = ${sub0!.venueId} AND event_type = 'engagement'
+       ORDER BY effective_from DESC LIMIT 1
+    `)) as unknown as { rate: number }[]
+    const engagement = Number(rates!.rate)
+    const wedding = engagement + 25_000_00
+    // Dated after the seed's card and before the function, since `venueRatePaise` takes the
+    // latest effective_from on or before the event date.
+    await db.execute(sql`
+      INSERT INTO venue_rate_cards (venue_id, event_type, rate_paise, effective_from)
+      VALUES (${sub0!.venueId}, 'wedding', ${wedding}, '2026-06-01')
+    `)
+
+    try {
+      // Freeze the engagement rate on the function, the way confirm does, and hold the booking.
+      await db.update(schema.subEvents).set({ venueRatePaise: engagement }).where(eq(schema.subEvents.id, subId))
+      await db.update(schema.events).set({ status: 'confirmed' }).where(eq(schema.events.id, eventId))
+
+      const res = await editEvent(eventId, { event_type: 'wedding' })
+      expect(res.status).toBe(200)
+
+      const [sub] = await db.select().from(schema.subEvents).where(eq(schema.subEvents.id, subId))
+      // The SNAPSHOT moved, which is the whole point — the hall now charges the wedding rate.
+      expect(Number(sub!.venueRatePaise)).toBe(wedding)
+      expect(Number(sub!.venueRatePaise)).not.toBe(engagement)
+
+      // The PLATE surcharge moved too, on a booking that is already held.
+      const [menu] = await db.select().from(schema.subEventMenus).where(eq(schema.subEventMenus.subEventId, subId))
+      expect(Number(menu!.surchargePaise)).toBe(Number(tierPrice!.surcharge))
+      expect(Number(menu!.baseRatePaise)).toBe(Number(tierPrice!.base)) // untouched, as snapshotted
+
+      const [ev] = await db.select().from(schema.events).where(eq(schema.events.id, eventId))
+      expect(ev!.eventType).toBe('wedding')
+      // Venue at the wedding card + pax x (base + the wedding surcharge).
+      expect(Number(ev!.proposalTotalPaise)).toBe(
+        wedding + sub!.pax * (Number(tierPrice!.base) + Number(tierPrice!.surcharge)),
+      )
+
+      // The trail carries both totals, so a jump in what the guest owes is traceable to this.
+      const [row] = (await db.execute(sql`
+        SELECT old_value AS "oldValue", new_value AS "newValue" FROM audit_log
+         WHERE event_id = ${eventId} AND field = 'event_type' ORDER BY seq DESC LIMIT 1
+      `)) as unknown as { oldValue: string; newValue: string }[]
+      expect(row!.oldValue).toContain('engagement')
+      expect(row!.newValue).toContain('wedding')
+    } finally {
+      // `afterEach` clears events, not masters. Leaving this card behind re-prices every
+      // wedding in every test that runs after this one.
+      await db.execute(sql`
+        DELETE FROM venue_rate_cards
+         WHERE venue_id = ${sub0!.venueId} AND event_type = 'wedding' AND effective_from = '2026-06-01'
+      `)
+    }
+  })
+
+  it('re-cuts the plate surcharge, both ways', async () => {
+    // The other half of the money the type decides. `sub_event_menus.surcharge_paise` is
+    // snapshotted when the MENU is saved — the wedding surcharge if the event was a wedding,
+    // 0 if not — and nothing re-read it, so a type change left every plate carrying the old
+    // type's surcharge. Rs. 50 a head on every tier in the seed, in whichever direction the
+    // type moved, and invisible on every screen.
+    const { eventId, subId } = await makeEnquiry()
+    const [tier] = await db.select().from(schema.menuTiers).where(eq(schema.menuTiers.name, 'Silver')).limit(1)
+    await menus.saveSubEventMenu(bm, subId, { tierId: tier!.id, selections: {} })
+
+    const surchargeOf = async () =>
+      Number(
+        (await db.select().from(schema.subEventMenus).where(eq(schema.subEventMenus.subEventId, subId)))[0]!
+          .surchargePaise,
+      )
+    const [price] = (await db.execute(sql`
+      SELECT wedding_surcharge_paise AS s FROM menu_tier_prices
+       WHERE tier_id = ${tier!.id} ORDER BY effective_from DESC LIMIT 1
+    `)) as unknown as { s: number }[]
+    expect(Number(price!.s)).toBeGreaterThan(0) // otherwise this test proves nothing
+
+    // Saved as an engagement: no surcharge.
+    expect(await surchargeOf()).toBe(0)
+
+    // → wedding: the surcharge appears, and the total carries it (pax x the surcharge).
+    const before = Number((await db.select().from(schema.events).where(eq(schema.events.id, eventId)))[0]!.proposalTotalPaise)
+    expect((await editEvent(eventId, { event_type: 'wedding' })).status).toBe(200)
+    expect(await surchargeOf()).toBe(Number(price!.s))
+    const [sub] = await db.select().from(schema.subEvents).where(eq(schema.subEvents.id, subId))
+    const after = Number((await db.select().from(schema.events).where(eq(schema.events.id, eventId)))[0]!.proposalTotalPaise)
+    expect(after - before).toBe(sub!.pax * Number(price!.s))
+
+    // → back again: it goes, and so does the money.
+    expect((await editEvent(eventId, { event_type: 'engagement' })).status).toBe(200)
+    expect(await surchargeOf()).toBe(0)
+    expect(Number((await db.select().from(schema.events).where(eq(schema.events.id, eventId)))[0]!.proposalTotalPaise)).toBe(before)
+  })
+
+  it('refuses a held booking when the new type has no rate card for a hall', async () => {
+    // BR-R1: a missing rate is a gate, never a zero — and on a held booking there is no later
+    // gate to catch it, because confirm has already happened.
+    const { eventId, subId } = await makeEnquiry()
+    const [venue] = await db.select({ venueId: schema.subEvents.venueId }).from(schema.subEvents).where(eq(schema.subEvents.id, subId))
+    const cards = (await db.execute(sql`
+      SELECT event_type AS "eventType", rate_paise AS rate, effective_from::text AS "from"
+        FROM venue_rate_cards WHERE venue_id = ${venue!.venueId} AND event_type = 'wedding'
+    `)) as unknown as { eventType: string; rate: number; from: string }[]
+    await db.execute(sql`DELETE FROM venue_rate_cards WHERE venue_id = ${venue!.venueId} AND event_type = 'wedding'`)
     await db.update(schema.events).set({ status: 'confirmed' }).where(eq(schema.events.id, eventId))
+
+    try {
+      const res = await editEvent(eventId, { event_type: 'wedding' })
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.message).toMatch(/no rate card/i)
+      // Nothing was written — the type and the frozen rate are as they were.
+      const [ev] = await db.select().from(schema.events).where(eq(schema.events.id, eventId))
+      expect(ev!.eventType).toBe('engagement')
+    } finally {
+      // `afterEach` clears events, not masters. Put the rate cards back, or every test added
+      // after this one inherits a hall that cannot host a wedding.
+      for (const c of cards) {
+        await db.execute(sql`
+          INSERT INTO venue_rate_cards (venue_id, event_type, rate_paise, effective_from)
+          VALUES (${venue!.venueId}, ${c.eventType}, ${c.rate}, ${c.from}::date)
+        `)
+      }
+    }
+  })
+
+  it('refuses once the guest holds a document', async () => {
+    const { eventId } = await makeEnquiry()
+    await db.update(schema.events).set({ status: 'billed' }).where(eq(schema.events.id, eventId))
 
     const res = await editEvent(eventId, { event_type: 'wedding' })
     expect(res.status).toBe(409)

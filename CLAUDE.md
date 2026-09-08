@@ -339,9 +339,19 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    403s anybody but the Auditor. The food surcharge and the wedding 50% follow on their own,
    being derived from the type on every read. The contact rule is deliberately NOT enforced on
    the correction — `confirmEvent` still refuses a wedding without three numbers, and blocking
-   the correction would trap a mis-typed booking in the wrong type for ever. Past confirmation
-   it is refused for everyone: the hall is by then held at a rate snapshotted from the OLD type,
-   and the guest's document was printed from that snapshot. **Rooms are shown on an enquiry** — the
+   the correction would trap a mis-typed booking in the wrong type for ever.
+   **A CONFIRMED booking too** (client's lead, 8 Sep 2026, overruling the enquiry-only limit
+   this shipped with). A held function's `venue_rate_paise` is FROZEN from the old type's card,
+   so the route re-cuts every one of them off the new card in the same transaction, through
+   `priceProposal` so the venue-day carrier rule still decides which function pays for the
+   hall — without that the change would be cosmetic and the hall would go on charging the old
+   type's price. Two consequences: a new type with **no rate card** for one of the halls
+   REFUSES the change and names them (BR-R1 — on a held booking there is no later gate, since
+   confirm has happened), and the **25% can go short** the moment it saves, because the advance
+   was measured on the old total; nothing blocks on that (BR-P1's debt-not-gate), and the audit
+   row carries both totals so the jump is traceable. Still refused from `locked` on, for
+   everyone: the guest holds a numbered document priced from those figures, and changing them
+   is `reissueInvoice`'s job under the Authority's override (rule 6). **Rooms are shown on an enquiry** — the
    requirements ARE the booking (rule 9) and the wizard has always captured them at step 4; the
    page used to say "Rooms can be allocated once the booking is confirmed", which was wrong.
    **The boundary is confirmation, and it is the server's.** `PUT /sub-events/:id` refuses
