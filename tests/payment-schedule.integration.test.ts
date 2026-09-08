@@ -2,8 +2,8 @@
  * The payable amount and the milestones (client's lead, 4 Aug 2026) — `lib/payment-schedule.ts`.
  *
  * This module is the single definition of what a guest owes, read by confirm, the quote, the
- * ledger, the wedding reminders and the calendar's Downpayment-due marker. Three things are
- * worth pinning down by hand, because every one of them was got wrong somewhere before:
+ * ledger and the wedding reminders. Three things are worth pinning down by hand, because every
+ * one of them was got wrong somewhere before:
  *
  *   - payable = venue + food + add-ons + rooms + the 5% room GST, less discounts. The 18%
  *     introduced on 4 Aug is printed and collected from nobody, so it is in none of it.

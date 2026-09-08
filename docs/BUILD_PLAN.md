@@ -30,8 +30,9 @@ states.
 inline availability, room requirements (Palace default for lawn weddings),
 review. Aadhaar upload. Confirm transaction: SOME advance against a receipt +
 atomic slot inserts; stale-enquiry flagging. (Amended 4 Aug 2026 — the 25% is a
-debt carried by the booking, not a gate on it: a part payment confirms and shows
-as Downpayment due until the rest arrives. BR-P1, FR-1.7a.)
+debt carried by the booking, not a gate on it: a part payment confirms and holds
+the dates. BR-P1, FR-1.7a. Amended again 8 Sep 2026 — nothing marks a short
+booking; the debt is read off the Billing panel's milestones. FR-1.7b.)
 ✓ Accept: concurrency test — two parallel confirms, exactly one succeeds,
 loser gets 409 with friendly message; wedding without 3 contacts cannot confirm.
 

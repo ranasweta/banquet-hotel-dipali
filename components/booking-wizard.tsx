@@ -94,7 +94,18 @@ const roomTaxBp = (nightlyRatePaise: number, roomType: string) =>
       ? ROOM_TAX_HIGH_BP
       : ROOM_TAX_BP
 
-export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}) {
+export function BookingWizard({
+  resumeEventId,
+  canChangeEventType = false,
+}: {
+  resumeEventId?: string
+  /**
+   * Whether this user may RE-type an existing proposal. Picking the type on a new one is
+   * everybody's; changing it afterwards is the Auditor's, because it re-prices every function
+   * off a different rate card (client, 8 Sep 2026). Cosmetic — the route enforces it.
+   */
+  canChangeEventType?: boolean
+} = {}) {
   const router = useRouter()
   const [step, setStep] = useState(0)
   const [options, setOptions] = useState<Options | null>(null)
@@ -218,6 +229,8 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
     }
   }, [resumeEventId])
 
+  /** May this proposal's type still be moved? Only the Auditor, and only before confirmation. */
+  const retypable = canChangeEventType && eventStatus === 'enquiry'
   const selectedType = options?.eventTypes.find((t) => t.code === eventType)
   const requiredContacts = selectedType?.contactNumbers ?? 1
 
@@ -269,7 +282,7 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
         setEventId(event.id)
         toast.success('Proposal created — now add the Aadhaar images.')
       } else {
-        await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, from_date: fromDate, to_date: toDate, contacts: contactsPayload }) })
+        await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, event_type: eventType, from_date: fromDate, to_date: toDate, contacts: contactsPayload }) })
         savedStep1.current = { fromDate, toDate, guestName }
         toast.success('Contacts saved.')
       }
@@ -496,9 +509,17 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
           )}
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Event">
-              {/* Event type is fixed once the proposal exists — it drives the contact rule and
-                  the food surcharge, and changing it can't be undone cleanly. */}
-              <Select items={proposalTypes} value={eventType} onValueChange={(v) => setEventType(v ?? '')} disabled={Boolean(eventId)}>
+              {/* Free to pick on a new proposal. Changing it on one that EXISTS is the
+                  Auditor's (client, 8 Sep 2026) — it re-prices every function off a different
+                  rate card, so it is his the way the venue master is. Locked for everyone once
+                  confirmed: the hall is by then held at a rate snapshotted from the old type.
+                  The server enforces both; this only stops the pointless attempt. */}
+              <Select
+                items={proposalTypes}
+                value={eventType}
+                onValueChange={(v) => setEventType(v ?? '')}
+                disabled={Boolean(eventId) && !retypable}
+              >
                 <SelectTrigger><SelectValue placeholder="Wedding or Others" /></SelectTrigger>
                 <SelectContent>
                   {proposalTypes.map((t) => (
@@ -506,7 +527,15 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
                   ))}
                 </SelectContent>
               </Select>
-              {eventId && <p className="text-xs text-muted-foreground">Fixed after the proposal is created.</p>}
+              {eventId && (
+                <p className="text-xs text-muted-foreground">
+                  {retypable
+                    ? 'Changing this re-prices every function — the rate card is per event type.'
+                    : eventStatus !== 'enquiry'
+                      ? 'Fixed once the booking is confirmed.'
+                      : 'Only the Auditor can change this — it re-prices every function.'}
+                </p>
+              )}
             </Field>
             <Field label="Guest name">
               <Input value={guestName} onChange={(e) => setGuestName(e.target.value)} placeholder="Any name — it doesn't affect pricing" />
@@ -647,14 +676,11 @@ export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}
           quote={quote}
           alreadyConfirmed={eventStatus !== 'enquiry'}
           onBack={() => setStep(3)}
-          onConfirmed={(code, shortfallPaise) => {
-            // A part payment confirms and holds the dates all the same; saying so here is the
-            // only moment the manager is guaranteed to be looking (client's lead, 4 Aug 2026).
-            if (shortfallPaise > 0) {
-              toast.warning(`Confirmed — ${code}. Dates held, ${formatPaise(shortfallPaise)} of the advance still due.`)
-            } else {
-              toast.success(`Confirmed — ${code}`)
-            }
+          onConfirmed={(code) => {
+            // One outcome, whatever came in against the 25% (client, 8 Sep 2026). A guest who is
+            // present and pays something is confirmed, and the dates are held — there is nothing
+            // conditional left to tell the manager about at this moment.
+            toast.success(`Confirmed — ${code}`)
             router.push('/calendar')
           }}
           onDone={() => {
@@ -1270,7 +1296,7 @@ function ReviewStep({
   // no advance to collect and nothing to re-confirm — the step just closes.
   alreadyConfirmed: boolean
   onBack: () => void
-  onConfirmed: (code: string, shortfallPaise: number) => void
+  onConfirmed: (code: string) => void
   onDone: () => void
   onDiscountChanged: () => void
 }) {
@@ -1308,16 +1334,13 @@ function ReviewStep({
           advance: { amount_paise: rupeesToPaise(Number(amount)), mode, receipt_no: receipt, received_on: receivedOn },
         }),
       })
-      onConfirmed(event.code, event.advanceShortfallPaise)
+      onConfirmed(event.code)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Confirmation failed')
     } finally {
       setBusy(false)
     }
   }
-
-  // What is actually being collected right now, so the form can say how far short it falls.
-  const amountPaise = Number.isFinite(Number(amount)) ? Math.round(Number(amount) * 100) : 0
 
   return (
     <StepCard title="Review & confirm">
@@ -1393,17 +1416,6 @@ function ReviewStep({
               <Field label="Received on">
                 <Input type="date" max={todayISO()} value={receivedOn} onChange={(e) => setReceivedOn(e.target.value)} />
               </Field>
-              {/* A guest who brings part of the advance is no longer turned away (client's lead,
-                  4 Aug 2026). Said here, at the field, because this is where a manager decides
-                  whether to argue with the guest or take what is on the table. */}
-              {quote && amountPaise > 0 && amountPaise < quote.advanceRequiredPaise && (
-                <p className="sm:col-span-2 lg:col-span-4 rounded-md border border-amber-300 bg-amber-50 px-2 py-2 sm:px-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-                  This is {formatPaise(quote.advanceRequiredPaise - amountPaise)} short of the 25%
-                  ({formatPaise(quote.advanceRequiredPaise)}). The dates will still be held — the
-                  booking confirms and shows as <span className="font-medium">Downpayment due</span> on
-                  the calendar until the rest arrives.
-                </p>
-              )}
             </div>
           )}
         </>

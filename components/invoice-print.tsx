@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Printer } from 'lucide-react'
+import { Contrast, Loader2, Palette, Printer } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise, paiseToWords } from '@/lib/money'
@@ -88,6 +88,8 @@ export function proposalDocumentName(doc: ProposalDocument): string {
 
 export function InvoicePrint({ eventId, proforma = false }: { eventId: string; proforma?: boolean }) {
   const [doc, setDoc] = useState<ProposalDocument | null>(null)
+  /** Which palette the sheet — and therefore the printer — is using. */
+  const [mono, setMono] = useState(false)
 
   useEffect(() => {
     api<ProposalDocument>(proforma ? `/events/${eventId}/proforma` : `/events/${eventId}/invoice/print`)
@@ -117,16 +119,31 @@ export function InvoicePrint({ eventId, proforma = false }: { eventId: string; p
   return (
     <>
       {/* Toolbar — never printed. */}
-      <div className="mx-auto mb-3 flex max-w-[210mm] items-center justify-between gap-3 px-1 print:hidden">
+      <div className="mx-auto mb-3 flex max-w-[210mm] flex-wrap items-center justify-between gap-3 px-1 print:hidden">
         <p className="text-sm text-muted-foreground">
           Press Print, then <span className="font-medium text-foreground">Save as PDF</span> — A4, background graphics
           on, <span className="font-medium text-foreground">headers &amp; footers off</span>.
         </p>
-        <Button variant="outline" onClick={() => window.print()}>
-          <Printer className="size-4" /> Print
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Chosen here rather than left to the print dialog's Colour / Black-and-white
+              switch: that switch desaturates the gold and the document comes out flat and
+              pale, which is the complaint this answers (client, 8 Sep 2026). Picking it here
+              swaps the palette for one drawn FOR black ink — and the sheet on screen changes
+              with it, so what is chosen is what prints. */}
+          <Button
+            variant={mono ? 'default' : 'outline'}
+            aria-pressed={mono}
+            onClick={() => setMono((m) => !m)}
+          >
+            {mono ? <Contrast className="size-4" /> : <Palette className="size-4" />}
+            {mono ? 'Black & white' : 'Colour'}
+          </Button>
+          <Button variant="outline" onClick={() => window.print()}>
+            <Printer className="size-4" /> Print
+          </Button>
+        </div>
       </div>
-      <ProposalSheet doc={doc} />
+      <ProposalSheet doc={doc} mono={mono} />
     </>
   )
 }
@@ -181,7 +198,7 @@ function useFitToPane() {
  * Keeping it free of fetching is what lets the markup be checked against the template
  * without a database or a browser session.
  */
-export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
+export function ProposalSheet({ doc, mono = false }: { doc: ProposalDocument; mono?: boolean }) {
   const ref = useFitToPane()
   const { event, contacts, functions, lodges, extras, totals, counts } = doc
   // The Actual column appears only when something was actually given (client, 20 Aug 2026:
@@ -204,7 +221,7 @@ export function ProposalSheet({ doc }: { doc: ProposalDocument }) {
   const showLowRoomTax = roomTax.low.basePaise > 0 || (!hasHighRoomTax && !hasExemptRooms)
 
   return (
-    <div className="pd" ref={ref}>
+    <div className={mono ? 'pd mono' : 'pd'} ref={ref}>
       <style dangerouslySetInnerHTML={{ __html: CSS }} />
 
       <div className="page">
@@ -1691,6 +1708,82 @@ const CSS = `
   font-size:10pt; text-align:center}
 .pd .tcsigs span{display:block}
 .pd .tcpageno{text-align:center; font-size:9.5pt; margin-top:4mm}
+
+
+/* ══════════ BLACK & WHITE ══════════
+   The same document with the gold taken out (client, 8 Sep 2026: "font is same, the theme
+   same, just looks better"). Nothing here moves a millimetre of layout — no size, spacing,
+   weight or family is touched. It is a palette and the fills that palette cannot reach.
+
+   WHY IT IS A MODE AND NOT A PRINT RULE. CSS cannot see the printer's Colour / Black-and-white
+   setting: "@media print and (monochrome)" reports the DISPLAY's bit depth, so it is false on
+   every normal laptop driving a mono laser. The choice has to be the user's, made before the
+   print dialog opens.
+
+   WHAT ACTUALLY BREAKS WHEN THE GOLD IS DESATURATED, and what each rule below answers:
+
+   • The rules disappear. --rule (#E6D8AF) is 88% luminance; a laser at default density drops
+     it, and every card, chip and table loses its edges. The greys here are deliberately
+     DARKER than a literal desaturation of the gold would give.
+   • The headings go pale. Section pills, the document title and the card labels are all
+     gold-deep on champagne — mid-grey on off-white once the hue is gone. They become black.
+   • The gradients go muddy. Twenty-six of them run gold → cream; desaturated they are a
+     smear across a band that should read as one flat tone. Every one is flattened.
+   • The logo is a colour PNG and greys unevenly, so it is desaturated explicitly rather
+     than left to the driver. */
+.pd.mono{
+  --ink:#000; --ink-2:#141414; --soft:#3F3F3F; --faint:#5E5E5E;
+  --gold-deep:#000; --gold:#2B2B2B; --gold-mid:#3F3F3F; --gold-lite:#8A8A8A;
+  --gold-pale:#D6D6D6; --champagne:#F2F2F2; --champagne-2:#E9E9E9;
+  --ivory:#FAFAFA; --paper:#FFFFFF;
+  --rule:#9A9A9A; --rule-soft:#C6C6C6;
+  background:#E8E8E8;
+}
+/* The gilt bar, as a printer can actually render it: one solid rule, not a smear. */
+.pd.mono .gild{background:#000}
+.pd.mono .runfoot-rule{background:linear-gradient(90deg,rgba(0,0,0,0),#000 22%,#000 78%,rgba(0,0,0,0))}
+.pd.mono .doc-rule{background:linear-gradient(90deg,rgba(0,0,0,0),#8A8A8A)}
+.pd.mono .pill-row .hair{background:linear-gradient(90deg,#8A8A8A,rgba(0,0,0,0))}
+/* Flat fills. Each of these ran to a cream literal the token swap above cannot reach. */
+.pd.mono .masthead,
+.pd.mono .card,
+.pd.mono .gt,
+.pd.mono .seg,
+.pd.mono .chef,
+.pd.mono .summary,
+.pd.mono .panel,
+.pd.mono .bank>div{background:#fff}
+.pd.mono .pill,
+.pd.mono .card.warm,
+.pd.mono .gt.hi,
+.pd.mono .fn-bar,
+.pd.mono .grp td,
+.pd.mono tr.sub td,
+.pd.mono .note,
+.pd.mono .trow.pay,
+.pd.mono .adv-box.hi,
+.pd.mono .pstep .ph,
+.pd.mono .chip.stamp{background:var(--champagne)}
+/* The two marks that were solid gold. Black, so they read as marks and not as smudges —
+   both are 8px or under, where anything lighter disappears. */
+.pd.mono .pill .gem,
+.pd.mono .panel li::before{background:#000}
+/* The pax chip is NOT one of them (client, 8 Sep 2026: "the no. of pax is too black"). Gold on
+   a cream sheet is a quiet emphasis; the same shape filled with black is a slab of ink beside
+   a function's name, and it was the heaviest thing on the page. It keeps the emphasis in
+   WEIGHT rather than in area: the same fill as the other chips, a darker rule, black bold
+   type. */
+.pd.mono .mchip.solid{background:var(--champagne); border-color:var(--rule);
+  color:#000; font-weight:700; text-shadow:none}
+.pd.mono .chip.stamp{border-color:var(--rule)}
+.pd.mono .chip.stamp b{color:#000}
+/* The table rule is a warm literal, not a token — and it is the line every figure in the
+   document sits on, so at #F2EDE0 desaturated the bill reads as one unruled block. */
+.pd.mono td{border-bottom-color:var(--rule-soft)}
+.pd.mono .gt.hi,
+.pd.mono .adv-box.hi{border-color:var(--rule)}
+/* A colour mark greys unevenly through a driver; do it here where the result is predictable. */
+.pd.mono .logo-img{filter:grayscale(1) contrast(1.15)}
 
 @media print{
   /* min-width:max-content is a screen fix for the scrolling pane; on paper there is no

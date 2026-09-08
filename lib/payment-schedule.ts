@@ -352,7 +352,7 @@ export type Milestone = {
 
 export type PaymentSchedule = PayableBreakdown & {
   milestones: Milestone[]
-  /** The advance milestone's shortfall — what the calendar's "Downpayment due" reads. */
+  /** The advance milestone's shortfall, restated at the top level for the Billing panel. */
   advanceShortfallPaise: number
 }
 
@@ -486,31 +486,10 @@ export async function balancesByEvent(eventIds: string[]): Promise<Map<string, E
   return out
 }
 
-/**
- * What each of these events is still short of its 25% advance, for the calendar's
- * "Downpayment due" marker. Absent from the map means fully covered.
- *
- * The discount lookup runs only for bookings that could possibly be short: a discount can
- * only ever LOWER what a quarter comes to, so anything already covering the undiscounted
- * quarter is settled and needs no second query. A month grid of paid-up bookings therefore
- * costs exactly one query, and only genuinely short ones pay for the exact figure.
+/*
+ * `advanceShortfallByEvent` lived here until 8 Sep 2026. It answered one question — what each
+ * booking on a month of calendar was still short of its 25% — for the board's "Downpayment due"
+ * marker, and that marker is withdrawn: a booking confirmed on a part payment is now drawn like
+ * any other confirmed booking. The 25% is still owed and still measured, by `milestones` above,
+ * on the screen where money is looked at.
  */
-export async function advanceShortfallByEvent(eventIds: string[]): Promise<Map<string, number>> {
-  const rows = await payableRows(eventIds)
-  // Anything already covering the undiscounted quarter is settled — a discount only ever
-  // lowers the requirement — so it never needs its discounts priced at all.
-  const candidates = rows.filter((r) => r.paid < percentOfPaise(grossPayable(r), ADVANCE_PCT))
-
-  // Priced together, not one after another. Each `lumpDiscountPaise` is three queries,
-  // and awaiting them in a loop cost three network round trips PER short booking — about
-  // three quarters of a second each against a remote database, on a screen that draws a whole
-  // month at once. The candidate list is short by construction, so one batch covers it.
-  const discounts = await Promise.all(candidates.map((r) => lumpDiscountPaise(r.eventId)))
-
-  const out = new Map<string, number>()
-  candidates.forEach((r, i) => {
-    const required = percentOfPaise(Math.max(0, grossPayable(r) - discounts[i]!), ADVANCE_PCT)
-    if (r.paid < required) out.set(r.eventId, required - r.paid)
-  })
-  return out
-}

@@ -256,11 +256,6 @@ const BOOKING_MANAGER: RoleGuide = {
           body: 'Charges logged during or after the event — generator hours, extra staff, damages — join the amount payable once the Maintenance team closes them, and the balance grows by that much.',
           note: 'They do not change the 25% or the wedding 50%. Those fell due before the event ran, so a booking that met them stays met.',
         },
-        {
-          title: 'Downpayment due',
-          body: 'A guest who brings part of the 25% still confirms and still holds the dates. The shortfall shows on the calendar in rose and on the booking.',
-          note: 'There is no timer on it. When a competing enquiry appears for those dates, phone the GM — the guest’s number is on the calendar day panel — and the GM decides whether to cancel.',
-        },
       ],
     },
   ],

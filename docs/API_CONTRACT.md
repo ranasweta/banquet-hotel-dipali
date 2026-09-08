@@ -39,7 +39,11 @@ races return 409 with a human-readable message.
   recorded advance against a receipt, re-tests the 10% discount cap, inserts venue_bookings
   atomically → 409 on any race; 402 `advance_required` only when nothing at all was recorded.
   Returns `event.advanceShortfallPaise` / `advanceRequiredPaise` — a part payment confirms and
-  carries the rest as Downpayment due (BR-P1, amended 4 Aug 2026)
+  holds the dates like any other booking (BR-P1, amended 4 Aug 2026). The shortfall is reported
+  for the record, not for a warning: no screen marks a short booking (FR-1.7b, 8 Sep 2026)
+  `event_type` on that PUT is **Auditor-only and enquiry-only** (FR-1.8b, 8 Sep 2026): it
+  re-prices every function off a different rate card, so the handler recomputes
+  `proposal_total_paise` in the same transaction, 403s any other role and 409s once confirmed
 - `POST /events/:id/cancel` { reason }
 - `GET  /events/:id/proforma` — a live proforma estimate (same bill math, nothing persisted)
   for a confirmed-but-unlocked event; gated on `bookings` view so the Booking Manager can quote
@@ -49,7 +53,9 @@ races return 409 with a human-readable message.
 
 ## Calendar (module: calendar)
 - `GET /calendar?from=&to=` — venues × dates board; banquet manager capped to
-  rolling 15 days server-side; states: confirmed | carryover | in_progress | downpayment due.
+  rolling 15 days server-side; states: confirmed | carryover | in_progress. A booking short of
+  its 25% is not a state of its own (8 Sep 2026) — it is drawn like any other confirmed booking,
+  and the row carries neither its shortfall nor the guest's phone number.
   Each booking carries `advanceShortfallPaise` (0 when paid up) and, for short bookings only,
   `contactPhone` — so the call to the GM can be made from the board (4 Aug 2026).
   Locked-in deals only — events at status confirmed or beyond. Enquiries are never
