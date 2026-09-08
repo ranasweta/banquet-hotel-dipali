@@ -229,8 +229,13 @@ export function BookingWizard({
     }
   }, [resumeEventId])
 
-  /** May this proposal's type still be moved? Only the Auditor, and only before confirmation. */
-  const retypable = canChangeEventType && eventStatus === 'enquiry'
+  /**
+   * May this proposal's type still be moved? The Auditor's, up to the lock (client's lead,
+   * 8 Sep 2026) — on a confirmed booking the server re-cuts every frozen venue rate from the
+   * new type's card, so the change is real and not cosmetic. This page never opens past
+   * `confirmed` anyway; the server holds the rest of the line.
+   */
+  const retypable = canChangeEventType && (eventStatus === 'enquiry' || eventStatus === 'confirmed')
   const selectedType = options?.eventTypes.find((t) => t.code === eventType)
   const requiredContacts = selectedType?.contactNumbers ?? 1
 
@@ -511,9 +516,11 @@ export function BookingWizard({
             <Field label="Event">
               {/* Free to pick on a new proposal. Changing it on one that EXISTS is the
                   Auditor's (client, 8 Sep 2026) — it re-prices every function off a different
-                  rate card, so it is his the way the venue master is. Locked for everyone once
-                  confirmed: the hall is by then held at a rate snapshotted from the old type.
-                  The server enforces both; this only stops the pointless attempt. */}
+                  rate card, so it is his the way the venue master is. That holds on a CONFIRMED
+                  booking too (his lead, same day): the server re-cuts the frozen venue rates
+                  from the new card in the same transaction, and refuses the change outright if
+                  the new type has no card for one of the halls. The server enforces all of it;
+                  this only stops the pointless attempt. */}
               <Select
                 items={proposalTypes}
                 value={eventType}
@@ -530,10 +537,10 @@ export function BookingWizard({
               {eventId && (
                 <p className="text-xs text-muted-foreground">
                   {retypable
-                    ? 'Changing this re-prices every function — the rate card is per event type.'
-                    : eventStatus !== 'enquiry'
-                      ? 'Fixed once the booking is confirmed.'
-                      : 'Only the Auditor can change this — it re-prices every function.'}
+                    ? eventStatus === 'enquiry'
+                      ? 'Changing this re-prices every function — the rate card is per event type.'
+                      : 'Changing this re-prices every function and re-cuts the held venue rates.'
+                    : 'Only the Auditor can change this — it re-prices every function.'}
                 </p>
               )}
             </Field>
