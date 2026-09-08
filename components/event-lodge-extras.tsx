@@ -124,7 +124,7 @@ export function EventLodgeExtras({ eventId, editable }: { eventId: string; edita
                   <TableCell className="text-right tabular-nums">{r.nights}</TableCell>
                   <TableCell className="text-right tabular-nums">{formatPaise(r.ratePaise)}</TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {(r.gstRateBp / 100).toFixed(0)}%
+                    {r.gstRateBp === 0 ? 'exempt' : `${(r.gstRateBp / 100).toFixed(0)}%`}
                   </TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{formatPaise(r.amountPaise)}</TableCell>
                   {canEdit && (

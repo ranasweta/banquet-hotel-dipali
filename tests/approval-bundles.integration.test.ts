@@ -492,3 +492,72 @@ d('the Authority’s own discount', () => {
     expect((await invoice.getInvoice(eventId))!.discountPaise).toBe(1_000_00)
   }, SLOW)
 })
+
+/**
+ * The Authority answering a price request with a price, under ONE button (client, 8 Sep 2026).
+ *
+ * The approvals screen used to save the price grid on its own request and the asks on another,
+ * so a GM who typed a new figure and pressed the page's Save committed the decision and not the
+ * price - or the price and not the decision, depending on which button he found first. The
+ * Discounted column now travels in `edits.lineDiscounts` and lands in the same transaction as
+ * everything else he changed.
+ */
+d('the Authority re-prices while deciding', () => {
+  it('takes the Discounted column with the rest of the bundle, in one save', async () => {
+    const { eventId, subId } = await makeBooking()
+    await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: { 'Paneer Main Course': ['Kadai Paneer'] } })
+
+    // The Booking Manager asks to give the hall away, well past the 10% cap.
+    const sheet = await discounts.discountSheet(eventId)
+    const venueKey = sheet.functions[0]!.venue.key
+    const actual = sheet.functions[0]!.venue.actualPaise
+    expect(actual).toBeGreaterThan(0)
+    const asked = await discounts.setLineDiscounts(bm, eventId, [{ key: venueKey, discountedPaise: 0 }])
+    expect(asked.deferred).toBe(true)
+    const [exc] = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))
+
+    // He is shown the asked-for price on the line, and types half of it over the top.
+    const shown = await discounts.discountSheet(eventId)
+    expect(shown.functions[0]!.venue.requestedPaise).toBe(0)
+    expect(shown.functions[0]!.venue.discountedPaise).toBe(actual)
+
+    const half = Math.round(actual / 2)
+    const res = await bundles.decideBundle(ha, eventId, {
+      decisions: [{ id: exc!.id, source: 'exception', action: 'approve' }],
+      edits: { lineDiscounts: [{ key: venueKey, discountedPaise: half }], discountRemark: 'Owner rang' },
+    })
+
+    // The price he typed is in force at once - his own discount carries no exception (FR-11.3a)
+    // - and the request it answers is gone rather than left waiting to overwrite him.
+    const after = await discounts.discountSheet(eventId)
+    expect(after.functions[0]!.venue.discountedPaise).toBe(half)
+    expect(after.functions[0]!.venue.pending).toBe(false)
+    expect(after.pendingDiscountPaise).toBe(0)
+    expect(res.skipped).toEqual([exc!.id])
+    expect(res.remaining).toBe(0)
+    expect(await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))).toHaveLength(0)
+  }, SLOW)
+
+  it('approves the asked-for price when he changes nothing', async () => {
+    // The do-nothing answer. His screen prefills the boxes with what was asked for, so pressing
+    // Save & approve with no edit sends no `lineDiscounts` at all and the exception is settled
+    // the ordinary way - which is what puts the pending rows in force.
+    const { eventId, subId } = await makeBooking()
+    await menus.saveSubEventMenu(bm, subId, { tierId: await tierId('Silver'), selections: { 'Paneer Main Course': ['Kadai Paneer'] } })
+    const sheet = await discounts.discountSheet(eventId)
+    const venueKey = sheet.functions[0]!.venue.key
+    const actual = sheet.functions[0]!.venue.actualPaise
+    await discounts.setLineDiscounts(bm, eventId, [{ key: venueKey, discountedPaise: 0 }])
+    const [exc] = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))
+
+    await bundles.decideBundle(ha, eventId, {
+      decisions: [{ id: exc!.id, source: 'exception', action: 'approve' }],
+    })
+
+    const after = await discounts.discountSheet(eventId)
+    expect(after.functions[0]!.venue.discountedPaise).toBe(0)
+    expect(after.functions[0]!.venue.pending).toBe(false)
+    expect(after.functions[0]!.venue.requestedPaise).toBeNull()
+    expect(after.lineDiscountPaise).toBe(actual)
+  }, SLOW)
+})

@@ -314,7 +314,7 @@ export async function payableBreakdown(
 ): Promise<PayableBreakdown> {
   const [row] = await payableRows([eventId], exec)
   if (!row) throw new Error(`payableBreakdown: event ${eventId} not found`)
-  const discountPaise = await lumpDiscountPaise(eventId, exec)
+  const discountPaise = await lumpDiscountPaise(eventId, exec as Parameters<typeof lumpDiscountPaise>[1])
   const givenPaise = await givenDiscountPaise(eventId, exec as Parameters<typeof givenDiscountPaise>[1])
   const preEventPayablePaise = Math.max(0, grossPayable(row) - discountPaise)
   const payablePaise = preEventPayablePaise + row.maintenance + lodgeExtras(row) + utensilExtras(row)

@@ -9,6 +9,7 @@ import { freezeRoomRates } from '@/lib/rooms'
 import { reissueInvoice } from '@/lib/invoice'
 import { getRoomAvailability } from '@/lib/rooms'
 import { formatPaise } from '@/lib/money'
+import { setLineDiscounts, type LineDiscountInput } from '@/lib/discounts'
 
 /**
  * The Higher Authority's proposal editor (client's lead, 1 Aug 2026).
@@ -73,6 +74,18 @@ export type GmProposalEdits = {
   rooms?: RoomEdit[]
   addDiscounts?: DiscountEdit[]
   removeDiscountIds?: string[]
+  /**
+   * The Discounted column, exactly as `PUT /events/:id/discounts` takes it — the price the guest
+   * is being charged for each line named (CLAUDE.md rule 3, migration 0036).
+   *
+   * It travels with the bundle rather than through its own request so the Authority answers a
+   * price he was asked to approve with ONE button (client, 8 Sep 2026). Applied inside this
+   * transaction, and applied LAST, because a line's key and its actual price both move with the
+   * edits above: a food line is priced off the pax this save may just have changed.
+   */
+  lineDiscounts?: LineDiscountInput[]
+  /** One optional remark for the whole Discounted column, as the counter's grid takes it. */
+  discountRemark?: string
   /** Why. Mandatory whenever a locked booking is touched — it lands in the audit trail. */
   reason?: string
 }
@@ -228,6 +241,17 @@ export async function applyGmProposalEdits(
   }
   for (const add of edits.addDiscounts ?? []) {
     changes.push(await addAuthorityDiscount(tx, actor, eventId, add))
+  }
+
+  // The Discounted column, last of all: the prices below are read off the pax, menus and room
+  // lines the edits above have already moved. `setLineDiscounts` audits cell by cell and, for
+  // an Authority, writes rows with no `exception_id` — in force at once, cap or no cap
+  // (FR-11.3a) — which is also what retires the `discount_over_cap` request these prices answer.
+  if (edits.lineDiscounts?.length) {
+    const res = await setLineDiscounts(actor, eventId, edits.lineDiscounts, edits.discountRemark ?? '', tx, {
+      allowLocked: true,
+    })
+    if (res.changed > 0) changes.push(`${res.changed} price${res.changed === 1 ? '' : 's'} re-set`)
   }
 
   // ── Recompute and, past billing, re-issue ──────────────────────────────────

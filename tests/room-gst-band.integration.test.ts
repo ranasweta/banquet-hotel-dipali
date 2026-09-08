@@ -113,8 +113,13 @@ beforeAll(async () => {
   RATES.suite = await rate('suite')
 }, 90_000)
 
-afterEach(async () => { if (hasDb) await db.delete(schema.events) })
-afterAll(async () => { if (hasDb) await db.delete(schema.events) })
+/** Invoices first — they reference the event and do not cascade with it. */
+async function cleanup() {
+  await db.delete(schema.invoices)
+  await db.delete(schema.events)
+}
+afterEach(async () => { if (hasDb) await cleanup() })
+afterAll(async () => { if (hasDb) await cleanup() })
 
 d('the band itself', () => {
   it('turns on strictly above ₹7,500 a night', () => {
@@ -125,14 +130,17 @@ d('the band itself', () => {
     expect(tax.roomGstBp(1_100_000, 'presidential_suite')).toBe(1800)
   })
 
-  it('exempts a dormitory whatever it costs', () => {
+  it('charges a dormitory no room GST at all', () => {
     // Palace's is ₹35,000 a night and Regency's ₹50,000, but the rate buys a room of 18–30
-    // beds rather than a bed, so the threshold does not speak to it (client, 17 Aug 2026).
-    expect(tax.roomGstBp(3_500_000, 'dormitory')).toBe(500)
-    expect(tax.roomGstBp(5_000_000, 'dormitory')).toBe(500)
+    // beds rather than a bed, so the threshold does not speak to it (client, 17 Aug 2026). It
+    // was held at 5% until the client settled it at nil on 8 Sep 2026.
+    expect(tax.roomGstBp(3_500_000, 'dormitory')).toBe(0)
+    expect(tax.roomGstBp(5_000_000, 'dormitory')).toBe(0)
+    // Cheap or dear makes no difference — it is the category, not the rate.
+    expect(tax.roomGstBp(100_000, 'dormitory')).toBe(0)
     // Keyed on the name, since `room_type` is free text and a lodge names its own categories.
-    expect(tax.roomGstBp(5_000_000, 'Ladies Dormitory')).toBe(500)
-    expect(tax.roomGstBp(5_000_000, 'dorm_a')).toBe(500)
+    expect(tax.roomGstBp(5_000_000, 'Ladies Dormitory')).toBe(0)
+    expect(tax.roomGstBp(5_000_000, 'dorm_a')).toBe(0)
     expect(tax.isDormitory('DORMITORY')).toBe(true)
     expect(tax.isDormitory('suite')).toBe(false)
   })
@@ -246,7 +254,7 @@ d('the band follows the nightly rate, not the size of the line', () => {
 })
 
 d('a dormitory is exempt, end to end', () => {
-  it('stays at 5% at ₹35,000 a night, in the estimate, the payable, the bill and the document', async () => {
+  it('draws no room GST at ₹35,000 a night, in the estimate, the payable, the bill and the document', async () => {
     const dormRate = await rate('dormitory')
     expect(dormRate).toBeGreaterThan(750_000) // the seed's is ₹35,000 — well over the threshold
 
@@ -263,19 +271,87 @@ d('a dormitory is exempt, end to end', () => {
     })
 
     const amount = dormRate * 2
-    const fivePercent = Math.round((amount * 500) / 10000)
 
-    expect((await pricing.roomEstimatePaise(e!.id)).roomsTaxPaise).toBe(fivePercent)
-    expect((await schedule.payableBreakdown(e!.id)).roomsTaxPaise).toBe(fivePercent)
+    // Nil in every one of the four, and the ROOM is still charged — it is the tax that is
+    // exempt, not the accommodation.
+    expect((await pricing.roomEstimatePaise(e!.id)).roomsPaise).toBe(amount)
+    expect((await pricing.roomEstimatePaise(e!.id)).roomsTaxPaise).toBe(0)
+    expect((await schedule.payableBreakdown(e!.id)).roomsTaxPaise).toBe(0)
 
     const dorm = (await invoice.computeBillLines(db, e!.id)).find((l) => l.section === 'rooms')!
-    expect(dorm.gstRateBp).toBe(500)
-    expect(dorm.taxPaise).toBe(fivePercent)
+    expect(dorm.gstRateBp).toBe(0)
+    expect(dorm.taxPaise).toBe(0)
 
     const doc = await proposal.proposalDocument(e!.id)
     expect(doc.totals.roomTaxSplit.high.basePaise).toBe(0) // nothing to print an 18% line for
-    expect(doc.totals.roomTaxSplit.low.basePaise).toBe(amount)
-    expect(doc.lodges[0]!.lines[0]!.gstRateBp).toBe(500)
+    // And nothing in the 5% line either: printing "GST 5% — rooms on ₹70,000" beside ₹0.00 of
+    // tax is a base the guest cannot multiply out. The dormitory's money is its own band.
+    expect(doc.totals.roomTaxSplit.low.basePaise).toBe(0)
+    expect(doc.totals.roomTaxSplit.exempt.basePaise).toBe(amount)
+    expect(doc.totals.roomTaxSplit.exempt.taxPaise).toBe(0)
+    expect(doc.lodges[0]!.lines[0]!.gstRateBp).toBe(0)
+  }, 90_000)
+
+  /**
+   * WHICH BOOKINGS THE CHANGE REACHES, and the one kind it does not.
+   *
+   * Nothing stores a room's tax: `roomGstBp` is read at the point of every estimate, payable,
+   * bill and document, so every booking that existed before 8 Sep 2026 and has not been billed
+   * re-prices the moment the constant changes — no backfill, no migration, nothing to touch.
+   * The test above is that guarantee: its event is built from bare `room_requirements` rows,
+   * exactly as an existing booking's are, and four different readers agree on nil.
+   *
+   * A DRAFTED INVOICE is the exception, and deliberately so. `invoice_lines.gst_rate_bp` and
+   * `tax_paise` are snapshotted when the Draft is raised, because a document the guest holds is
+   * a record of what was charged and not a live view. So an invoice drafted under the old 5%
+   * keeps it until somebody re-issues — which is the sanctioned path (CLAUDE.md rule 6), and
+   * recomputes the line at nil. This pins both halves so the boundary is a decision on the
+   * record rather than a surprise on a bill.
+   */
+  it('keeps a drafted invoice as issued, and drops the tax when it is re-issued', async () => {
+    const dormRate = await rate('dormitory')
+    const [{ code }] = (await db.execute(
+      sql`SELECT 'E-' || nextval('event_code_seq') AS code`,
+    )) as unknown as { code: string }[]
+    const [e] = await db
+      .insert(schema.events)
+      .values({ code, guestName: 'Dormitory Party', eventType: 'other', createdBy: auditor.id })
+      .returning({ id: schema.events.id })
+    await db.insert(schema.roomRequirements).values({
+      eventId: e!.id, unitId: palace, roomType: 'dormitory', count: 1,
+      checkIn: '2027-10-01', checkOut: '2027-10-03',
+    })
+    const amount = dormRate * 2
+    const oldTax = Math.round((amount * 500) / 10000)
+
+    await db.transaction(async (tx) => { await invoice.draftInvoice(tx, auditor, e!.id) })
+
+    // Put the Draft back the way 7 Sep would have raised it: the dormitory at 5%.
+    await db.execute(sql`
+      UPDATE invoice_lines SET gst_rate_bp = 500, tax_paise = ${oldTax}
+       WHERE section = 'rooms'
+         AND invoice_id = (SELECT id FROM invoices WHERE event_id = ${e!.id} AND superseded_at IS NULL)
+    `)
+    await db.execute(sql`
+      UPDATE invoices SET tax_paise = ${oldTax}, net_paise = ${amount + oldTax}, balance_paise = ${amount + oldTax}
+       WHERE event_id = ${e!.id} AND superseded_at IS NULL
+    `)
+
+    // Frozen: the document says what it said when it was raised.
+    const before = (await invoice.getInvoice(e!.id))!
+    expect(before.taxPaise).toBe(oldTax)
+    expect(before.lines.find((l) => l.section === 'rooms')!.gstRateBp).toBe(500)
+
+    // Re-issued: recomputed from `computeBillLines`, so the exemption lands.
+    await db.transaction(async (tx) => {
+      await invoice.reissueInvoice(tx, auditor, e!.id, 'Dormitory GST withdrawn (client, 8 Sep 2026)')
+    })
+    const after = (await invoice.getInvoice(e!.id))!
+    expect(after.taxPaise).toBe(0)
+    expect(after.lines.find((l) => l.section === 'rooms')!.gstRateBp).toBe(0)
+    expect(after.lines.find((l) => l.section === 'rooms')!.taxPaise).toBe(0)
+    // The room is still charged; only its tax went.
+    expect(after.lines.find((l) => l.section === 'rooms')!.amountPaise).toBe(amount)
   }, 90_000)
 })
 

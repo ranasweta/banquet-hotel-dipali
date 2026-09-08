@@ -77,18 +77,22 @@ const SUGGESTED_FUNCTIONS = ['Mehndi', 'Haldi', 'Sangeet', 'Wedding', 'Reception
  * threshold, so it plays no part in this step's live estimate.
  *
  * A room's own nightly rate picks its band: 18% above ₹7,500, 5% at or under it — except a
- * dormitory, whose rate buys a room of 18–30 beds and which stays at 5% however much it costs
- * (client, 17 Aug 2026). Mirrors `roomGstBp` in lib/tax.ts, which cannot be imported here — it
- * is `server-only` and this estimate runs in the browser as the form is typed. The server is
- * the authority: this figure is replaced by the quote's the moment step 5 loads.
+ * dormitory, whose rate buys a room of 18–30 beds and which is EXEMPT however much it costs
+ * (client, 17 Aug 2026; nil since 8 Sep 2026). Mirrors `roomGstBp` in lib/tax.ts, which cannot
+ * be imported here — it is `server-only` and this estimate runs in the browser as the form is
+ * typed. The server is the authority: this figure is replaced by the quote's the moment step 5
+ * loads.
  */
 const ROOM_TAX_BP = 500
 const ROOM_TAX_HIGH_BP = 1800
+const ROOM_TAX_DORM_BP = 0
 const ROOM_TAX_THRESHOLD_PAISE = 750_000
 const roomTaxBp = (nightlyRatePaise: number, roomType: string) =>
-  nightlyRatePaise > ROOM_TAX_THRESHOLD_PAISE && !roomType.toLowerCase().includes('dorm')
-    ? ROOM_TAX_HIGH_BP
-    : ROOM_TAX_BP
+  roomType.toLowerCase().includes('dorm')
+    ? ROOM_TAX_DORM_BP
+    : nightlyRatePaise > ROOM_TAX_THRESHOLD_PAISE
+      ? ROOM_TAX_HIGH_BP
+      : ROOM_TAX_BP
 
 export function BookingWizard({ resumeEventId }: { resumeEventId?: string } = {}) {
   const router = useRouter()

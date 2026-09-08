@@ -305,7 +305,8 @@ export async function decideBundle(
         input.edits.menus?.length ||
         input.edits.rooms ||
         input.edits.addDiscounts?.length ||
-        input.edits.removeDiscountIds?.length),
+        input.edits.removeDiscountIds?.length ||
+        input.edits.lineDiscounts?.length),
   )
   if (!decisions.length && !hasEdits) throw conflict('Nothing to decide and nothing to change.')
 

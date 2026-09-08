@@ -1,14 +1,14 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, ArrowLeft, Check, Loader2, Plus, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChevronDown, ChevronRight, Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { api } from '@/lib/http'
 import { formatPaise } from '@/lib/money'
 import { titleCase } from '@/lib/text'
-import { DiscountGrid } from '@/components/discount-grid'
+import { DiscountGrid, type GridDraft, type LineDraft } from '@/components/discount-grid'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,12 +20,42 @@ import { Separator } from '@/components/ui/separator'
 import { SECTION_LABEL, SECTION_STYLES } from '@/components/approvals-queue'
 
 /**
- * One proposal, decided whole (client's lead, 1 Aug 2026).
+ * One proposal, decided whole (client's lead, 1 Aug 2026; redesigned 8 Sep 2026).
  *
- * Top half: every pending ask on this booking, grouped by section, each defaulting to APPROVED
- * — "if he wants to approve them then he can keep them ticked". Bottom half: the proposal
- * itself, live and editable, with the asked-for items marked in purple where they actually sit,
- * so the GM decides a menu by looking at the menu.
+ * WHAT THE 8 SEP REDESIGN CHANGED, and why. The screen was right about the unit of decision and
+ * wrong about everything under it:
+ *
+ *   • THE PROPOSAL WAS ONE UNBROKEN SCROLL. Every function printed its whole dish list, open,
+ *     one after another, and the rooms and the price sheet came after all of them. A booking
+ *     with four functions ran to several screens of checkboxes the GM had not asked to see.
+ *     Each function, Rooms, and Prices is now a section he opens — closed by default, with the
+ *     count of requests on it in the header, so the page opens as a page and not as a list.
+ *
+ *   • HE DECIDED AT THE TOP AND THE EVIDENCE WAS AT THE BOTTOM. Every ask carried an
+ *     Approve/Decline pair in a list above a proposal he had to go and find for himself. The
+ *     buttons are gone. Each request now carries one button that OPENS the section it is about
+ *     and scrolls him to it — a menu increase to that function's menu, an over-cap price to the
+ *     price sheet — and he answers by editing what he finds there (client, 8 Sep 2026: "if he
+ *     keeps it he can simply save the changes, or if he doesn't then simply change the numbers
+ *     by clicking the discounted, then click save & approve").
+ *
+ *   • A PRICE HE WAS ASKED TO APPROVE DID NOT APPEAR ON THE SCREEN. An over-cap discount is
+ *     held pending, so every reader — the price sheet included — showed the line at its actual
+ *     price with "Requested" beside the label and no figure anywhere. He was deciding a
+ *     ₹1,41,000 hall from the sentence "discount of ₹10,000 over the cap". The asked-for price
+ *     is now printed on the request, printed on the line, and PREFILLED into the box, so
+ *     approving as asked is the do-nothing answer and typing over it is the deliberate one.
+ *
+ *   • THERE WERE TWO SAVE BUTTONS FOR ONE DECISION — the price grid saved on its own, the asks
+ *     on another. The grid runs in controlled mode here and its column goes in with everything
+ *     else under one "Save & approve", in one transaction.
+ *
+ * There is no Decline. Every pending ask is approved when he saves, because his edits ARE the
+ * answer: a dish he unticks is a menu increase refused, and the actual price typed back into a
+ * cell is a discount refused. The underlying services still take a rejection — nothing about
+ * `settleException` changed — this screen simply no longer offers a verdict separate from the
+ * booking, which is what made it possible to approve a request and leave the proposal saying
+ * something else.
  *
  * Purple is never the only signal. Every requested row also carries the word "Requested" and,
  * in the dish list, sits beside its own checkbox — a GM who cannot separate violet from grey
@@ -83,6 +113,9 @@ type Options = {
 }
 type Catalog = { pools: { categoryName: string; items: string[] }[] }
 
+/** One cell of an over-cap discount request: what the line lists at, and what is being asked. */
+type AskedPrice = { key: string; label: string; actualPaise: number; discountedPaise: number }
+
 /** Every dish this bundle's pending menu-increase asks are about, keyed `subEventId|category`. */
 function requestedDishes(asks: Ask[]): Map<string, Set<string>> {
   const map = new Map<string, Set<string>>()
@@ -103,12 +136,95 @@ function requestedDishes(asks: Ask[]): Map<string, Set<string>> {
 
 const PURPLE_ROW = 'border-l-2 border-violet-500 bg-violet-50 dark:bg-violet-950/40'
 
+/**
+ * Which section of the proposal answers a request, and what the button on it says.
+ *
+ * This is the whole navigation model: the request index at the top of the page is an index, and
+ * the decision is made where the thing being decided actually lives.
+ */
+function targetOf(a: Ask): { section: string; label: string } | null {
+  const subEventId = a.payload.subEventId as string | undefined
+  if (a.kind === 'menu_increase' && subEventId) return { section: `fn:${subEventId}`, label: 'Review in the menu' }
+  if (a.source === 'change_request' && subEventId) return { section: `fn:${subEventId}`, label: 'Review the schedule' }
+  if (a.kind === 'room_allocation_35plus') return { section: 'rooms', label: 'Review in rooms' }
+  if (a.section === 'discount') return { section: 'pricing', label: 'Review in pricing' }
+  return null
+}
+
+/** The cells of an over-cap discount request, when it carries any. */
+function askedPrices(a: Ask): AskedPrice[] {
+  if (a.kind !== 'discount_over_cap') return []
+  return ((a.payload.lines ?? []) as AskedPrice[]).filter((l) => l && typeof l.discountedPaise === 'number')
+}
+
 /** ISO date + n days, without pulling in a date library for one sum. */
 function addDays(iso: string, n: number): string {
   if (!iso) return ''
   const d = new Date(`${iso}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() + n)
   return d.toISOString().slice(0, 10)
+}
+
+/**
+ * One collapsible part of the proposal.
+ *
+ * Closed by default and open when the GM asks for it, from its own header or from the button on
+ * a request above. `count` is how many requests are waiting inside — it is drawn as a violet
+ * pill AND spoken in words, because it is the only thing on a closed header saying there is
+ * something in there to decide.
+ */
+function Section({
+  id,
+  title,
+  meta,
+  count,
+  open,
+  flash,
+  onToggle,
+  children,
+}: {
+  id: string
+  title: string
+  meta?: string
+  count: number
+  open: boolean
+  flash: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <Card id={`section-${id}`} className={cn('scroll-mt-4', flash && 'ring-2 ring-violet-500')}>
+      <CardContent className="p-0">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={`body-${id}`}
+          className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {open ? (
+            <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          ) : (
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+          )}
+          <span className="min-w-0 flex-1">
+            <span className="font-medium">{title}</span>
+            {meta && <span className="ml-2 text-sm tabular-nums text-muted-foreground">{meta}</span>}
+          </span>
+          {count > 0 && (
+            <span className="shrink-0 rounded-full bg-violet-600 px-2 py-0.5 text-xs font-medium text-white">
+              {count} requested
+            </span>
+          )}
+        </button>
+        {open && (
+          <div id={`body-${id}`} className="space-y-4 border-t px-4 py-4">
+            {children}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 export function ApprovalBundle({ eventId }: { eventId: string }) {
@@ -121,14 +237,25 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
   const [confirming, setConfirming] = useState(false)
 
   // ── Draft state. Empty means "unchanged" — only what the GM touches is sent. ────────
-  const [verdicts, setVerdicts] = useState<Record<string, 'approve' | 'reject'>>({})
-  const [remarks, setRemarks] = useState<Record<string, string>>({})
   const [fnEdits, setFnEdits] = useState<Record<string, Partial<Fn>>>({})
   const [menuEdits, setMenuEdits] = useState<Record<string, string[]>>({})
   const [roomDraft, setRoomDraft] = useState<RoomLine[] | null>(null)
+  /** The price sheet's Discounted column, reported up by the grid. `null` = a cell is not a price. */
+  const [priceDraft, setPriceDraft] = useState<LineDraft[] | null>([])
+  const [priceRemark, setPriceRemark] = useState('')
+  /** What that column comes to, so the save bar can state it without a second copy of the sum. */
+  const [priceTotals, setPriceTotals] = useState<{ givenPaise: number; basePaise: number }>({ givenPaise: 0, basePaise: 0 })
   const [reason, setReason] = useState('')
   /** Keyed by ROW INDEX: two lines can share a shape yet each takes real rooms. */
   const [free, setFree] = useState<Record<number, { available: number; total: number }>>({})
+
+  // ── What is open, and what was just jumped to ──────────────────────────────────────
+  const [open, setOpen] = useState<Record<string, boolean>>({})
+  const [flash, setFlash] = useState<string | null>(null)
+  /** The section a request's button asked for. `n` re-fires it when the same one is clicked twice. */
+  const [jump, setJump] = useState<{ section: string; n: number } | null>(null)
+  /** Bumped after a save so the price grid re-reads a sheet the save has moved. */
+  const [gridKey, setGridKey] = useState(0)
 
   const load = useCallback(async () => {
     const [d, o, c] = await Promise.all([
@@ -139,9 +266,6 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
     setDetail(d)
     setOptions(o)
     setCatalog(c)
-    // Every pending ask starts approved — the GM's default answer is yes, and a decline is the
-    // deliberate act. He untick it, or edits the proposal underneath, to say otherwise.
-    setVerdicts(Object.fromEntries(d.asks.filter((a) => a.status === 'pending').map((a) => [a.id, 'approve' as const])))
   }, [eventId])
 
   useEffect(() => {
@@ -153,8 +277,78 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
   }, [load])
 
   const asked = useMemo(() => requestedDishes(detail?.asks ?? []), [detail])
-  const pending = detail?.asks.filter((a) => a.status === 'pending') ?? []
+  const pending = useMemo(() => detail?.asks.filter((a) => a.status === 'pending') ?? [], [detail])
   const settled = detail?.asks.filter((a) => a.status !== 'pending') ?? []
+
+  /** How many pending requests sit inside each section, for the closed headers. */
+  const countBySection = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const a of pending) {
+      const t = targetOf(a)
+      if (t) m[t.section] = (m[t.section] ?? 0) + 1
+    }
+    return m
+  }, [pending])
+
+  /** Opens a section and takes the GM to it. The ring fades; the section stays open. */
+  const jumpTo = useCallback((section: string) => {
+    setOpen((o) => ({ ...o, [section]: true }))
+    setFlash(section)
+    setJump((j) => ({ section, n: (j?.n ?? 0) + 1 }))
+    setTimeout(() => setFlash((f) => (f === section ? null : f)), 2500)
+  }, [])
+
+  /**
+   * The scroll, in an effect rather than in the click handler, so it runs AFTER the commit that
+   * opened the section. Scrolling from the handler measures a card that is still collapsed: the
+   * browser lands on its header, the body then renders underneath, and the GM arrives at the
+   * top of a section whose content is below the fold — which is the one thing the button exists
+   * to prevent.
+   *
+   * And then it follows the section down as it grows. One scroll is not enough either: a
+   * section's content arrives after it opens — the price grid fetches its sheet, the room lines
+   * their availability — and while it is still loading the page is too short to scroll that far,
+   * so the browser stops at the bottom of a page that is about to get longer. Measured: 197px
+   * of a 1,290px scroll, leaving the requested price 150px below the fold. The observer is
+   * dropped after two seconds, so it can never fight a GM who has started scrolling himself.
+   */
+  useEffect(() => {
+    if (!jump) return
+    const el = document.getElementById(`section-${jump.section}`)
+    if (!el) return
+    /**
+     * The section header, unless the thing he was sent to see would not fit under it. A
+     * Sangeet's menu is several screens of checkboxes and the requested dish can sit anywhere
+     * in it; landing on the card's name and leaving "Kimchi Salad · Requested" below the fold
+     * is the errand half-run. Measured against the SECTION, not the viewport, so it is one
+     * scroll and not a guess about where a smooth scroll has got to.
+     */
+    const scroll = () => {
+      const marked = el.querySelector('[data-requested]')
+      // 96px: the fixed Save bar, which is not screen a row can land in.
+      const room = window.innerHeight - 96
+      if (marked && marked.getBoundingClientRect().top - el.getBoundingClientRect().top > room) {
+        marked.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      } else {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    }
+    scroll()
+    const observer = new ResizeObserver(scroll)
+    observer.observe(el)
+    const timer = setTimeout(() => observer.disconnect(), 2000)
+    return () => {
+      clearTimeout(timer)
+      observer.disconnect()
+    }
+  }, [jump])
+
+  /** Stable for the grid's effect dependency — it reports its column up on every keystroke. */
+  const onPriceDraft = useCallback((d: GridDraft) => {
+    setPriceDraft(d.lines)
+    setPriceRemark(d.remark)
+    setPriceTotals({ givenPaise: d.givenPaise, basePaise: d.basePaise })
+  }, [])
 
   /** The dish list currently shown for a segment: the GM's draft if he touched it, else saved. */
   const dishesFor = useCallback(
@@ -240,10 +434,12 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
     setRoomDraft(next)
   }
 
+  const priceChanges = priceDraft?.length ?? 0
   const dirty =
     Object.keys(fnEdits).length > 0 ||
     Object.keys(menuEdits).length > 0 ||
-    roomDraft !== null
+    roomDraft !== null ||
+    priceChanges > 0
 
   async function save() {
     if (!detail) return
@@ -251,11 +447,9 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
       toast.error('This booking is locked — give a reason for the change.')
       return
     }
-    for (const a of pending) {
-      if (verdicts[a.id] === 'reject' && !(remarks[a.id] ?? '').trim()) {
-        toast.error('A declined request needs a reason.')
-        return
-      }
+    if (priceDraft === null) {
+      toast.error('A discounted price must be a number, and never more than the actual price.')
+      return
     }
 
     const edits: Record<string, unknown> = {}
@@ -271,6 +465,10 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
         unitId: r.unitId, roomType: r.roomType, count: r.count, checkIn: r.checkIn, checkOut: r.checkOut,
       }))
     }
+    if (priceDraft.length) {
+      edits.lineDiscounts = priceDraft
+      if (priceRemark.trim()) edits.discountRemark = priceRemark.trim()
+    }
     if (reason.trim()) edits.reason = reason.trim()
 
     setSaving(true)
@@ -280,12 +478,9 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
         {
           method: 'POST',
           body: JSON.stringify({
-            decisions: pending.map((a) => ({
-              id: a.id,
-              source: a.source,
-              action: verdicts[a.id] ?? 'approve',
-              remark: (remarks[a.id] ?? '').trim() || undefined,
-            })),
+            // Every pending ask is approved. His edits above are how he says no — see the note
+            // at the top of this file.
+            decisions: pending.map((a) => ({ id: a.id, source: a.source, action: 'approve' })),
             edits: Object.keys(edits).length ? edits : undefined,
           }),
         },
@@ -300,6 +495,8 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
       else {
         setConfirming(false)
         setFnEdits({}); setMenuEdits({}); setRoomDraft(null); setReason('')
+        setPriceDraft([]); setPriceRemark('')
+        setGridKey((k) => k + 1)
         await load()
       }
     } catch (e) {
@@ -320,6 +517,7 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
   if (!detail || !options || !catalog) return <p className="text-sm text-muted-foreground">Not found.</p>
 
   const p = detail.proposal
+  const toggle = (section: string) => setOpen((o) => ({ ...o, [section]: !o[section] }))
 
   return (
     <div className="space-y-6 pb-32">
@@ -356,7 +554,7 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
         </div>
       )}
 
-      {/* ── 1. The asks ─────────────────────────────────────────────────────── */}
+      {/* ── 1. The requests, as an index ─────────────────────────────────────── */}
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">
           Awaiting you{pending.length > 0 && <span className="ml-2 text-sm font-normal text-muted-foreground">{pending.length} item(s)</span>}
@@ -366,7 +564,8 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
         ) : (
           <ul className="space-y-2">
             {pending.map((a) => {
-              const verdict = verdicts[a.id] ?? 'approve'
+              const target = targetOf(a)
+              const prices = askedPrices(a)
               return (
                 <li key={a.id} className={cn('rounded-lg border p-3', PURPLE_ROW)}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -378,39 +577,32 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                         <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs font-medium text-white">Requested</span>
                       </div>
                       <p className="text-sm">{a.summary}</p>
+                      {/* The prices themselves, cell by cell. A discount request used to reach
+                          this screen as its own headline figure and nothing else, so the price
+                          being asked for — the only thing the GM is deciding — was nowhere on
+                          the page (client, 8 Sep 2026). */}
+                      {prices.length > 0 && (
+                        <ul className="space-y-0.5 text-sm">
+                          {prices.map((l) => (
+                            <li key={l.key} className="flex flex-wrap items-baseline gap-x-2 tabular-nums">
+                              <span className="text-muted-foreground">{l.label}</span>
+                              <span className="text-muted-foreground">{formatPaise(l.actualPaise)}</span>
+                              <span aria-hidden>→</span>
+                              <span className="font-medium text-violet-700 dark:text-violet-300">
+                                {formatPaise(l.discountedPaise)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       <p className="text-xs text-muted-foreground">raised by {a.raisedByName}</p>
                     </div>
-                    <div className="flex shrink-0 gap-1.5" role="group" aria-label={`Decision for ${a.summary}`}>
-                      <Button
-                        size="sm"
-                        variant={verdict === 'approve' ? 'default' : 'outline'}
-                        onClick={() => setVerdicts({ ...verdicts, [a.id]: 'approve' })}
-                        aria-pressed={verdict === 'approve'}
-                      >
-                        <Check className="size-3.5" aria-hidden /> Approve
+                    {target && (
+                      <Button size="sm" variant="outline" className="shrink-0" onClick={() => jumpTo(target.section)}>
+                        {target.label} <ChevronRight className="size-3.5" aria-hidden />
                       </Button>
-                      <Button
-                        size="sm"
-                        variant={verdict === 'reject' ? 'destructive' : 'outline'}
-                        onClick={() => setVerdicts({ ...verdicts, [a.id]: 'reject' })}
-                        aria-pressed={verdict === 'reject'}
-                      >
-                        <X className="size-3.5" aria-hidden /> Decline
-                      </Button>
-                    </div>
+                    )}
                   </div>
-                  {verdict === 'reject' && (
-                    <div className="mt-2">
-                      <Label htmlFor={`remark-${a.id}`} className="text-xs">Reason for declining (required)</Label>
-                      <Input
-                        id={`remark-${a.id}`}
-                        value={remarks[a.id] ?? ''}
-                        onChange={(e) => setRemarks({ ...remarks, [a.id]: e.target.value })}
-                        className="mt-1 h-8"
-                        placeholder="The guest was told 300 pax — hold the count"
-                      />
-                    </div>
-                  )}
                 </li>
               )
             })}
@@ -439,275 +631,298 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
 
       <Separator />
 
-      {/* ── 2. The proposal, editable ────────────────────────────────────────── */}
-      <section className="space-y-4">
+      {/* ── 2. The proposal, editable, one section at a time ─────────────────── */}
+      <section className="space-y-3">
         <div>
           <h2 className="text-lg font-semibold">The proposal</h2>
           <p className="text-sm text-muted-foreground">
-            Changes here are written straight to the booking.
+            Open a section to change it. Everything you change here is written straight to the
+            booking when you save.
           </p>
         </div>
 
         {p.functions.map((f) => {
           const edit = fnEdits[f.id] ?? {}
           const set = (patch: Partial<Fn>) => setFnEdits({ ...fnEdits, [f.id]: { ...edit, ...patch } })
+          const id = `fn:${f.id}`
           return (
-            <Card key={f.id}>
-              <CardContent className="space-y-4 py-4">
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                  <div>
-                    <Label htmlFor={`name-${f.id}`} className="text-xs">Function</Label>
-                    <Input id={`name-${f.id}`} className="mt-1 h-8" value={edit.name ?? f.name} onChange={(e) => set({ name: e.target.value })} />
+            <Section
+              key={f.id}
+              id={id}
+              title={edit.name ?? f.name}
+              meta={`${edit.date ?? f.date} · ${(edit.startTime ?? f.startTime).slice(0, 5)}–${(edit.endTime ?? f.endTime).slice(0, 5)} · ${edit.pax ?? f.pax} pax · ${formatPaise(f.subtotalPaise)}`}
+              count={countBySection[id] ?? 0}
+              open={Boolean(open[id])}
+              flash={flash === id}
+              onToggle={() => toggle(id)}
+            >
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <Label htmlFor={`name-${f.id}`} className="text-xs">Function</Label>
+                  <Input id={`name-${f.id}`} className="mt-1 h-8" value={edit.name ?? f.name} onChange={(e) => set({ name: e.target.value })} />
+                </div>
+                <div>
+                  <Label htmlFor={`date-${f.id}`} className="text-xs">Date</Label>
+                  <Input id={`date-${f.id}`} type="date" className="mt-1 h-8" value={edit.date ?? f.date} onChange={(e) => set({ date: e.target.value })} />
+                </div>
+                <div className="flex gap-2">
+                  <div className="flex-1">
+                    <Label htmlFor={`start-${f.id}`} className="text-xs">From</Label>
+                    <Input id={`start-${f.id}`} type="time" className="mt-1 h-8" value={(edit.startTime ?? f.startTime).slice(0, 5)} onChange={(e) => set({ startTime: e.target.value })} />
                   </div>
-                  <div>
-                    <Label htmlFor={`date-${f.id}`} className="text-xs">Date</Label>
-                    <Input id={`date-${f.id}`} type="date" className="mt-1 h-8" value={edit.date ?? f.date} onChange={(e) => set({ date: e.target.value })} />
-                  </div>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <Label htmlFor={`start-${f.id}`} className="text-xs">From</Label>
-                      <Input id={`start-${f.id}`} type="time" className="mt-1 h-8" value={(edit.startTime ?? f.startTime).slice(0, 5)} onChange={(e) => set({ startTime: e.target.value })} />
-                    </div>
-                    <div className="flex-1">
-                      <Label htmlFor={`end-${f.id}`} className="text-xs">To</Label>
-                      <Input id={`end-${f.id}`} type="time" className="mt-1 h-8" value={(edit.endTime ?? f.endTime).slice(0, 5)} onChange={(e) => set({ endTime: e.target.value })} />
-                    </div>
-                  </div>
-                  <div>
-                    <Label htmlFor={`pax-${f.id}`} className="text-xs">Pax</Label>
-                    <Input id={`pax-${f.id}`} type="number" min={1} className="mt-1 h-8 tabular-nums" value={edit.pax ?? f.pax} onChange={(e) => set({ pax: Number(e.target.value) })} />
+                  <div className="flex-1">
+                    <Label htmlFor={`end-${f.id}`} className="text-xs">To</Label>
+                    <Input id={`end-${f.id}`} type="time" className="mt-1 h-8" value={(edit.endTime ?? f.endTime).slice(0, 5)} onChange={(e) => set({ endTime: e.target.value })} />
                   </div>
                 </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div>
-                    <Label htmlFor={`venue-${f.id}`} className="text-xs">Venue</Label>
-                    <select
-                      id={`venue-${f.id}`}
-                      className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
-                      value={edit.bundleId ?? edit.venueId ?? f.bundleId ?? f.venueId ?? ''}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        const isBundle = options.bundles.some((b) => b.id === v)
-                        set(isBundle ? { bundleId: v, venueId: null } : { venueId: v, bundleId: null })
-                      }}
-                    >
-                      <optgroup label="Venues">
-                        {options.venues.filter((v) => v.priceable).map((v) => (
-                          <option key={v.id} value={v.id}>{v.propertyName} — {v.name}</option>
-                        ))}
-                      </optgroup>
-                      <optgroup label="Bundles">
-                        {options.bundles.map((b) => (
-                          <option key={b.id} value={b.id}>{b.name} ({b.members})</option>
-                        ))}
-                      </optgroup>
-                    </select>
-                  </div>
-                  <div className="flex items-end justify-end gap-4 text-sm">
-                    <span className="text-muted-foreground">Venue</span>
-                    <span className="tabular-nums">{f.venueRatePaise == null ? 'on approval' : formatPaise(f.venueRatePaise)}</span>
-                    <span className="text-muted-foreground">Food</span>
-                    <span className="tabular-nums">{formatPaise(f.foodAmountPaise)}</span>
-                  </div>
+                <div>
+                  <Label htmlFor={`pax-${f.id}`} className="text-xs">Pax</Label>
+                  <Input id={`pax-${f.id}`} type="number" min={1} className="mt-1 h-8 tabular-nums" value={edit.pax ?? f.pax} onChange={(e) => set({ pax: Number(e.target.value) })} />
                 </div>
+              </div>
 
-                {f.menu && (
-                  <div className="space-y-3 rounded-md border p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-medium">{f.menu.tierName}</span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {formatPaise(f.menu.perPlatePaise)} / plate × {edit.pax ?? f.pax} pax
-                      </span>
-                    </div>
-                    {f.menu.segments.map((seg) => {
-                      const chosen = dishesFor(f.id, seg)
-                      const askedHere = asked.get(`${f.id}|${seg.name}`) ?? new Set<string>()
-                      const pool = catalog.pools.find((x) => x.categoryName === seg.name)?.items ?? []
-                      // Every dish the guest has, plus everything else on offer for this heading.
-                      const all = [...new Set([...seg.dishes.map((d) => d.name), ...pool])].sort()
-                      const included = seg.basePick == null
-                      return (
-                        <div key={seg.name} className="space-y-1.5">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-medium">{seg.name}</span>
-                            <span className="text-xs text-muted-foreground tabular-nums">
-                              {included ? 'all included' : `${chosen.length} of ${seg.basePick} + ${Math.max(0, chosen.length - seg.basePick!)} extra`}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor={`venue-${f.id}`} className="text-xs">Venue</Label>
+                  <select
+                    id={`venue-${f.id}`}
+                    className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
+                    value={edit.bundleId ?? edit.venueId ?? f.bundleId ?? f.venueId ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      const isBundle = options.bundles.some((b) => b.id === v)
+                      set(isBundle ? { bundleId: v, venueId: null } : { venueId: v, bundleId: null })
+                    }}
+                  >
+                    <optgroup label="Venues">
+                      {options.venues.filter((v) => v.priceable).map((v) => (
+                        <option key={v.id} value={v.id}>{v.propertyName} — {v.name}</option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Bundles">
+                      {options.bundles.map((b) => (
+                        <option key={b.id} value={b.id}>{b.name} ({b.members})</option>
+                      ))}
+                    </optgroup>
+                  </select>
+                </div>
+                <div className="flex items-end justify-end gap-4 text-sm">
+                  <span className="text-muted-foreground">Venue</span>
+                  <span className="tabular-nums">{f.venueRatePaise == null ? 'on approval' : formatPaise(f.venueRatePaise)}</span>
+                  <span className="text-muted-foreground">Food</span>
+                  <span className="tabular-nums">{formatPaise(f.foodAmountPaise)}</span>
+                </div>
+              </div>
+
+              {f.menu && (
+                <div className="space-y-3 rounded-md border p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-medium">{f.menu.tierName}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {formatPaise(f.menu.perPlatePaise)} / plate × {edit.pax ?? f.pax} pax
+                    </span>
+                  </div>
+                  {f.menu.segments.map((seg) => {
+                    const chosen = dishesFor(f.id, seg)
+                    const askedHere = asked.get(`${f.id}|${seg.name}`) ?? new Set<string>()
+                    const pool = catalog.pools.find((x) => x.categoryName === seg.name)?.items ?? []
+                    // Every dish the guest has, plus everything else on offer for this heading.
+                    const all = [...new Set([...seg.dishes.map((d) => d.name), ...pool])].sort()
+                    const included = seg.basePick == null
+                    return (
+                      <div key={seg.name} className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-medium">{seg.name}</span>
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {included ? 'all included' : `${chosen.length} of ${seg.basePick} + ${Math.max(0, chosen.length - seg.basePick!)} extra`}
+                          </span>
+                          {askedHere.size > 0 && (
+                            <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs font-medium text-white">
+                              {askedHere.size} requested
                             </span>
-                            {askedHere.size > 0 && (
-                              <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs font-medium text-white">
-                                {askedHere.size} requested
-                              </span>
-                            )}
-                          </div>
-                          {included ? (
-                            <p className="text-xs text-muted-foreground">
-                              {seg.dishes.map((d) => d.name).join(', ') || '—'}
-                            </p>
-                          ) : (
-                            <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
-                              {all.map((dish) => {
-                                const isAsked = askedHere.has(dish)
-                                const id = `dish-${f.id}-${seg.name}-${dish}`.replace(/\s+/g, '-')
-                                return (
-                                  <label
-                                    key={dish}
-                                    htmlFor={id}
-                                    className={cn(
-                                      'flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted/60',
-                                      isAsked && PURPLE_ROW,
-                                    )}
-                                  >
-                                    <Checkbox
-                                      id={id}
-                                      checked={chosen.includes(dish)}
-                                      onCheckedChange={() => toggleDish(f.id, seg, dish)}
-                                    />
-                                    <span className="min-w-0 truncate">{dish}</span>
-                                    {isAsked && (
-                                      <span className="ml-auto shrink-0 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-300">
-                                        Requested
-                                      </span>
-                                    )}
-                                  </label>
-                                )
-                              })}
-                            </div>
                           )}
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                        {included ? (
+                          <p className="text-xs text-muted-foreground">
+                            {seg.dishes.map((d) => d.name).join(', ') || '—'}
+                          </p>
+                        ) : (
+                          <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+                            {all.map((dish) => {
+                              const isAsked = askedHere.has(dish)
+                              const dishId = `dish-${f.id}-${seg.name}-${dish}`.replace(/\s+/g, '-')
+                              return (
+                                <label
+                                  key={dish}
+                                  htmlFor={dishId}
+                                  data-requested={isAsked || undefined}
+                                  className={cn(
+                                    'flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted/60',
+                                    isAsked && PURPLE_ROW,
+                                  )}
+                                >
+                                  <Checkbox
+                                    id={dishId}
+                                    checked={chosen.includes(dish)}
+                                    onCheckedChange={() => toggleDish(f.id, seg, dish)}
+                                  />
+                                  <span className="min-w-0 truncate">{dish}</span>
+                                  {isAsked && (
+                                    <span className="ml-auto shrink-0 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-300">
+                                      Requested
+                                    </span>
+                                  )}
+                                </label>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </Section>
           )
         })}
 
         {/* Rooms */}
-        <Card>
-          <CardContent className="space-y-3 py-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-medium">Rooms</h3>
-              <span className="text-sm tabular-nums text-muted-foreground">
-                {formatPaise(p.totals.roomsPaise)} + {formatPaise(p.totals.roomsTaxPaise)} tax
-              </span>
-            </div>
-            {rooms.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No rooms on this booking.</p>
-            ) : (
-              <div className="space-y-2">
-                {rooms.map((r, i) => {
-                  const avail = free[i]
-                  const over = avail != null && r.count > avail.available
-                  return (
+        <Section
+          id="rooms"
+          title="Rooms"
+          meta={
+            rooms.length === 0
+              ? 'none on this booking'
+              : `${rooms.reduce((n, r) => n + (Number.isFinite(r.count) ? r.count : 0), 0)} rooms · ${formatPaise(p.totals.roomsPaise)} + ${formatPaise(p.totals.roomsTaxPaise)} tax`
+          }
+          count={countBySection.rooms ?? 0}
+          open={Boolean(open.rooms)}
+          flash={flash === 'rooms'}
+          onToggle={() => toggle('rooms')}
+        >
+          {rooms.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No rooms on this booking.</p>
+          ) : (
+            <div className="space-y-2">
+              {rooms.map((r, i) => {
+                const avail = free[i]
+                const over = avail != null && r.count > avail.available
+                return (
                   <div key={r.id || i} className="space-y-1">
-                  <div className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_5rem_1fr_1fr_auto]">
-                    <div>
-                      <Label className="text-xs" htmlFor={`unit-${i}`}>Lodge</Label>
-                      <select
-                        id={`unit-${i}`}
-                        className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
-                        value={r.unitId ?? ''}
-                        onChange={(e) => changeRoomUnit(i, e.target.value)}
+                    <div className="grid items-end gap-2 sm:grid-cols-[1fr_1fr_5rem_1fr_1fr_auto]">
+                      <div>
+                        <Label className="text-xs" htmlFor={`unit-${i}`}>Lodge</Label>
+                        <select
+                          id={`unit-${i}`}
+                          className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
+                          value={r.unitId ?? ''}
+                          onChange={(e) => changeRoomUnit(i, e.target.value)}
+                        >
+                          {options.lodgingUnits.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <Label className="text-xs" htmlFor={`type-${i}`}>Category</Label>
+                        {/* Only this lodge's categories — see typesFor. */}
+                        <select
+                          id={`type-${i}`}
+                          className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
+                          value={r.roomType}
+                          onChange={(e) => { const next = [...rooms]; next[i] = { ...r, roomType: e.target.value }; setRoomDraft(next) }}
+                        >
+                          {typesFor(r.unitId).map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <Label className="text-xs" htmlFor={`count-${i}`}>Rooms</Label>
+                        <Input
+                          id={`count-${i}`} type="number" min={1} max={avail?.available || undefined}
+                          className={cn('mt-1 h-8 tabular-nums', over && 'border-destructive')}
+                          aria-invalid={over || undefined}
+                          value={r.count}
+                          onChange={(e) => { const next = [...rooms]; next[i] = { ...r, count: Number(e.target.value) }; setRoomDraft(next) }}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs" htmlFor={`in-${i}`}>Check-in</Label>
+                        <Input
+                          id={`in-${i}`} type="date" className="mt-1 h-8" value={r.checkIn}
+                          onChange={(e) => { const next = [...rooms]; next[i] = { ...r, checkIn: e.target.value }; setRoomDraft(next) }}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs" htmlFor={`out-${i}`}>Check-out</Label>
+                        {/* At least one night. Equal dates is a stay of zero nights, which the
+                            server refuses — better to make it unpickable than to explain it. */}
+                        <Input
+                          id={`out-${i}`} type="date" className="mt-1 h-8" value={r.checkOut}
+                          min={r.checkIn ? addDays(r.checkIn, 1) : undefined}
+                          onChange={(e) => { const next = [...rooms]; next[i] = { ...r, checkOut: e.target.value }; setRoomDraft(next) }}
+                        />
+                      </div>
+                      <Button
+                        variant="ghost" size="sm" className="h-8"
+                        aria-label={`Remove ${r.count} × ${r.roomType}`}
+                        onClick={() => setRoomDraft(rooms.filter((_, j) => j !== i))}
                       >
-                        {options.lodgingUnits.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-                      </select>
+                        <Trash2 className="size-3.5" aria-hidden />
+                      </Button>
                     </div>
-                    <div>
-                      <Label className="text-xs" htmlFor={`type-${i}`}>Category</Label>
-                      {/* Only this lodge's categories — see typesFor. */}
-                      <select
-                        id={`type-${i}`}
-                        className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-sm"
-                        value={r.roomType}
-                        onChange={(e) => { const next = [...rooms]; next[i] = { ...r, roomType: e.target.value }; setRoomDraft(next) }}
-                      >
-                        {typesFor(r.unitId).map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <Label className="text-xs" htmlFor={`count-${i}`}>Rooms</Label>
-                      <Input
-                        id={`count-${i}`} type="number" min={1} max={avail?.available || undefined}
-                        className={cn('mt-1 h-8 tabular-nums', over && 'border-destructive')}
-                        aria-invalid={over || undefined}
-                        value={r.count}
-                        onChange={(e) => { const next = [...rooms]; next[i] = { ...r, count: Number(e.target.value) }; setRoomDraft(next) }}
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs" htmlFor={`in-${i}`}>Check-in</Label>
-                      <Input
-                        id={`in-${i}`} type="date" className="mt-1 h-8" value={r.checkIn}
-                        onChange={(e) => { const next = [...rooms]; next[i] = { ...r, checkIn: e.target.value }; setRoomDraft(next) }}
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs" htmlFor={`out-${i}`}>Check-out</Label>
-                      {/* At least one night. Equal dates is a stay of zero nights, which the
-                          server refuses — better to make it unpickable than to explain it. */}
-                      <Input
-                        id={`out-${i}`} type="date" className="mt-1 h-8" value={r.checkOut}
-                        min={r.checkIn ? addDays(r.checkIn, 1) : undefined}
-                        onChange={(e) => { const next = [...rooms]; next[i] = { ...r, checkOut: e.target.value }; setRoomDraft(next) }}
-                      />
-                    </div>
-                    <Button
-                      variant="ghost" size="sm" className="h-8"
-                      aria-label={`Remove ${r.count} × ${r.roomType}`}
-                      onClick={() => setRoomDraft(rooms.filter((_, j) => j !== i))}
-                    >
-                      <Trash2 className="size-3.5" aria-hidden />
-                    </Button>
+                    {/* Live from the lodging inventory — the same rows the lodging calendar draws. */}
+                    {avail && (
+                      <p className={cn('text-xs', over ? 'text-destructive' : 'text-muted-foreground')}>
+                        {over
+                          ? `Only ${avail.available} of ${avail.total} free over these nights — this line asks for ${r.count}.`
+                          : `${avail.available} of ${avail.total} free over these nights.`}
+                      </p>
+                    )}
                   </div>
-                  {/* Live from the lodging inventory — the same rows the lodging calendar draws. */}
-                  {avail && (
-                    <p className={cn('text-xs', over ? 'text-destructive' : 'text-muted-foreground')}>
-                      {over
-                        ? `Only ${avail.available} of ${avail.total} free over these nights — this line asks for ${r.count}.`
-                        : `${avail.available} of ${avail.total} free over these nights.`}
-                    </p>
-                  )}
-                  </div>
-                  )
-                })}
-              </div>
-            )}
-            <Button
-              variant="outline" size="sm"
-              onClick={() => {
-                const unitId = options.lodgingUnits[0]?.id ?? null
-                // Check-out defaults a day past check-in: a stay of zero nights is not a stay,
-                // and the server rejects it.
-                const checkIn = p.event.plannedFrom ?? p.functions[0]?.date ?? ''
-                const checkOut = p.event.plannedTo && p.event.plannedTo > checkIn ? p.event.plannedTo : addDays(checkIn, 1)
-                setRoomDraft([
-                  ...rooms,
-                  {
-                    id: '', unitId, roomType: typesFor(unitId)[0] ?? '',
-                    count: 1, checkIn, checkOut, nights: 1, ratePaise: 0, amountPaise: 0,
-                  },
-                ])
-              }}
-            >
-              <Plus className="size-3.5" aria-hidden /> Add a room line
-            </Button>
-          </CardContent>
-        </Card>
+                )
+              })}
+            </div>
+          )}
+          <Button
+            variant="outline" size="sm"
+            onClick={() => {
+              const unitId = options.lodgingUnits[0]?.id ?? null
+              // Check-out defaults a day past check-in: a stay of zero nights is not a stay,
+              // and the server rejects it.
+              const checkIn = p.event.plannedFrom ?? p.functions[0]?.date ?? ''
+              const checkOut = p.event.plannedTo && p.event.plannedTo > checkIn ? p.event.plannedTo : addDays(checkIn, 1)
+              setRoomDraft([
+                ...rooms,
+                {
+                  id: '', unitId, roomType: typesFor(unitId)[0] ?? '',
+                  count: 1, checkIn, checkOut, nights: 1, ratePaise: 0, amountPaise: 0,
+                },
+              ])
+            }}
+          >
+            <Plus className="size-3.5" aria-hidden /> Add a room line
+          </Button>
+        </Section>
 
         {/* The bill in two columns, the same tool the counter uses (client, 20 Aug 2026:
             "same thing do with the GM one too so that whole site should be unified as same
             discount method"). His prices are not held to the 10% cap and take effect at once —
-            the server decides that, so this screen does not have to claim it. It saves on its
-            own button rather than with the bundle below: a price is a price, and holding it
-            behind the same Save as a menu revision made the two look like one decision. */}
-        <Card>
-          <CardContent className="space-y-3 py-4">
-            <h3 className="font-medium">Prices &amp; discounts</h3>
-            <DiscountGrid eventId={eventId} editable onChanged={load} />
-          </CardContent>
-        </Card>
+            the server decides that, so this screen does not have to claim it.
+
+            Controlled: the grid reports its column up and saves nothing itself. Until 8 Sep it
+            had its own Save button, on the theory that "a price is a price" and should not hide
+            behind the same button as a menu revision. In the field that meant a GM answering a
+            price request pressed Save here, then Save again at the foot of the page, and a
+            half-done decision was one forgotten click away. */}
+        <Section
+          id="pricing"
+          title="Prices & discounts"
+          meta={`${formatPaise(p.totals.totalPaise)} total${priceChanges > 0 ? ` · ${priceChanges} price(s) changed` : ''}`}
+          count={countBySection.pricing ?? 0}
+          open={Boolean(open.pricing)}
+          flash={flash === 'pricing'}
+          onToggle={() => toggle('pricing')}
+        >
+          <DiscountGrid eventId={eventId} editable reloadKey={gridKey} onDraftChange={onPriceDraft} />
+        </Section>
       </section>
 
       {/* ── 3. Save ──────────────────────────────────────────────────────────── */}
@@ -726,11 +941,28 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
               </div>
             )}
             <p className="text-xs text-muted-foreground">
-              {pending.filter((a) => (verdicts[a.id] ?? 'approve') === 'approve').length} approving,{' '}
-              {pending.filter((a) => verdicts[a.id] === 'reject').length} declining
-              {dirty && ' · proposal edited'}
+              {pending.length} request{pending.length === 1 ? '' : 's'} will be approved as the proposal now stands
+              {priceChanges > 0 && ` · ${priceChanges} price(s) re-set`}
+              {dirty && priceChanges === 0 && ' · proposal edited'}
               {detail.willReissueInvoice && dirty && ' · the guest’s document will be re-issued'}
             </p>
+            {/* THE DISCOUNT, IN BOTH CURRENCIES, WHEREVER HE IS ON THE PAGE (client, 8 Sep 2026:
+                "my GM can think in money and percentage as well"). The price sheet states the
+                same figure in full, but it sits under a table that can run to twenty rows — so
+                a GM typing at row six had the consequence of what he was typing off his screen.
+                This bar is fixed, so it never is. */}
+            {priceTotals.basePaise > 0 && (
+              <p className="text-xs">
+                <span className="text-muted-foreground">Discount on this booking</span>{' '}
+                <span className="font-medium tabular-nums">
+                  {formatPaise(priceTotals.givenPaise)} ·{' '}
+                  {((priceTotals.givenPaise / priceTotals.basePaise) * 100).toFixed(1)}%
+                </span>{' '}
+                <span className="text-muted-foreground tabular-nums">
+                  of {formatPaise(priceTotals.basePaise)}
+                </span>
+              </p>
+            )}
           </div>
           {confirming ? (
             <div className="flex items-center gap-2">
@@ -743,10 +975,10 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
           ) : (
             <Button
               onClick={() => (detail.isLocked ? setConfirming(true) : save())}
-              disabled={saving || (pending.length === 0 && !dirty)}
+              disabled={saving || priceDraft === null || (pending.length === 0 && !dirty)}
             >
               {saving && <Loader2 className="size-4 animate-spin" aria-hidden />}
-              Save decision
+              Save &amp; approve
             </Button>
           )}
         </div>

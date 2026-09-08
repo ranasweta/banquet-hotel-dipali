@@ -6,7 +6,7 @@ import { badRequest, conflict, notFound } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
 import { AUTHORITY_ROLES } from '@/lib/post-confirm'
 import { getIntSettings } from '@/lib/settings'
-import { priceProposal } from '@/lib/pricing'
+import { foodAndAddonTotal, priceProposal } from '@/lib/pricing'
 import { roomGstBp, taxOf } from '@/lib/tax'
 
 /**
@@ -106,6 +106,21 @@ export type SheetLine = {
   discountedPaise: number
   /** Whether this line's discount is still waiting on the Authority (shown, not applied). */
   pending: boolean
+  /**
+   * The price the pending request ASKS for, null when nothing is pending on this line.
+   *
+   * It used to be nowhere. A save over the cap wrote the gap, linked it to a `discount_over_cap`
+   * exception, and every reader — this sheet included — then priced the line at its actual,
+   * flagged "Requested" and showed no figure at all. The Authority opened the queue to a
+   * one-line summary saying a discount of ₹10,000 was over the cap and could not see that the
+   * ₹1,51,000 hall was being given at ₹1,41,000, still less type ₹1,45,000 over it (client,
+   * 8 Sep 2026: "it doesn't mean that 141000 should not be shown to the GM"). The figure is the
+   * whole decision, so it travels on the line it belongs to.
+   *
+   * `discountedPaise` is untouched: it is still what is IN FORCE, and a counter must not collect
+   * on a price nobody has agreed to.
+   */
+  requestedPaise: number | null
 }
 export type SheetRoomLine = SheetLine & {
   count: number
@@ -166,6 +181,11 @@ export type DiscountSheet = {
   discountedTotalPaise: number
   /** Σ (actual − discounted) across every line, clamped. The old lump rows are NOT in it. */
   lineDiscountPaise: number
+  /**
+   * Σ the gaps that are still waiting on the Authority — what the guest would additionally be
+   * given if he approves everything as asked. Not in `lineDiscountPaise`, and not in force.
+   */
+  pendingDiscountPaise: number
   /** Pre-20-Aug-2026 lump discounts, still effective and still subtracted at the end. */
   lumpDiscountPaise: number
   /** No rate card for these functions (BR-R1) — confirm is blocked until one exists. */
@@ -213,7 +233,10 @@ export async function effectiveLineGaps(
  * END of the bill; every line discount has already been applied to the line it prices, so adding
  * the two together anywhere would take the same money off twice.
  */
-export async function lumpDiscountPaise(eventId: string, exec: Pick<typeof db, 'execute'> = db): Promise<number> {
+export async function lumpDiscountPaise(
+  eventId: string,
+  exec: Pick<typeof db, 'select' | 'execute'> = db,
+): Promise<number> {
   const subs = await headSubtotals(eventId, exec)
   const rows = (await exec.execute(sql`
     SELECT d.head::text AS head, d.percent_bp AS "percentBp", d.amount_paise AS "amountPaise",
@@ -306,7 +329,8 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
   const line = (key: string, label: string, actualPaise: number): SheetLine => {
     const g = gaps.get(key)
     // A pending gap is DISPLAYED but not applied — the Authority has not agreed to it yet, and
-    // a counter that collected on it would be short the moment he said no.
+    // a counter that collected on it would be short the moment he said no. Displayed means
+    // displayed as a NUMBER, in `requestedPaise`, not merely as a badge.
     const gapPaise = g && !g.pending ? g.gapPaise : 0
     return {
       key,
@@ -314,6 +338,7 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
       actualPaise,
       discountedPaise: Math.max(0, actualPaise - gapPaise),
       pending: Boolean(g?.pending),
+      requestedPaise: g?.pending ? Math.max(0, actualPaise - g.gapPaise) : null,
     }
   }
 
@@ -421,6 +446,12 @@ export async function discountSheet(eventId: string, exec: Pick<typeof db, 'sele
     lineDiscountPaise:
       functions.reduce((n, f) => n + f.actualSubtotalPaise - f.discountedSubtotalPaise, 0) +
       roomGroups.reduce((n, g) => n + g.actualSubtotalPaise - g.discountedSubtotalPaise, 0),
+    // What is still being asked for, measured the same way and clamped the same way, so
+    // effective + pending is the figure the Authority is actually deciding.
+    pendingDiscountPaise: [
+      ...functions.flatMap((f) => (f.food ? [f.venue, f.food] : [f.venue])),
+      ...roomGroups.flatMap((g) => g.lines),
+    ].reduce((n, l) => n + (l.requestedPaise == null ? 0 : Math.max(0, l.actualPaise - l.requestedPaise)), 0),
     lumpDiscountPaise: await lumpDiscountPaise(eventId, exec),
     missing: pricing.missing,
   }
@@ -437,34 +468,65 @@ type HeadSubtotals = { venue: number; menu: number; room: number; overall: numbe
  * recomputes against, and the base the cap is a percentage of. Deliberately undiscounted:
  * measuring the cap on prices a discount had already reduced would let each discount enlarge
  * the room the next one has.
+ *
+ * IT IS PRICED THROUGH `lib/pricing.ts`, not by a second copy of the arithmetic here (client,
+ * 8 Sep 2026: "the cap calculation is also coming wrong"). The copy it replaces summed a rate
+ * for EVERY function, which broke the rule that a hall is hired by the DAY and the day's first
+ * function carries the whole let (CLAUDE.md rule 3) — three functions in the Imperial on one
+ * day put three hall charges into the base and inflated an enquiry's 10% by two-thirds of a
+ * hall. It also left out the Chef's priced delicacies and the bar, both of which
+ * `recomputeProposalTotal` puts INTO `proposal_total_paise`. So the two branches of
+ * `discountCap` below — the stored total for a confirmed booking, this for an enquiry — were
+ * measuring different bills, and the cap moved at confirmation without a price changing.
+ * They agree now, line for line.
  */
-async function headSubtotals(eventId: string, exec: Pick<typeof db, 'execute'> = db): Promise<HeadSubtotals> {
-  const [row] = (await exec.execute(sql`
-    SELECT
-      COALESCE((SELECT sum(COALESCE(NULLIF(se.venue_rate_paise, 0),
-                 (SELECT rc.rate_paise FROM venue_rate_cards rc
-                   WHERE ((se.venue_id IS NOT NULL AND rc.venue_id = se.venue_id)
-                       OR (se.bundle_id IS NOT NULL AND rc.bundle_id = se.bundle_id))
-                     AND rc.event_type = e.event_type
-                     AND rc.effective_from <= se.event_date
-                   ORDER BY rc.effective_from DESC LIMIT 1), 0))
-                 FROM sub_events se JOIN events e ON e.id = se.event_id
-                WHERE se.event_id = ${eventId}), 0)::bigint AS venue,
-      (COALESCE((SELECT sum(se.pax::bigint * (m.base_rate_paise + m.surcharge_paise))
-                   FROM sub_event_menus m JOIN sub_events se ON se.id = m.sub_event_id
-                  WHERE se.event_id = ${eventId}), 0)
-       + COALESCE((SELECT sum(a.qty::bigint * a.rate_paise)
-                     FROM sub_event_addons a JOIN sub_events se ON se.id = a.sub_event_id
-                    WHERE se.event_id = ${eventId}), 0))::bigint AS menu,
-      COALESCE((SELECT sum(rr.count::bigint * (rr.check_out - rr.check_in)
+async function headSubtotals(
+  eventId: string,
+  exec: Pick<typeof db, 'select' | 'execute'> = db,
+): Promise<HeadSubtotals> {
+  const [ev] = await exec
+    .select({ eventType: schema.events.eventType })
+    .from(schema.events)
+    .where(eq(schema.events.id, eventId))
+    .limit(1)
+  if (!ev) throw notFound('Event not found')
+
+  const [subs, food, roomRows] = await Promise.all([
+    exec.execute(sql`
+      SELECT se.id, se.name, se.event_date::text AS "eventDate", se.start_time::text AS "startTime",
+             se.venue_id AS "venueId", se.bundle_id AS "bundleId",
+             se.venue_rate_paise AS "venueRatePaise"
+        FROM sub_events se WHERE se.event_id = ${eventId}
+       ORDER BY se.event_date, se.start_time
+    `) as unknown as Promise<
+      {
+        id: string; name: string; eventDate: string; startTime: string
+        venueId: string | null; bundleId: string | null; venueRatePaise: number | null
+      }[]
+    >,
+    foodAndAddonTotal(eventId, exec),
+    exec.execute(sql`
+      SELECT COALESCE((SELECT sum(rr.count::bigint * (rr.check_out - rr.check_in)
                           * COALESCE(rr.rate_paise, (SELECT min(r.rack_rate_paise) FROM rooms r
                                        WHERE r.room_type = rr.room_type AND r.is_active
                                          AND (rr.unit_id IS NULL OR r.unit_id = rr.unit_id)), 0))
                  FROM room_requirements rr WHERE rr.event_id = ${eventId}), 0)::bigint AS room
-  `)) as unknown as { venue: number; menu: number; room: number }[]
-  const venue = Number(row!.venue)
-  const menu = Number(row!.menu)
-  const room = Number(row!.room)
+    `) as unknown as Promise<{ room: number }[]>,
+  ])
+
+  const pricing = await priceProposal(ev.eventType, subs, exec)
+  // The same expression `discountSheet` prices a venue line with, and for the same two reasons:
+  // the confirm-time snapshot wins over today's rate card, so a re-dated card cannot move a
+  // booking already quoted, and a function whose venue-day is already paid for adds nothing.
+  const venue = subs.reduce((n, s) => {
+    if (pricing.coveredBy.has(s.id)) return n
+    const snapshot = Number(s.venueRatePaise ?? 0)
+    return n + (snapshot > 0 ? snapshot : (pricing.rates.get(s.id) ?? 0))
+  }, 0)
+  // "menu" is the whole food-and-extras head the legacy percentage rows were written against:
+  // plates (delicacies included, as the bill charges them), add-ons and the bar.
+  const menu = Number(food.foodPaise) + Number(food.addonPaise) + Number(food.barPaise)
+  const room = Number(roomRows[0]!.room)
   return { venue, menu, room, overall: venue + menu + room }
 }
 
@@ -499,16 +561,26 @@ export type DiscountCap = {
   capPaise: number
   /** Effective discounts already given — what is eaten out of the cap. */
   usedPaise: number
+  /**
+   * Discounts asked for and not yet decided. Kept apart from `usedPaise` because they are not
+   * in force — and reported at all because the Authority deciding them has to see what the
+   * booking's total discount BECOMES if he says yes (client, 8 Sep 2026: "it should also show
+   * the current total % discounted from total").
+   */
+  pendingPaise: number
   /** capPaise − usedPaise, floored at zero: what a manager still has to give. */
   headroomPaise: number
 }
 
 /**
- * The 10% ceiling and how much of it is spent. One definition, read by the save below, by
- * confirm's re-test, and by the screen that warns a manager before he crosses it.
+ * The 10% ceiling, how much of it is spent, and how much is being asked for. One definition,
+ * read by the save below, by confirm's re-test, and by the screen that warns a manager before
+ * he crosses it.
  *
- * A confirmed booking measures against its stored proposal total (venue+food) plus rooms; an
- * enquiry has no stored total yet, so it measures the live overall. Tax is in neither.
+ * A confirmed booking measures against its stored proposal total (venue + food + add-ons + bar)
+ * plus rooms; an enquiry has no stored total yet, so it measures the live overall. Since
+ * `headSubtotals` was moved onto `lib/pricing.ts` the two are the same arithmetic. Tax is in
+ * neither.
  */
 export async function discountCap(
   eventId: string,
@@ -524,12 +596,16 @@ export async function discountCap(
   const subs = await headSubtotals(eventId, exec)
   const capBasePaise = ev.proposalTotalPaise > 0 ? ev.proposalTotalPaise + subs.room : subs.overall
   const capPaise = percentOfPaise(capBasePaise, discount_cap_pct)
-  const usedPaise = await givenDiscountPaise(eventId, exec)
+  // One sheet, read twice — `givenDiscountPaise` builds the same one, and the pending half is
+  // only on the sheet.
+  const sheet = await discountSheet(eventId, exec)
+  const usedPaise = sheet.lineDiscountPaise + sheet.lumpDiscountPaise
   return {
     capPct: discount_cap_pct,
     capBasePaise,
     capPaise,
     usedPaise,
+    pendingPaise: sheet.pendingDiscountPaise,
     headroomPaise: Math.max(0, capPaise - usedPaise),
   }
 }
@@ -568,6 +644,7 @@ export async function setLineDiscounts(
   lines: LineDiscountInput[],
   remark = '',
   tx?: Tx,
+  opts: { allowLocked?: boolean } = {},
 ): Promise<SetLineDiscountsResult> {
   if (lines.length === 0) return { deferred: false, changed: 0, combinedPaise: 0, capPaise: 0 }
   for (const l of lines) {
@@ -579,18 +656,37 @@ export async function setLineDiscounts(
   const run = async (t: Tx): Promise<SetLineDiscountsResult> => {
     const [ev] = await t.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, eventId)).limit(1)
     if (!ev) throw notFound('Event not found')
-    if (LOCKED_STATES.has(ev.status)) throw conflict('This event is locked — discounts can no longer change.')
+    // `allowLocked` is `lib/gm-authority.ts` and nothing else: the Authority may edit a booking
+    // in ANY status (CLAUDE.md rule 6), and by the time it calls here it has already demanded
+    // his reason, turned the override GUC on, and lined up the invoice re-issue. The public
+    // route never passes it, so a locked booking is still frozen for everyone else.
+    if (!opts.allowLocked && LOCKED_STATES.has(ev.status)) {
+      throw conflict('This event is locked — discounts can no longer change.')
+    }
 
     const sheet = await discountSheet(eventId, t)
-    const actuals = new Map<string, { actual: number; label: string; wasPaise: number }>()
+    type LineMeta = { actual: number; label: string; wasPaise: number; requestedPaise: number | null }
+    const actuals = new Map<string, LineMeta>()
     for (const f of sheet.functions) {
       for (const l of [f.venue, f.food]) {
-        if (l) actuals.set(l.key, { actual: l.actualPaise, label: `${f.name}: ${l.label}`, wasPaise: l.discountedPaise })
+        if (l) {
+          actuals.set(l.key, {
+            actual: l.actualPaise,
+            label: `${f.name}: ${l.label}`,
+            wasPaise: l.discountedPaise,
+            requestedPaise: l.requestedPaise,
+          })
+        }
       }
     }
     for (const g of sheet.roomGroups) {
       for (const l of g.lines) {
-        actuals.set(l.key, { actual: l.actualPaise, label: `${g.lodgeName ?? 'Lodge'}: ${l.label}`, wasPaise: l.discountedPaise })
+        actuals.set(l.key, {
+          actual: l.actualPaise,
+          label: `${g.lodgeName ?? 'Lodge'}: ${l.label}`,
+          wasPaise: l.discountedPaise,
+          requestedPaise: l.requestedPaise,
+        })
       }
     }
 
@@ -621,6 +717,16 @@ export async function setLineDiscounts(
 
     // Whatever these lines held goes, pending request and all: one line holds one price, and a
     // superseded request must not sit in the queue waiting to overwrite the price that replaced it.
+    //
+    // A REQUEST GOES WHOLE, and that is why the sibling rows are collected before anything is
+    // deleted. One save over the cap raises ONE exception covering every cell in it, so a
+    // three-line request has three `discounts` rows pointing at one `exceptions` row. Touching
+    // one of those lines used to delete that line and then its exception — while the other two
+    // rows still referenced it. `discounts.exception_id` has no ON DELETE clause, so Postgres
+    // refused with a foreign-key violation and the whole save died with a 500: re-typing one
+    // price of an over-cap request was simply impossible, which is precisely what the Authority
+    // opens the screen to do. Superseding any cell of a request now retires the request and
+    // every cell of it, none of which was ever in force.
     const touched = sql.join(
       lines.map((l) => sql`${l.key}`),
       sql`, `,
@@ -630,11 +736,25 @@ export async function setLineDiscounts(
       WHERE event_id = ${eventId} AND line_key IN (${touched})
     `)) as unknown as { id: string; exceptionId: string | null }[]
     if (old.length > 0) {
+      // PENDING requests only. An exception that has already been decided leaves its rows in
+      // force on lines this save never mentioned, and sweeping those away would quietly cancel
+      // a discount the Authority granted.
+      const linked = [...new Set(old.map((o) => o.exceptionId).filter((id): id is string => id != null))]
+      const retired = linked.length
+        ? (
+            (await t.execute(sql`
+              SELECT id::text AS id FROM exceptions
+              WHERE id IN (${sql.join(linked.map((id) => sql`${id}`), sql`, `)}) AND status = 'pending'
+            `)) as unknown as { id: string }[]
+          ).map((r) => r.id)
+        : []
+      if (retired.length > 0) {
+        const ids = sql.join(retired.map((id) => sql`${id}`), sql`, `)
+        await t.execute(sql`DELETE FROM discounts WHERE event_id = ${eventId} AND exception_id IN (${ids})`)
+      }
       await t.execute(sql`DELETE FROM discounts WHERE event_id = ${eventId} AND line_key IN (${touched})`)
-      for (const o of old) {
-        if (o.exceptionId) {
-          await t.delete(schema.exceptions).where(and(eq(schema.exceptions.id, o.exceptionId), eq(schema.exceptions.status, 'pending')))
-        }
+      for (const id of retired) {
+        await t.delete(schema.exceptions).where(and(eq(schema.exceptions.id, id), eq(schema.exceptions.status, 'pending')))
       }
     }
 
@@ -684,10 +804,16 @@ export async function setLineDiscounts(
 
     // Line by line, in rupees, so the trail says which price moved and to what — not "the
     // discounts changed". This is the whole record now that the remark is optional.
+    //
+    // A line that had a REQUEST on it is always recorded, even when the price ends up where it
+    // already was. That case is the Authority REFUSING an ask by typing the actual back
+    // (CLAUDE.md UI conventions: the edit is the verdict), and the pending rows are being
+    // deleted a few lines above. Skipping it because "nothing moved" would delete a request and
+    // write nothing anywhere — the one decision on this screen with no record of itself.
     let changed = 0
     for (const l of lines) {
       const meta = actuals.get(l.key)!
-      if (meta.wasPaise === l.discountedPaise) continue
+      if (meta.wasPaise === l.discountedPaise && meta.requestedPaise == null) continue
       changed += 1
       await audit(t, actor, {
         entity: 'discounts',
@@ -695,7 +821,7 @@ export async function setLineDiscounts(
         eventId,
         action: 'update',
         field: meta.label,
-        oldValue: rupees(meta.wasPaise),
+        oldValue: meta.requestedPaise != null ? `${rupees(meta.requestedPaise)} requested` : rupees(meta.wasPaise),
         newValue: `${rupees(l.discountedPaise)} of ${rupees(meta.actual)}${
           overCap ? ' (over cap — pending)' : uncapped && combinedPaise > capPaise ? ' (Authority, uncapped)' : ''
         }${remark ? ` — ${remark}` : ''}`,

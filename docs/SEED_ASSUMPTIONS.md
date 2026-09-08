@@ -783,7 +783,24 @@ Semi Suite and Semi Deluxe in the lower one.
 **Dormitories are excluded** (client, same instruction). Palace's is ₹35,000 a night and
 Regency's ₹50,000, so a rate test alone would put both in the top band — but that rate buys a
 room of 18–30 beds, roughly ₹1,900 a head, and the threshold is written for a room one party
-sleeps in. A dormitory stays at 5% whatever it costs.
+sleeps in.
+
+**Amended 8 Sep 2026 (client): a dormitory carries NO room GST at all.** *"for the dormitory we
+don't want to take 5% tax."* It was held at 5% from 17 Aug; the rate is nil now. Three
+consequences worth stating, because none of them is what "exempt" would do on its own:
+
+* It is **nil, not hidden.** The line is still a `rooms` line and still collected (rule 11's
+  section split is untouched); the tax it draws is simply zero. Nothing moves between the
+  collected and shown buckets, so no balance or threshold changes shape.
+* It gets **its own band on the document.** `totals.roomTaxSplit` grew a third member,
+  `exempt`, because a dormitory left inside the 5% band's base would print "GST 5% — rooms on
+  ₹70,000" beside ₹0.00 of tax — a base the guest cannot multiply out.
+* **The room is still charged.** Only the tax is nil. `roomsPaise` is unaffected, and so is the
+  advance measured on it.
+
+A dormitory question for the CA sits beside the one below: this is a rate the hotel has chosen
+not to charge, recorded as instructed, and it is a one-constant change in `lib/tax.ts`
+(`ROOM_GST_DORM_BP`) if the answer comes back different.
 
 The carve-out is keyed on the **category name** — anything containing `dorm`, case-insensitive —
 because `room_type` is free text and each lodge names its own categories (there is no enum to

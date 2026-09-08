@@ -253,8 +253,11 @@ function CategoryRow({
           </span>
           <span className="tabular-nums">{formatPaise(cat.ratePaise)} / night</span>
           {/* The band the rate and the name land this category in, shown where they are typed
-              rather than discovered later on a guest's bill. */}
-          <span className="text-xs text-muted-foreground">GST {cat.gstRateBp / 100}%</span>
+              rather than discovered later on a guest's bill. A dormitory is exempt outright
+              (client, 8 Sep 2026), and "GST 0%" would read as an unpriced category. */}
+          <span className="text-xs text-muted-foreground">
+            {cat.gstRateBp === 0 ? 'GST exempt' : `GST ${cat.gstRateBp / 100}%`}
+          </span>
           <span className="text-xs text-muted-foreground">{cat.beds} bed{cat.beds === 1 ? '' : 's'}</span>
           {/* Why a reduction will be refused, before it is attempted. */}
           {cat.committedPeak > 0 && (
