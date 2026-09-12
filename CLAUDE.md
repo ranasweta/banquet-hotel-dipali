@@ -118,7 +118,15 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      Over the cap → Higher Authority approval, as **one** request carrying every cell of that
      save, never one per cell. Per-room caps (BR-D1) are retired now
      that rooms are booked in bulk. Because a frozen rupee figure cannot shrink with the
-     bill the way a percentage did, `confirmEvent` re-tests the same cap once more.
+     bill the way a percentage did, `confirmEvent` re-tests the same cap once more — and
+     **refers, it does not refuse** (client, 12 Sep 2026). Over the cap at confirmation, the
+     booking is confirmed anyway (advance recorded, venues held) and ONE `discount_over_cap`
+     request goes to the Authority's queue, because the old refusal told the manager to "ask
+     the Higher Authority" from a screen that could not ask him — a guest at the counter, and a
+     phone call. The discount rows are deliberately NOT linked to that request: they were given
+     legally and are in force, and linking them would drop the guest's price at the very moment
+     he is confirmed. Refusing it is what it always is — the Authority types the actual price
+     back on the approvals screen. Nothing is raised when he confirms it himself.
      **The base is priced through `lib/pricing.ts`, never a second copy** (client, 8 Sep 2026:
      "the cap calculation is also coming wrong"). The copy it replaced summed a rate for every
      function, so a hall hired for a day and used three times counted three times, and it left

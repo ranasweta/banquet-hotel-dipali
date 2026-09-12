@@ -702,11 +702,21 @@ export function BookingWizard({
           quote={quote}
           alreadyConfirmed={eventStatus !== 'enquiry'}
           onBack={() => setStep(3)}
-          onConfirmed={(code) => {
+          onConfirmed={(code, discountReferredPaise) => {
             // One outcome, whatever came in against the 25% (client, 8 Sep 2026). A guest who is
             // present and pays something is confirmed, and the dates are held — there is nothing
             // conditional left to tell the manager about at this moment.
             toast.success(`Confirmed — ${code}`)
+            // Unless the discount went over the cap on the way, in which case she is told what
+            // happened to it (client, 12 Sep 2026). It is news and not a failure: the booking is
+            // made, the money is banked, and the Authority decides the price from his queue.
+            if (discountReferredPaise != null) {
+              toast.info(
+                `The combined discount of ${formatPaise(discountReferredPaise)} is over the 10% cap — ` +
+                  `it has gone to the Higher Authority for approval. The booking is confirmed and the payment is recorded.`,
+                { duration: 10_000 },
+              )
+            }
             router.push('/calendar')
           }}
           onDone={() => {
@@ -1322,7 +1332,7 @@ function ReviewStep({
   // no advance to collect and nothing to re-confirm — the step just closes.
   alreadyConfirmed: boolean
   onBack: () => void
-  onConfirmed: (code: string) => void
+  onConfirmed: (code: string, discountReferredPaise: number | null) => void
   onDone: () => void
   onDiscountChanged: () => void
 }) {
@@ -1354,13 +1364,15 @@ function ReviewStep({
     if (!receipt.trim() || !receivedOn) return toast.error('Enter the receipt number and date')
     setBusy(true)
     try {
-      const { event } = await api<{ event: { code: string; advanceShortfallPaise: number } }>(`/events/${eventId}/confirm`, {
+      const { event } = await api<{
+        event: { code: string; advanceShortfallPaise: number; discountReferredPaise: number | null }
+      }>(`/events/${eventId}/confirm`, {
         method: 'POST',
         body: JSON.stringify({
           advance: { amount_paise: rupeesToPaise(Number(amount)), mode, receipt_no: receipt, received_on: receivedOn },
         }),
       })
-      onConfirmed(event.code)
+      onConfirmed(event.code, event.discountReferredPaise)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Confirmation failed')
     } finally {
