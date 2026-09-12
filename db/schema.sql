@@ -348,9 +348,9 @@ CREATE TABLE room_allocations (
   -- FR-4.3: same room can never overlap two events — database-guaranteed
   EXCLUDE USING gist (room_id WITH =, stay WITH &&)
 );
--- BR-L2 (35+ rooms => Higher Authority) and BR-D1 (Rs.500/Rs.1000 per-room discount
--- caps by room_type) are validated in the allocation service, which raises an
--- exception row and defers commit until approval.
+-- BR-D1 (Rs.500/Rs.1000 per-room discount caps by room_type) is validated in the
+-- allocation service. BR-L2 (35+ rooms => Higher Authority) was withdrawn on
+-- 12 Sep 2026 — see migration 0037; a booking may take any number of rooms.
 
 -- ============================================================
 -- 9. Discounts (BR-D1, BR-D2)

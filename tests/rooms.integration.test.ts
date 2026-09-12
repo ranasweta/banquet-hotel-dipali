@@ -1,9 +1,9 @@
 /**
- * M5 acceptance (the rooms module, FR-4.x, BR-L1/L2, BR-D1):
+ * M5 acceptance (the rooms module, FR-4.x, BR-L1, BR-D1):
  *
  *   - an overlapping allocation on the same room fails cleanly (409, DB exclusion);
- *   - a 35-room allocation sits pending as an exception until Authority approves (nothing
- *     inserted yet);
+ *   - a booking takes any number of rooms with no approval raised (BR-L2 withdrawn,
+ *     client 12 Sep 2026), the lodge's physical inventory being the only bound;
  *   - a Rs.600 discount on a deluxe room is rejected, Rs.900 on a suite is accepted (BR-D1).
  *
  * Plus the lawn-wedding Palace override (BR-L1), reconciliation counts, and the
@@ -120,7 +120,7 @@ d('allocation + overlap guard (FR-4.3)', () => {
     const [room] = await anyRooms('Regency', 1)
 
     const res = await rooms.allocateRooms(actor, a, [{ roomId: room!, checkIn: '2026-09-01', checkOut: '2026-09-03' }])
-    expect(res).toEqual({ deferred: false, allocated: 1 })
+    expect(res).toEqual({ allocated: 1 })
 
     // Overlapping stay on the same room → clean 409.
     await expect(
@@ -129,7 +129,7 @@ d('allocation + overlap guard (FR-4.3)', () => {
 
     // Back-to-back (half-open) is allowed.
     const bb = await rooms.allocateRooms(actor, b, [{ roomId: room!, checkIn: '2026-09-03', checkOut: '2026-09-05' }])
-    expect(bb).toEqual({ deferred: false, allocated: 1 })
+    expect(bb).toEqual({ allocated: 1 })
   })
 
   it('refuses to allocate against an unconfirmed enquiry', async () => {
@@ -141,49 +141,36 @@ d('allocation + overlap guard (FR-4.3)', () => {
   })
 })
 
-d('bulk room booking + BR-L2 on the proposal', () => {
+d('bulk room booking on the proposal', () => {
 
-  it('raises ONE pending request per proposal at 35+ rooms, and clears it when trimmed', async () => {
-    // Rooms are booked in bulk on the proposal now, so BR-L2 counts rooms ASKED FOR rather
-    // than rows in room_allocations (which nothing writes any more).
+  it('takes any number of rooms without raising an approval', async () => {
+    // Client, 12 Sep 2026: BR-L2's 35+ Authority approval is withdrawn — a party may take
+    // as many rooms as the lodge has free, and 35 is no longer a number to anything.
     const e = await makeEvent({ status: 'enquiry' })
     const palace = await unitId('Palace')
     const regency = await unitId('Regency')
 
-    const under = await rooms.saveRoomRequirements(actor, e, [
-      { unitId: palace, roomType: 'deluxe', count: 20, checkIn: '2026-09-01', checkOut: '2026-09-03' },
-    ])
-    expect(under).toMatchObject({ totalRooms: 20, deferred: false })
-    expect(await pending35(e)).toHaveLength(0)
-
-    // Two lodges, 33 + 2 = 35 — the threshold is the event's total, not any one line.
-    // The counts are the lodges' real inventory: Palace holds 33 deluxe and Regency 2
-    // suites, and asking for more than that is refused by the hard cap before BR-L2 is
-    // ever reached (see §F13 — the two rules are independent).
+    // Two lodges, 33 + 2 = 35, which used to defer the whole proposal to the GM. The counts
+    // are the lodges' real inventory: Palace holds 33 deluxe and Regency 2 suites, and asking
+    // for more than that is still refused by the hard cap — the only bound left.
     const over = await rooms.saveRoomRequirements(actor, e, [
       { unitId: palace, roomType: 'deluxe', count: 33, checkIn: '2026-09-01', checkOut: '2026-09-03' },
       { unitId: regency, roomType: 'suite', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
     ])
-    expect(over).toMatchObject({ totalRooms: 35, deferred: true })
+    expect(over).toMatchObject({ lines: 2, totalRooms: 35 })
 
-    const raised = await pending35(e)
-    expect(raised).toHaveLength(1) // one per proposal, not one per line
-    const payload = raised[0]!.payload as { requestedCount: number; lines: unknown[] }
-    expect(payload.requestedCount).toBe(35)
-    expect(payload.lines).toHaveLength(2) // the Authority sees both lodges
+    // No request raised, of any kind.
+    expect(await pending35(e)).toHaveLength(0)
+    const [{ exc }] = (await db.execute(
+      sql`SELECT count(*)::int AS exc FROM exceptions WHERE event_id = ${e}`,
+    )) as unknown as { exc: number }[]
+    expect(exc).toBe(0)
 
-    // The requirements are still saved — an enquiry occupies nothing until it confirms.
+    // And the rooms are saved, as they always were.
     const [{ n }] = (await db.execute(
       sql`SELECT count(*)::int AS n FROM room_requirements WHERE event_id = ${e}`,
     )) as unknown as { n: number }[]
     expect(n).toBe(2)
-
-    // Trimming back below the threshold withdraws the request: its reason is gone.
-    const trimmed = await rooms.saveRoomRequirements(actor, e, [
-      { unitId: palace, roomType: 'deluxe', count: 5, checkIn: '2026-09-01', checkOut: '2026-09-03' },
-    ])
-    expect(trimmed.deferred).toBe(false)
-    expect(await pending35(e)).toHaveLength(0)
   })
 
   it('keeps rooms editable after confirmation, and freezes them at lock', async () => {
@@ -206,26 +193,6 @@ d('bulk room booking + BR-L2 on the proposal', () => {
   })
 })
 
-d('large allocation (BR-L2)', () => {
-  it('defers a 35-room batch to a pending exception, inserting nothing', async () => {
-    const e = await makeEvent()
-    const ids = await anyRooms('Regency', 35)
-    expect(ids.length).toBe(35)
-    const res = await rooms.allocateRooms(
-      actor, e,
-      ids.map((roomId) => ({ roomId, checkIn: '2026-09-10', checkOut: '2026-09-12' })),
-    )
-    expect(res.deferred).toBe(true)
-
-    // Exception raised, no allocations committed yet.
-    const [exc] = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, e))
-    expect(exc!.kind).toBe('room_allocation_35plus')
-    expect(exc!.status).toBe('pending')
-    const [{ n }] = (await db.execute(sql`SELECT count(*)::int AS n FROM room_allocations WHERE event_id = ${e}`)) as unknown as { n: number }[]
-    expect(n).toBe(0)
-  })
-})
-
 d('per-room discount caps (BR-D1)', () => {
   it('rejects a Rs.600 discount on a deluxe room but accepts Rs.900 on a suite', async () => {
     const e = await makeEvent()
@@ -239,7 +206,7 @@ d('per-room discount caps (BR-D1)', () => {
 
     // Rs.900 = 90000 paise ≤ Rs.1000 suite cap → accepted.
     const ok = await rooms.allocateRooms(actor, e, [{ roomId: suite!, checkIn: '2026-09-01', checkOut: '2026-09-02', discountPaise: 90000 }])
-    expect(ok).toEqual({ deferred: false, allocated: 1 })
+    expect(ok).toEqual({ allocated: 1 })
     const [row] = await db.select({ disc: schema.roomAllocations.discountPaise }).from(schema.roomAllocations).where(eq(schema.roomAllocations.eventId, e))
     expect(row!.disc).toBe(90000)
   })
@@ -255,14 +222,14 @@ d('lawn-wedding Palace preference (BR-L1)', () => {
     ).rejects.toThrow(/override note/)
 
     const ok = await rooms.allocateRooms(actor, e, [{ roomId: regency!, checkIn: '2026-12-01', checkOut: '2026-12-03', overrideNote: 'Guest requested Regency' }])
-    expect(ok).toEqual({ deferred: false, allocated: 1 })
+    expect(ok).toEqual({ allocated: 1 })
   })
 
   it('allocates a Palace room for a lawn wedding without any note', async () => {
     const e = await makeEvent({ eventType: 'wedding', lawnSub: true })
     const [palace] = await anyRooms('Palace', 1)
     const ok = await rooms.allocateRooms(actor, e, [{ roomId: palace!, checkIn: '2026-12-01', checkOut: '2026-12-03' }])
-    expect(ok).toEqual({ deferred: false, allocated: 1 })
+    expect(ok).toEqual({ allocated: 1 })
   })
 })
 

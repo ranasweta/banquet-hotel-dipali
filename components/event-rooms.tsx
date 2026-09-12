@@ -181,15 +181,11 @@ export function EventRooms({
     }
     setBusy(true)
     try {
-      const res = await api<{ totalRooms: number; deferred: boolean }>(
+      await api<{ totalRooms: number }>(
         `/events/${eventId}/room-requirements`,
         { method: 'POST', body: JSON.stringify({ requirements: rows }) },
       )
-      toast[res.deferred ? 'info' : 'success'](
-        res.deferred
-          ? `${res.totalRooms} rooms — sent to the GM for approval (35 or more).`
-          : 'Rooms saved',
-      )
+      toast.success('Rooms saved')
       await load()
       onChanged?.()
     } catch (e) {
@@ -308,11 +304,6 @@ export function EventRooms({
             <span className="text-muted-foreground">{totalRooms} room(s), rack-rate estimate</span>
             <span className="tabular-nums">{formatPaise(roomsTotal)}</span>
           </div>
-          {totalRooms >= 35 && (
-            <p className="text-xs text-amber-600">
-              35 or more rooms — saving sends this to the Higher Authority (BR-L2).
-            </p>
-          )}
         </div>
       )}
 

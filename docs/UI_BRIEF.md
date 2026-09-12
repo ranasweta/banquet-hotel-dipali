@@ -95,8 +95,8 @@ permission, so **no user sees all of these**.
     not the sidebar.
 
 ### Queues
-12. **`/approvals`** — Higher Authority queue (menu increases, 35+ rooms, over-cap discounts,
-    overdue balances). Approve / reject with remark.
+12. **`/approvals`** — Higher Authority queue (menu increases, over-cap discounts, overdue
+    balances). Approve / reject with remark.
 13. **`/change-requests`** — date/time/venue change requests for the Banquet Manager.
 14. **`/chef`** — off-menu "delicacy" requests awaiting a per-plate price from the Chef.
 15. **`/maintenance`** — event-linked extra costs; receipt/photo upload.

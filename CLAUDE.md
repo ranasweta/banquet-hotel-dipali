@@ -179,14 +179,19 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    the daily cron) starts an event when its first function's date arrives and
    completes it once the last has passed. Without it nothing reaches `completed`,
    and nothing can be locked, invoiced or billed.
-9. **Rooms are booked in bulk, bounded twice, and priced at confirmation** (client,
+9. **Rooms are booked in bulk, bounded once, and priced at confirmation** (client,
    21 Jul 2026; the freeze added 13 Aug 2026). The
    proposal states lodge + category + count + dates, and that IS the booking —
    `room_requirements`, not `room_allocations`, which nothing writes any more.
-   Two independent limits apply: a **hard inventory cap** (never more of a
-   category than the lodge physically has free on the tightest night of the stay)
-   and the **35+ rule** (BR-L2), which is an Authority approval, not a limit.
-   Enquiries hold nothing — whoever commits first takes the rooms. Room dates must
+   One limit applies: the **hard inventory cap** — never more of a category than the
+   lodge physically has free on the tightest night of the stay, because that is a
+   promise the hotel cannot keep. **A party may take ANY number of rooms** (client,
+   12 Sep 2026: *"anyone can have any number of rooms, no 35 room warning or anything"*).
+   BR-L2's 35+ Authority approval is withdrawn — no threshold, no request, no notice on
+   any screen; migration 0037 settles the ones that were pending and drops the
+   `large_allocation_rooms` setting. The `room_allocation_35plus` exception kind survives
+   in the enum so decided rows still read on the approvals history, and nothing raises a
+   new one. Enquiries hold nothing — whoever commits first takes the rooms. Room dates must
    fall inside the event's **declared run** — the From/To window picked when the
    proposal is started, stored as `planned_from`/`planned_to` (amended 22 Jul 2026) —
    check-out reaching at most the morning after the To date. A guest may stay the

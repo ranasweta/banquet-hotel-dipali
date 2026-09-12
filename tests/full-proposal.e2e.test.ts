@@ -22,8 +22,8 @@
  *   ---------------------------------------------------------------------------------------
  *   proposal_total_paise                                                  =  14,62,000
  *
- *   ROOMS, two lodges, 27 → 30 Nov (3 nights). 34 rooms — deliberately one under the 35 that
- *   would send it to the Authority (BR-L2), so confirm stays about money and not approvals.
+ *   ROOMS, two lodges, 27 → 30 Nov (3 nights). 34 rooms — any number is allowed (BR-L2
+ *   withdrawn, client 12 Sep 2026), bounded only by what the two lodges physically hold.
  *   Palace deluxe   20 × 3 × 5,000                                        =   3,00,000
  *   Regency deluxe  14 × 3 × 4,500                                        =   1,89,000
  *   rooms                                                                 =   4,89,000

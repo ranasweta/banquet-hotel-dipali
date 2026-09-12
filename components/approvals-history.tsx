@@ -29,7 +29,8 @@ type ExceptionRow = {
 
 const KIND_LABEL: Record<string, string> = {
   menu_increase: 'Menu increase',
-  room_allocation_35plus: '35+ rooms',
+  // Nothing raises one of these any more (client, 12 Sep 2026); decided ones still show here.
+  room_allocation_35plus: 'Room request',
   discount_over_cap: 'Discount over cap',
   overdue_wedding_balance: 'Overdue balance',
   counter_change: 'Counter-change',

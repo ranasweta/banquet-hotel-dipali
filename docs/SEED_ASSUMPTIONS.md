@@ -217,8 +217,8 @@ action, or is role-based behaviour on top of `create_edit` acceptable?
 ### B8. Dormitories are one bookable unit, not N beds
 Palace dormitory blocks A and B (18 beds, Rs. 35,000) and Regency's (30 beds,
 Rs. 50,000) are each **one `rooms` row** with a `beds` count and one rack rate.
-**Question:** is the rate per block per night, or per bed? Everything downstream (room
-charges, the 35-room BR-L2 threshold) depends on the answer.
+**Question:** is the rate per block per night, or per bed? Room charges downstream depend on
+the answer.
 
 ### B9. "Diamond & Golden Hall" priced for sangeet/engagement
 On the Palace page this row's event-type cell is **blank** — unlike the two Crystal rows,
@@ -412,10 +412,11 @@ Interpretations made while building the menu module, recorded so they can be cha
   client prefers it, an "escalate over-cap room discounts to an exception" path can be layered
   in the M7 discount service. **Open question for the client: is a per-room cap a firm limit
   (reject) or an escalation trigger (exception)?** Recorded, not silently chosen.
-- **35+ rooms defers the whole batch** (BR-L2/FR-4.7): reaching the `large_allocation_rooms`
-  threshold (existing + requested) raises a `room_allocation_35plus` exception carrying the
-  requested allocations in its payload and inserts **nothing** until an Authority approves it
-  (application happens in M6). This mirrors the menu-increase deferral (D4).
+- **35+ rooms defers the whole batch** (BR-L2/FR-4.7) — **WITHDRAWN, client 12 Sep 2026:**
+  *"anyone can have any number of rooms, no 35 room warning or anything should be there."*
+  Reaching `large_allocation_rooms` used to raise a `room_allocation_35plus` exception and
+  gate confirm and the lock on it. Nothing raises one now, the setting is gone (migration
+  0037), and the hard inventory cap below is the only bound on a room booking.
 - **Lawn-wedding Palace preference (BR-L1)** is enforced server-side: an event is a "lawn
   wedding" when its type `is_wedding` and it has a sub-event on a `kind = 'lawn'` venue; a
   non-Palace room then requires an `override_note`. It is not merely a UI hint.
@@ -443,15 +444,14 @@ Interpretations made while building the menu module, recorded so they can be cha
   the permission matrix. The `approvals` module grants `create_edit` to booking/banquet/lodge
   managers too (they *raise* exceptions), so "who may raise vs decide" is a behavioural rule
   (already noted in `db/masters.ts`), re-checked here.
-- **Reject reverts nothing because nothing was ever committed.** Both deferred flows hold
-  their change until approval — a menu increase never bumped `extra_picks`, a 35+ allocation
-  inserted no rows — so rejection only records the status + mandatory remark. The menu
+- **Reject reverts nothing because nothing was ever committed.** A deferred flow holds its
+  change until approval — a menu increase never bumped `extra_picks` — so rejection only
+  records the status + mandatory remark. The menu
   category's link is kept (so the remark shows); a fresh increase request overwrites it.
 - **Approve applies atomically inside the decide transaction.** Menu increase → bump
-  `extra_picks` (and mark the menu incomplete until the item is picked). 35+ rooms → insert
-  the held allocations; if a room was taken while the request was pending, the exclusion
-  constraint 409s and the whole decision rolls back (the exception stays pending to retry or
-  reject).
+  `extra_picks` (and mark the menu incomplete until the item is picked). (The 35+ room arm
+  is gone with the rule, 12 Sep 2026: the rooms were always saved when they were asked for,
+  so approving one released nothing.)
 - **Approve-with-modification** (FR-6.2): menu → a modified pick delta (`modified.extraPicks`);
   rooms → a chosen subset (`modified.roomIds`). Approve is the delta-of-1 / full-batch case.
 
@@ -713,9 +713,8 @@ until the lock checklist completes. The calendar therefore carries three states,
 red locked, **amber confirmed-but-unlocked**, green free — so the client's choice stands
 without the Lodge Manager being able to promise a room twice.
 
-Amber also covers rooms inside an undecided 35+ exception (BR-L2), which by design write
-nothing to `room_allocations`; a calendar reading only that table would show them free while
-the Authority is still deciding.
+(A third state, amber-pending, once covered rooms inside an undecided 35+ exception. It was
+already dead once requirements became the booking, and went with the rule on 12 Sep 2026.)
 
 ### F5. The lodging window is 30 days, the venue board's is 15
 FR-2.1 caps the venue calendar to a rolling 15 days for operational roles. The client asked
@@ -961,9 +960,9 @@ and refuses a save that exceeds it. It is measured **per night and reported at t
 one** — a 1–5 Jul stay where nights 1–2 have 20 of 27 taken and night 3 has 25 has two rooms
 free, not seven. Quoting the average would promise a room that vanishes mid-stay.
 
-**The 35+ rule (BR-L2) is unchanged and is NOT a limit.** It is an Authority approval. The
-two stack: 40 rooms when 27 exist is blocked outright; 36 rooms that do exist are allowed
-and escalated.
+**The hard cap is the ONLY bound** (client, 12 Sep 2026). BR-L2's 35+ Authority approval is
+withdrawn: 40 rooms when 27 exist is still blocked outright, and 36 rooms that do exist is
+simply a booking — no request, no warning, no chip on any screen.
 
 **Enquiries hold nothing.** Only committed events (`confirmed` and beyond) count against
 inventory, so two managers may both be drafting the same rooms and whoever confirms first

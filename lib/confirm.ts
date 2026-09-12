@@ -149,19 +149,6 @@ export async function confirmEvent(
         }
       }
 
-      // 3b. BR-L2: 35+ rooms need the Authority first. Rooms are booked in bulk on the
-      //     proposal now, so this is the gate that matters — confirm is the moment those
-      //     rooms start occupying the lodging calendar. Approving the request clears it.
-      const [{ pending }] = (await tx.execute(sql`
-        SELECT count(*)::int AS pending FROM exceptions
-        WHERE event_id = ${eventId} AND kind = 'room_allocation_35plus' AND status = 'pending'
-      `)) as unknown as { pending: number }[]
-      if (pending > 0) {
-        throw badRequest(
-          'This proposal takes 35 or more rooms, which needs Higher Authority approval before the dates can be blocked (BR-L2).',
-        )
-      }
-
       // 4. Record the advance, then require that SOME of it arrived.
       if (advance) {
         try {

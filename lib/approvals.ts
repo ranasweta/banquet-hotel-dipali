@@ -6,9 +6,8 @@ import { badRequest, conflict, forbidden, notFound, ApiError } from '@/lib/api'
 
 /**
  * Approvals queue (M6, FR-6.x). The Higher Authority (and Auditor/Admin) work a single
- * queue of exceptions raised by the other modules — menu increases (M4) and 35+ room
- * allocations (M5) so far, discounts and overdue balances later. Deciding is the other
- * half of every "defer until approved" flow:
+ * queue of exceptions raised by the other modules — menu increases (M4), discounts and
+ * overdue balances. Deciding is the other half of every "defer until approved" flow:
  *   - approve applies the deferred change (bumps the pick / inserts the held rooms);
  *   - reject leaves the change unapplied and records a mandatory remark;
  *   - approve_modified applies a modified version supplied by the Authority.
@@ -113,12 +112,13 @@ export function summarizeException(kind: string, payload: Record<string, unknown
       return `${subEventName ?? 'Function'} · ${lines.join('; ')}`
     }
     case 'room_allocation_35plus': {
-      // The bulk shape carries `lines`, not the room-by-room `allocations` the old
-      // allocation path wrote; `existingCount` never existed on it and rendered as NaN.
+      // Nothing raises one of these any more (client, 12 Sep 2026 — a booking may take any
+      // number of rooms). This arm stays so the ones already decided still read as sentences
+      // on the history and the bundle's settled list, rather than as a raw enum.
       const lines = (payload.lines ?? []) as { roomType: string; count: number }[]
       // `presidential_suite` is a column value, not a phrase to show a manager.
       const detail = lines.map((l) => `${l.count} × ${l.roomType.replace(/_/g, ' ')}`).join(', ')
-      return `${payload.requestedCount} room(s) — over the ${payload.threshold} threshold${detail ? ` (${detail})` : ''}`
+      return `${payload.requestedCount} room(s)${detail ? ` (${detail})` : ''}`
     }
     case 'discount_over_cap':
       return `discount of ₹${(Number(payload.amountPaise) / 100).toLocaleString('en-IN')} over the cap`
@@ -503,23 +503,10 @@ async function applyDeferred(
       if (blindReductions > 0) parts.push(`${blindReductions} on an older request that names no dishes — the counts were lowered, the guest's choices left alone`)
       return parts.join('; ')
     }
-    case 'room_allocation_35plus': {
-      // There is nothing to insert. Rooms are booked in bulk on the proposal (migration
-      // 0009) and `room_requirements` is written the moment the manager saves, threshold
-      // crossed or not — the request gates CONFIRM and the lock, it does not hold the rooms.
-      //
-      // This arm used to read `payload.allocations` and insert into `room_allocations`,
-      // neither of which the bulk path produces: the raise side writes `lines`, and nothing
-      // has written an allocation since 21 Jul. Every approval therefore died on
-      // "No rooms to allocate", which is the one outcome the Authority cannot work around.
-      const lines = (payload.lines ?? []) as { roomType: string; count: number }[]
-      const rooms = lines.reduce((n, l) => n + Number(l.count ?? 0), 0)
-      return lines.length
-        ? `${rooms} room(s) across ${lines.length} line(s) approved`
-        : 'approved'
-    }
     default:
-      // discount_over_cap / overdue_wedding_balance carry no deferred insert to apply in M6.
+      // discount_over_cap / overdue_wedding_balance carry no deferred insert to apply, and
+      // neither does a leftover room request: the rooms were always saved when they were
+      // asked for, so there was never anything held back to release.
       return 'noted'
   }
 }

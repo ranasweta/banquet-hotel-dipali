@@ -126,9 +126,9 @@ export async function notificationsFor(
   ])
 
   if (decidesExceptions) {
-    // ONE notice per proposal, not per request (client's lead, 1 Aug 2026). A wedding raising a
-    // menu increase, a 35+ room ask and an over-cap discount is one thing for the GM to sit
-    // down with, and telling him about it three times is the drip-feed he objected to. Change
+    // ONE notice per proposal, not per request (client's lead, 1 Aug 2026). A wedding raising
+    // two menu increases and an over-cap discount is one thing for the GM to sit down with,
+    // and telling him about it three times is the drip-feed he objected to. Change
     // requests are inside the bundle now, so they are deliberately not listed separately below.
     for (const b of bundles) {
       const sections = b.bySection.map((s) => `${s.n} ${s.section}`).join(', ')

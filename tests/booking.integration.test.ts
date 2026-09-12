@@ -245,9 +245,9 @@ d('confirm gates', () => {
     expect(bookings).toHaveLength(0)
   })
 
-  it('refuses confirm while a 35+ room request is pending (BR-L2)', async () => {
-    // Rooms are booked in bulk on the proposal, so confirm — not allocation — is the moment
-    // they take inventory on the lodging calendar. That makes it the gate for BR-L2.
+  it('confirms a booking of any size, raising no room approval (BR-L2 withdrawn)', async () => {
+    // Client, 12 Sep 2026: 35 rooms is no longer a number to anything. Confirm used to refuse
+    // while a pending 35+ request sat on the booking; there is no such request to raise now.
     const id = await makeEnquiry()
     const rooms = await import('@/lib/rooms')
     const [unit] = (await db.execute(
@@ -259,22 +259,19 @@ d('confirm gates', () => {
 
     // 35 rooms across two lodges, because no single category has 35 of anything: Palace holds
     // 33 deluxe (migration 0010 replaced the round numbers this fixture was written against
-    // with the real inventory). Asking one lodge for 35 trips the hard inventory cap, which is
-    // a different rule and would let this pass for the wrong reason.
+    // with the real inventory). Asking one lodge for 35 would trip the hard inventory cap,
+    // which is the rule that survives and would fail this for the wrong reason.
     await rooms.saveRoomRequirements(actor, id, [
       { unitId: unit!.id, roomType: 'deluxe', count: 33, checkIn: '2026-09-01', checkOut: '2026-09-03' },
       { unitId: regency!.id, roomType: 'presidential_suite', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
     ])
-    await expect(confirmEvent(actor, id, advance(ENOUGH_ADVANCE))).rejects.toThrow(/35 or more rooms/)
 
-    // Trimming below the threshold withdraws the request and confirm goes through — with a
-    // bigger advance, because rooms and their 5% tax count toward the 25% base (BR-P1 as
-    // amended 20 Jul 2026): 2 deluxe × 2 nights lifts what a quarter comes to.
-    await rooms.saveRoomRequirements(actor, id, [
-      { unitId: unit!.id, roomType: 'deluxe', count: 2, checkIn: '2026-09-01', checkOut: '2026-09-03' },
-    ])
-    const ok = await confirmEvent(actor, id, advance(5_000_000))
+    const ok = await confirmEvent(actor, id, advance(ENOUGH_ADVANCE))
     expect(ok.code).toMatch(/^E-/)
+    const [{ n }] = (await db.execute(
+      sql`SELECT count(*)::int AS n FROM exceptions WHERE event_id = ${id}`,
+    )) as unknown as { n: number }[]
+    expect(n).toBe(0)
   })
 
   it('refuses confirm when a venue has no rate card (BR-R1), never pricing at zero', async () => {

@@ -45,11 +45,12 @@ tentative swap versioning.
 increase attempt returns 202 with exception; surcharge applied only for weddings.
 
 ## M5 — Rooms module
-Rooms board, bulk allocation (overlap 409 from DB), 35+ → exception,
+Rooms board, bulk allocation (overlap 409 from DB), the hard inventory cap,
 non-Palace override note for lawn weddings, reconciliation view, room
-discounts with per-room caps.
-✓ Accept: overlap insert fails cleanly; 35-room allocation sits pending until
-Authority approves; Rs. 600 discount on a deluxe room is rejected, Rs. 900 on
+discounts with per-room caps. (The 35+ → exception step was withdrawn by the
+client on 12 Sep 2026 — any number of rooms is allowed; see FR-4.7.)
+✓ Accept: overlap insert fails cleanly; a booking of any size saves and confirms
+with no approval raised; Rs. 600 discount on a deluxe room is rejected, Rs. 900 on
 a suite is accepted.
 
 ## M6 — Approvals queue (Higher Authority)

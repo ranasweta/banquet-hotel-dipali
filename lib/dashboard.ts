@@ -325,7 +325,6 @@ export type LodgeDashboard = {
   departures: RoomMovement[]
   occupancy: Occupancy[]
   awaitingSignoff: SignoffRow[]
-  pendingRoomApprovals: ExceptionRow[]
 }
 
 const movementSelect = sql`
@@ -367,7 +366,7 @@ function awaitingSignoffQuery(
 
 /**
  * The Lodge Manager board: today's arrivals/departures, live occupancy per lodge, the events
- * waiting on their rooms sign-off, and 35+ approvals in flight.
+ * waiting on their rooms sign-off.
  *
  * Scoped to the manager's own lodge (mig 0013). A null scope means every lodge, which is what
  * the Auditor gets; a Lodge Manager with no lodge set sees an empty board rather than an
@@ -382,7 +381,7 @@ export async function getLodgeDashboard(
   scopeUnitId?: string | null,
 ): Promise<LodgeDashboard> {
   const unitScope = scopeUnitId ?? null
-  const [arrivals, departures, occupancy, awaitingSignoff, exceptions] = await Promise.all([
+  const [arrivals, departures, occupancy, awaitingSignoff] = await Promise.all([
     db.execute(sql`
       SELECT ${movementSelect}, rr.check_out::text AS "otherDate"
       ${movementFrom}
@@ -423,7 +422,6 @@ export async function getLodgeDashboard(
                      AND (${unitScope}::uuid IS NULL OR rr.unit_id = ${unitScope}::uuid))`,
       ),
     ) as unknown as Promise<SignoffRow[]>,
-    listExceptions({ status: 'pending' }),
   ])
   return {
     asOf,
@@ -437,7 +435,6 @@ export async function getLodgeDashboard(
       return { unitId: o.unitId, name: o.name, total, occupied, available: Math.max(0, total - occupied) }
     }),
     awaitingSignoff,
-    pendingRoomApprovals: exceptions.filter((x) => x.kind === 'room_allocation_35plus'),
   }
 }
 
