@@ -1,5 +1,4 @@
-import Link from 'next/link'
-import { BedDouble, LogIn, LogOut, DoorOpen, CheckCircle2, ShieldCheck, CircleCheck } from 'lucide-react'
+import { BedDouble, LogIn, LogOut, DoorOpen, CheckCircle2, CircleCheck } from 'lucide-react'
 import type { LodgeDashboard as LodgeData, RoomMovement } from '@/lib/dashboard'
 import { Hero, KpiTile, SectionCard, EmptyState, formatDay } from '@/components/dashboard-shared'
 import { SignoffCard } from '@/components/signoff-card'
@@ -8,10 +7,10 @@ import { titleCase } from '@/lib/text'
 
 /**
  * Lodge Manager home: today's arrivals & departures, live occupancy for their lodge, the
- * events waiting on their rooms sign-off, and any 35+ booking awaiting the Authority.
+ * events waiting on their rooms sign-off.
  */
 export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullName: string } }) {
-  const { arrivals, departures, occupancy, awaitingSignoff, pendingRoomApprovals } = data
+  const { arrivals, departures, occupancy, awaitingSignoff } = data
   const totalRooms = occupancy.reduce((s, u) => s + u.total, 0)
   const occupied = occupancy.reduce((s, u) => s + u.occupied, 0)
   // Guests, not rows: one line can be twelve rooms arriving together.
@@ -95,29 +94,6 @@ export function LodgeDashboard({ data, user }: { data: LodgeData; user: { fullNa
             <MovementList label="Arrivals" empty="No check-ins today." rows={arrivals} dateLabel="out" />
             <div className="my-3 border-t" />
             <MovementList label="Departures" empty="No check-outs today." rows={departures} dateLabel="in" />
-          </SectionCard>
-
-          <SectionCard
-            icon={<ShieldCheck className="size-4 text-muted-foreground" aria-hidden />}
-            title="Large allocations"
-            note="awaiting Authority"
-            badge={pendingRoomApprovals.length}
-            link={{ href: '/approvals', label: 'Approvals' }}
-          >
-            {pendingRoomApprovals.length === 0 ? (
-              <EmptyState text="No 35+ room requests in flight." />
-            ) : (
-              <ul className="space-y-2 text-sm">
-                {pendingRoomApprovals.map((x) => (
-                  <li key={x.id}>
-                    <Link href="/approvals" className="block rounded-lg border border-transparent px-2 py-1.5 hover:border-border hover:bg-muted/50">
-                      <span className="line-clamp-1 font-medium">{x.summary}</span>
-                      <span className="text-xs text-muted-foreground">{x.eventCode} · {titleCase(x.guestName)}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
           </SectionCard>
         </div>
       </div>

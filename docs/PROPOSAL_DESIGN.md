@@ -167,10 +167,9 @@ Other non-negotiables:
 
 - **BR-R1 — A missing rate card is a gate, never a zero.** If a venue + event type has no rate,
   confirm is blocked and an Authority-approved manual rate is demanded. Never price at 0.
-- **BR-L2 — 35+ rooms need the Authority.** Booking 35 or more rooms defers to Higher Authority
-  approval (an approval, not a hard limit). Enforced at **confirm** (that is when rooms take
-  inventory). Separately, a **hard inventory cap**: never more of a category than the lodge has
-  free on the tightest night of the stay.
+- **BR-L2 — withdrawn 12 Sep 2026.** A booking may take **any number of rooms**, with no
+  approval, threshold or warning anywhere. What remains is the **hard inventory cap**: never
+  more of a category than the lodge has free on the tightest night of the stay.
 - **BR-M1 / BR-M5 — Snapshots, not references.** Menus copy tier name, price, surcharge and
   items onto the function at save; bills read snapshots only. **Wedding surcharge Rs 50.**
   `pick_count = NULL` means every item is included (read-only, always complete, never
@@ -229,8 +228,8 @@ numbers (which actual room a guest gets is the reception desk's call).
 - Bounded by the **declared run** (`planned_from`/`planned_to`); check-out may reach the morning
   after the To date. A guest may stay the whole event even if a function isn't scheduled every
   day. Proposals made before the window was captured fall back to the functions' span.
-- **Two independent limits**: a **hard inventory cap** (never more than the lodge has free on
-  the tightest night) and the **35+ rule** (BR-L2, an Authority approval).
+- **One limit**: the **hard inventory cap** (never more than the lodge has free on the tightest
+  night). BR-L2's 35+ approval was withdrawn on 12 Sep 2026 — any number of rooms is allowed.
 - **Enquiries hold nothing** — whoever confirms first takes the rooms; the loser is *told*
   (a live shortfall detection, `lib/rooms.ts`), not blocked in advance.
 - Rooms stay **editable after confirmation** (up to lock) — a guest's lodging changes right up
@@ -260,8 +259,8 @@ numbers (which actual room a guest gets is the reception desk's call).
 ## 10. Confirm — THE transaction (`lib/confirm.ts`, `POST /events/:id/confirm`)
 
 In one transaction: lock the event; require it's an `enquiry`; check guest name + contact count
-(3 for weddings) + ≥1 function; **price** (BR-R1 gate); block if a 35+ room request is pending
-(BR-L2); record the advance and require **≥ 25%** of the advance base (BR-P1); insert one
+(3 for weddings) + ≥1 function; **price** (BR-R1 gate); record the advance and require
+**≥ 25%** of the advance base (BR-P1); insert one
 `venue_bookings` row per venue window (GiST exclusion decides races); snapshot venue rates; set
 `proposal_total_paise` + `first_date`/`last_date`; transition to `confirmed`. Any failure rolls
 back — no partial confirmation. Concurrency: two confirms racing for one slot → exactly one
@@ -329,7 +328,7 @@ scoped to Dashboard + the Next-15-days board; the **Lodge Manager** to the Lodgi
 
 ## 14. Approvals & counter-change (`lib/approvals.ts`, `/approvals`)
 
-Exceptions raised by other flows (menu increase, 35+ rooms, discount over cap) queue for the
+Exceptions raised by other flows (menu increase, discount over cap) queue for the
 Authority/Auditor. `POST /exceptions/:id/decide { approve | reject | approve_modified }` decides
 and applies the deferred change atomically; every decision is audited and terminal.
 
@@ -389,7 +388,7 @@ GET|POST /change-requests | POST /change-requests/:id/decide  post-confirm amend
 | Concern | File |
 |---------|------|
 | Wizard (all 5 steps, resume/edit) | `components/booking-wizard.tsx` |
-| Confirm transaction (BR-C1, BR-P1, BR-R1, BR-L2 gate) | `lib/confirm.ts` |
+| Confirm transaction (BR-C1, BR-P1, BR-R1) | `lib/confirm.ts` |
 | Pricing (venue/food/rooms) | `lib/pricing.ts` |
 | Rooms (requirements, availability, shortfalls) | `lib/rooms.ts` |
 | Menus (snapshot, increases) | `lib/menus.ts` |

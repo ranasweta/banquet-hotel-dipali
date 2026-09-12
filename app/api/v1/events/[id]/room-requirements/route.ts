@@ -28,9 +28,9 @@ const bodySchema = z.object({
  * the lodging calendar reads. Room numbers are the reception desk's business and are not
  * recorded. Replace-all for the event.
  *
- * The rule itself (BR-L2, 35+ rooms defer to the Authority) lives in the service so it runs
- * in one transaction and can be tested directly — CLAUDE.md keeps business rules out of
- * route handlers.
+ * The one bound left — the lodge's physical inventory — lives in the service so it runs in
+ * the same transaction as the insert and can be tested directly; CLAUDE.md keeps business
+ * rules out of route handlers.
  */
 export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   const actor = await requirePermission('bookings', 'create_edit')
@@ -49,8 +49,7 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
     })),
   )
 
-  // 202 when the Authority has to decide first, mirroring the other deferral paths.
-  return ok(result, result.deferred ? 202 : 200)
+  return ok(result, 200)
 })
 
 /**

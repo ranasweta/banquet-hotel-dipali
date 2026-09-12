@@ -22,9 +22,8 @@ const bodySchema = z.object({
 })
 
 /**
- * POST /events/:id/room-allocations — bulk allocate rooms. Overlap → 409; reaching the
- * large-allocation threshold defers the batch to an exception → 202; a per-room discount
- * over the cap → 400 (BR-D1).
+ * POST /events/:id/room-allocations — bulk allocate rooms. Overlap → 409; a per-room
+ * discount over the cap → 400 (BR-D1).
  */
 export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   const actor = await requirePermission('rooms', 'create_edit')
@@ -42,5 +41,5 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
       overrideNote: a.override_note,
     })),
   )
-  return ok(result, result.deferred ? 202 : 201)
+  return ok(result, 201)
 })

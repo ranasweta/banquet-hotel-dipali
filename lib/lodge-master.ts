@@ -315,7 +315,7 @@ export async function setCategoryRate(
  *                               issued, and a redraft rebuilds it from the booking anyway.
  *   audit_log                   append-only by construction, and the record of the rename is
  *                               itself one of its rows.
- *   exceptions.payload          the 35+ rooms request records what was ASKED FOR at the time;
+ *   exceptions.payload          a retired room request records what was ASKED FOR at the time;
  *                               it is read for display only (lib/approvals.ts) and inserts
  *                               nothing, so a stale name there breaks no lookup.
  *

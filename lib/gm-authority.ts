@@ -410,12 +410,10 @@ async function applyMenuEdit(tx: Tx, actor: Actor, eventId: string, m: MenuEdit)
 }
 
 /**
- * Replaces the room booking. The lodge's physical inventory still bounds it — the Authority
- * can approve a request for 40 rooms, but he cannot conjure a 41st room that does not exist,
- * and the same in-transaction availability check the Lodge Manager meets decides that.
- *
- * The 35+ rule (BR-L2) is an approval, and he IS the approver, so crossing the threshold here
- * does not raise a fresh request against himself — it settles any that was pending.
+ * Replaces the room booking. The lodge's physical inventory bounds it — he can put 40 rooms on
+ * a booking, but he cannot conjure a 41st room that does not exist, and the same in-transaction
+ * availability check the Lodge Manager meets decides that. It is the only bound: a booking may
+ * take any number of rooms (client, 12 Sep 2026, withdrawing BR-L2).
  */
 async function applyRoomEdit(tx: Tx, actor: Actor, eventId: string, rooms: RoomEdit[]): Promise<string[]> {
   const existing = (await tx.execute(sql`

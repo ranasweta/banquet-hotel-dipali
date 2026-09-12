@@ -15,7 +15,6 @@ type Cell = {
   roomType: string
   locked: number
   confirmed: number
-  pending: number
 }
 type CalendarResponse = {
   from: string
@@ -31,7 +30,7 @@ type Holder = {
   code: string
   guestName: string
   status: string
-  state: 'locked' | 'confirmed' | 'pending'
+  state: 'locked' | 'confirmed'
   count: number
 }
 type DayResponse = { date: string; inventory: Inventory[]; holders: Holder[] }
@@ -49,8 +48,6 @@ const STATE_CHIP = {
   locked:
     'bg-rose-50 text-rose-800 ring-rose-200 dark:bg-rose-950/60 dark:text-rose-200 dark:ring-rose-900',
   confirmed:
-    'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950/60 dark:text-amber-200 dark:ring-amber-900',
-  pending:
     'bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-950/60 dark:text-amber-200 dark:ring-amber-900',
 } as const
 
@@ -168,15 +165,14 @@ export function LodgingCalendar() {
     [data, inScope],
   )
 
-  /** date → { locked, confirmed, pending } summed over the units in scope. */
+  /** date → { locked, confirmed } summed over the units in scope. */
   const byDate = useMemo(() => {
-    const map = new Map<string, { locked: number; confirmed: number; pending: number }>()
+    const map = new Map<string, { locked: number; confirmed: number }>()
     for (const c of data?.occupancy ?? []) {
       if (!inScope(c.unitId)) continue
-      const cur = map.get(c.date) ?? { locked: 0, confirmed: 0, pending: 0 }
+      const cur = map.get(c.date) ?? { locked: 0, confirmed: 0 }
       cur.locked += c.locked
       cur.confirmed += c.confirmed
-      cur.pending += c.pending
       map.set(c.date, cur)
     }
     return map
@@ -256,8 +252,8 @@ export function LodgingCalendar() {
           <div key={`lead-${i}`} className="bg-muted/30" />
         ))}
         {days.map((date) => {
-          const o = byDate.get(date) ?? { locked: 0, confirmed: 0, pending: 0 }
-          const booked = o.locked + o.confirmed + o.pending
+          const o = byDate.get(date) ?? { locked: 0, confirmed: 0 }
+          const booked = o.locked + o.confirmed
           const vacant = Math.max(0, capacity - booked)
           const { day: dd } = formatDay(date)
           const isToday = date === today
@@ -281,7 +277,7 @@ export function LodgingCalendar() {
                 </span>
               </div>
 
-              <OccupancyBar locked={o.locked} soft={o.confirmed + o.pending} vacant={vacant} />
+              <OccupancyBar locked={o.locked} soft={o.confirmed} vacant={vacant} />
 
               <div className="mt-auto text-[11px] leading-tight tabular-nums">
                 {booked === 0 ? (
@@ -357,7 +353,7 @@ function OccupancyBar({ locked, soft, vacant }: { locked: number; soft: number; 
 function Legend() {
   const items = [
     { label: 'Locked', className: STATE_STYLE.locked },
-    { label: 'Confirmed / pending', className: STATE_STYLE.confirmed },
+    { label: 'Confirmed', className: STATE_STYLE.confirmed },
     { label: 'Vacant', className: STATE_STYLE.vacant },
   ]
   return (
@@ -389,11 +385,11 @@ function DayDetail({
   const rows = useMemo(() => {
     if (!day) return []
     const inScope = (unitId: string) => unitFilter === ALL_UNITS || unitId === unitFilter
-    const held = new Map<string, { locked: number; confirmed: number; pending: number; who: Holder[] }>()
+    const held = new Map<string, { locked: number; confirmed: number; who: Holder[] }>()
     for (const h of day.holders) {
       if (!inScope(h.unitId)) continue
       const k = `${h.unitId}|${h.roomType}`
-      const cur = held.get(k) ?? { locked: 0, confirmed: 0, pending: 0, who: [] }
+      const cur = held.get(k) ?? { locked: 0, confirmed: 0, who: [] }
       cur[h.state] += h.count
       cur.who.push(h)
       held.set(k, cur)
@@ -401,8 +397,8 @@ function DayDetail({
     return day.inventory
       .filter((i) => inScope(i.unitId))
       .map((i) => {
-        const h = held.get(`${i.unitId}|${i.roomType}`) ?? { locked: 0, confirmed: 0, pending: 0, who: [] }
-        const booked = h.locked + h.confirmed + h.pending
+        const h = held.get(`${i.unitId}|${i.roomType}`) ?? { locked: 0, confirmed: 0, who: [] }
+        const booked = h.locked + h.confirmed
         return { ...i, ...h, booked, vacant: Math.max(0, i.total - booked) }
       })
   }, [day, unitFilter])
@@ -480,12 +476,9 @@ function DayDetail({
                                 'rounded-md px-1.5 py-0.5 text-[11px] ring-1 ring-inset',
                                 STATE_CHIP[h.state],
                               )}
-                              title={`${titleCase(h.guestName)} · ${h.code} · ${titleCase(h.status)}${
-                                h.state === 'pending' ? ' · awaiting Authority approval (35+ rooms)' : ''
-                              }`}
+                              title={`${titleCase(h.guestName)} · ${h.code} · ${titleCase(h.status)}`}
                             >
                               {titleCase(h.guestName)} ×{h.count}
-                              {h.state === 'pending' && ' (pending)'}
                             </span>
                           ))}
                         </div>

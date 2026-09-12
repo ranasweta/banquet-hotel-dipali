@@ -12,12 +12,12 @@ import { applyGmProposalEdits, type GmProposalEdits } from '@/lib/gm-authority'
  * Approval BUNDLES (client's lead, 1 Aug 2026).
  *
  * The Higher Authority used to receive one card per request: a menu increase for the Sangeet,
- * a 35+ room ask, an over-cap discount and a venue move all arrived separately, each carrying a
- * one-line summary and no sight of the booking behind it. His complaint was precise — he was
+ * another for the reception, an over-cap discount and a venue move all arrived separately, each
+ * carrying a one-line summary and no sight of the booking behind it. His complaint was precise — he was
  * approving fragments and could not see the deal.
  *
  * So the unit of decision becomes the PROPOSAL. Nothing changed about how requests are raised:
- * `lib/menus.ts`, `lib/rooms.ts` and `lib/discounts.ts` still insert an `exceptions` row the
+ * `lib/menus.ts` and `lib/discounts.ts` still insert an `exceptions` row the
  * moment the ask happens, and `change_requests` still takes venue/date/time moves. What changed
  * is that they are read grouped by `event_id` and decided together. Two consequences fall out
  * of that and are the reason this is a grouping rather than a new table:
@@ -37,6 +37,7 @@ export type AskSection = 'food' | 'rooms' | 'discount' | 'timing' | 'other'
 
 const SECTION_OF: Record<string, AskSection> = {
   menu_increase: 'food',
+  // Retired 12 Sep 2026 — nothing raises one, but decided rows still list under Rooms.
   room_allocation_35plus: 'rooms',
   discount_over_cap: 'discount',
   overdue_wedding_balance: 'discount',
@@ -324,8 +325,8 @@ export async function decideBundle(
       }
 
       // Which asks the edits have already answered. Only these two kinds can be answered by
-      // editing: a 35+ room request and an over-cap discount defer nothing, so approving them
-      // writes nothing that an edit could collide with.
+      // editing: an over-cap discount defers nothing, so approving it writes nothing that an
+      // edit could collide with.
       const menuTouched = new Set((input.edits?.menus ?? []).map((m) => m.subEventId))
       const scheduleTouched = new Set(
         (input.edits?.functions ?? [])

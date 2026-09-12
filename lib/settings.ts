@@ -4,7 +4,7 @@ import { db, schema } from '@/db/drizzle'
 
 /**
  * Reads configurable business-rule values from the `settings` master (FR-8.2/8.3): the
- * advance percentage, discount caps, the large-allocation threshold, and so on. Values are
+ * advance percentage, the discount caps, the calendar window, and so on. Values are
  * stored as text; callers ask for the numeric ones through `getIntSettings`.
  */
 export async function getIntSettings<K extends string>(

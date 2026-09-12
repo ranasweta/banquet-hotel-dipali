@@ -5,16 +5,15 @@
  *   - rejecting reverts (pick unchanged) and surfaces the remark to the booking manager.
  *
  * Plus: only the Authority may decide, reject needs a remark, an already-decided exception
- * can't be re-decided, approve_modified applies a modified pick, and approving a 35+ room
- * exception inserts the held rooms. Drives lib/approvals against the test database, with the
- * exceptions created through the real M4/M5 flows so the payloads are authentic.
+ * can't be re-decided, and approve_modified applies a modified pick. Drives lib/approvals
+ * against the test database, with the exceptions created through the real M4 flow so the
+ * payloads are authentic.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 
 const approvals = await import('@/lib/approvals')
 const menus = await import('@/lib/menus')
-const roomsSvc = await import('@/lib/rooms')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -158,66 +157,6 @@ d('decision guards', () => {
     const { excId } = await menuIncreaseException()
     await approvals.decideException(ha, excId, { action: 'approve' })
     await expect(approvals.decideException(ha, excId, { action: 'reject', remark: 'too late' })).rejects.toMatchObject({ status: 409 })
-  })
-})
-
-d('room-allocation (BR-L2) decisions', () => {
-  /** A confirmed event holding `lines` worth of rooms booked in bulk on the proposal. */
-  async function bigBooking() {
-    const [{ code }] = (await db.execute(sql`SELECT 'E-' || nextval('event_code_seq') AS code`)) as unknown as { code: string }[]
-    const [event] = await db.insert(schema.events).values({ code, guestName: 'Big Wedding', eventType: 'engagement', status: 'confirmed', createdBy: bm.id }).returning({ id: schema.events.id })
-    const [palace] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = 'Palace'`)) as unknown as { id: string }[]
-    // 33 deluxe + 3 suite = 36, over the threshold and within Palace's real inventory.
-    const res = await roomsSvc.saveRoomRequirements(bm, event!.id, [
-      { unitId: palace!.id, roomType: 'deluxe', count: 33, checkIn: '2026-10-01', checkOut: '2026-10-03' },
-      { unitId: palace!.id, roomType: 'suite', count: 3, checkIn: '2026-10-01', checkOut: '2026-10-03' },
-    ])
-    return { eventId: event!.id, res }
-  }
-
-  it('raises one request for the whole proposal when it crosses 35', async () => {
-    const { eventId, res } = await bigBooking()
-    expect(res.deferred).toBe(true)
-    expect(res.totalRooms).toBe(36)
-
-    // The rooms ARE saved — the request gates confirm and the lock, it does not hold them.
-    const [{ n }] = (await db.execute(sql`SELECT count(*)::int AS n FROM room_requirements WHERE event_id = ${eventId}`)) as unknown as { n: number }[]
-    expect(n).toBe(2)
-  })
-
-  it('APPROVES a bulk room request instead of dying on an empty allocation list', async () => {
-    // The raise path writes `payload.lines`; the decide path used to read
-    // `payload.allocations` and throw "No rooms to allocate", so every one of these
-    // failed. Nothing is inserted on approval — the requirement already is the booking.
-    const { eventId } = await bigBooking()
-    const [exc] = await db
-      .select({ id: schema.exceptions.id })
-      .from(schema.exceptions)
-      .where(eq(schema.exceptions.eventId, eventId))
-      .limit(1)
-
-    const decision = await approvals.decideException(ha, exc!.id, { action: 'approve' })
-    expect(decision.status).toBe('approved')
-    expect(decision.applied).toMatch(/36 room/)
-  })
-
-  it('summarises the request without NaN', async () => {
-    const { eventId } = await bigBooking()
-    const rows = await approvals.listExceptions({ status: 'pending' })
-    const row = rows.find((r) => r.eventId === eventId)!
-    expect(row.summary).toContain('36 room(s)')
-    expect(row.summary).not.toContain('NaN')
-  })
-
-  it('clears the request when the booking drops back under the threshold', async () => {
-    const { eventId } = await bigBooking()
-    const [palace] = (await db.execute(sql`SELECT id FROM lodging_units WHERE name = 'Palace'`)) as unknown as { id: string }[]
-    const res = await roomsSvc.saveRoomRequirements(bm, eventId, [
-      { unitId: palace!.id, roomType: 'deluxe', count: 4, checkIn: '2026-10-01', checkOut: '2026-10-03' },
-    ])
-    expect(res.deferred).toBe(false)
-    const pending = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, eventId))
-    expect(pending.filter((p) => p.status === 'pending')).toHaveLength(0)
   })
 })
 

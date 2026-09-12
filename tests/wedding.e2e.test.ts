@@ -264,7 +264,7 @@ d('a whole wedding, start to finish', () => {
       { unitId: palace, roomType: 'deluxe', count: 20, checkIn: DAYS[0], checkOut: '2027-02-15' },
       { unitId: regency, roomType: 'deluxe', count: 10, checkIn: DAYS[1], checkOut: '2027-02-15' },
     ])
-    expect(res).toMatchObject({ lines: 2, totalRooms: 30, deferred: false }) // under the 35 gate
+    expect(res).toMatchObject({ lines: 2, totalRooms: 30 })
 
     // Everything promised is deliverable — nothing else holds these nights.
     const rec = await rooms.getReconciliation(eventId)

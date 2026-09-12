@@ -6,13 +6,13 @@ import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { getIntSettings } from '@/lib/settings'
 
 /**
- * Rooms module service layer (M5, FR-4.x, BR-L1/L2, BR-D1).
+ * Rooms module service layer (M5, FR-4.x, BR-L1, BR-D1).
  *
  *  - Allocation blocks a specific room for a date range; the `room_allocations` GiST
  *    exclusion makes an overlapping allocation on one room physically impossible (FR-4.3),
  *    so a clash is a clean 409 even under concurrency.
- *  - Reaching 35+ rooms for an event defers the whole batch to a Higher Authority
- *    exception — nothing is inserted until it is approved (BR-L2, FR-4.7).
+ *  - A booking may take ANY number of rooms (client, 12 Sep 2026, withdrawing BR-L2's 35+
+ *    Authority approval). The lodge's physical inventory is the only ceiling left.
  *  - Per-room discount caps: Rs.500 for most types, Rs.1,000 for suites (BR-D1). Over the
  *    cap is refused here (the milestone's contract); the combined-10% escalation is M7.
  *  - Lawn weddings prefer Palace (BR-L1); allocating a non-Palace room needs an override
@@ -122,15 +122,10 @@ export async function getRoomsBoard(
 
 /**
  * The Lodge Manager's day-by-day occupancy view: cumulative counts per lodging unit per
- * room category, never room numbers. Three states, because two would lie:
+ * room category, never room numbers. Two states:
  *
  *   locked    — the event is locked/billed/closed. Red: settled, untouchable.
  *   confirmed — confirmed/in progress/completed but not yet locked. Amber: sold, still moving.
- *   pending   — sitting inside a pending 35+ exception (BR-L2). Amber too, and the reason
- *               this query bothers with `exceptions` at all: a deferred large allocation
- *               writes NOTHING to room_allocations, so a calendar reading only that table
- *               would paint rooms free while the Authority is still deciding, and the Lodge
- *               Manager would promise them twice over.
  *
  * Categories are read from the data, not hardcoded — the room-type list is still awaiting
  * the hotel's real inventory (see docs/SEED_ASSUMPTIONS.md), so whatever the seed holds is
@@ -146,7 +141,6 @@ export type LodgingCell = {
   roomType: string
   locked: number
   confirmed: number
-  pending: number
 }
 export type LodgingCalendar = {
   from: string
@@ -205,15 +199,10 @@ export async function getLodgingCalendar(
         JOIN events e ON e.id = rr.event_id AND e.status IN ${OCCUPIED_STATES}
         GROUP BY 1, 2, 3
       )
-      -- pending is always 0 now; the column stays so the calendar's three-state shape
-      -- survives. It used to count rooms held inside an undecided 35+ exception, back when
-      -- a deferred allocation wrote nothing and the calendar would otherwise paint them
-      -- free. Requirements ARE the booking today and are saved whether or not the Authority
-      -- has ruled, so alloc already carries them — counting them again here booked the same
-      -- room twice. Enquiries hold nothing (client, 21 Jul 2026), which is what the status
-      -- filter on alloc enforces.
-      SELECT date::text AS date, "unitId", "roomType",
-             locked, confirmed, 0 AS pending
+      -- Requirements ARE the booking, so alloc already carries every room a confirmed event
+      -- holds. Enquiries hold nothing (client, 21 Jul 2026), which is what the status filter
+      -- on alloc enforces.
+      SELECT date::text AS date, "unitId", "roomType", locked, confirmed
       FROM alloc
       ORDER BY 1, 2, 3
     `) as unknown as Promise<LodgingCell[]>,
@@ -228,7 +217,7 @@ export type LodgingHolder = {
   code: string
   guestName: string
   status: string
-  state: 'locked' | 'confirmed' | 'pending'
+  state: 'locked' | 'confirmed'
   count: number
 }
 export type LodgingDay = { date: string; inventory: LodgingInventory[]; holders: LodgingHolder[] }
@@ -248,8 +237,6 @@ export async function getLodgingDay(date: string, scopeUnitId?: string | null): 
         AND (${scopeUnitId ?? null}::uuid IS NULL OR rr.unit_id = ${scopeUnitId ?? null}::uuid)
         AND ${date}::date >= rr.check_in AND ${date}::date < rr.check_out
       GROUP BY 1, 2, 3, 4, 5, 6
-      -- No 'pending' arm: see getLodgingCalendar. Requirements are saved whether or not a
-      -- 35+ request has been decided, so the first arm already holds them.
       ORDER BY 1, 2, 5
     `) as unknown as Promise<LodgingHolder[]>,
   ])
@@ -294,10 +281,9 @@ export async function freezeRoomRates(tx: Tx, eventId: string): Promise<void> {
 
 /**
  * How many rooms of a category a lodge actually has free over a date range (client,
- * 21 Jul 2026). This is a PHYSICAL ceiling and is not the same thing as BR-L2: the 35+
- * rule sends a large booking to the Authority, this one refuses a booking the hotel
- * cannot honour. They stack — 40 rooms when 27 exist is blocked outright; 36 rooms that
- * do exist is allowed but escalated.
+ * 21 Jul 2026). This is a PHYSICAL ceiling and is the only one left (client, 12 Sep 2026,
+ * withdrawing BR-L2): a party may take any number of rooms the lodge actually has, and 40
+ * rooms when 27 exist is refused because the hotel cannot honour it, not because it is large.
  *
  * Measured per NIGHT and reported at the tightest one. A stay of 1-5 Jul where nights
  * 1-2 have 20 of 27 taken and night 3 has 25 has two rooms free, not seven: the binding
@@ -535,7 +521,7 @@ export async function listRoomShortfalls(
   `)) as unknown as RoomShortfall[]
 }
 
-// ── Bulk room booking on the proposal (BR-L2) ────────────────────────────────
+// ── Bulk room booking on the proposal ────────────────────────────────────────
 
 export type RoomRequirementInput = {
   unitId: string
@@ -544,7 +530,7 @@ export type RoomRequirementInput = {
   checkIn: string
   checkOut: string
 }
-export type SaveRequirementsResult = { lines: number; totalRooms: number; deferred: boolean }
+export type SaveRequirementsResult = { lines: number; totalRooms: number }
 
 /**
  * Replaces an event's room requirements. Rooms are taken in bulk here — lodge + category
@@ -552,25 +538,15 @@ export type SaveRequirementsResult = { lines: number; totalRooms: number; deferr
  * calendar reads. Editable until the event locks, because lodging keeps changing after a
  * booking is confirmed.
  *
- * BR-L2, rewired the same day: the 35+ rule used to count rows in `room_allocations`, which
- * nothing writes any more. It now counts the rooms asked for, and raises ONE pending request
- * per proposal listing every line, so the Authority tracks proposals rather than lines.
- *
- * The requirements are still saved when the threshold is crossed. Confirm refuses while the
- * request is pending (lib/confirm.ts), and for an already-confirmed event the lock
- * checklist does the same — it blocks on any pending approval. Saving a smaller set clears
- * the request, because the reason for it is gone.
+ * A party may take ANY number of rooms (client, 12 Sep 2026, withdrawing BR-L2's 35+
+ * approval). The only bound left is the one below: the lodge's physical inventory on the
+ * tightest night of the stay.
  */
 export async function saveRoomRequirements(
   actor: Actor,
   eventId: string,
   requirements: RoomRequirementInput[],
 ): Promise<SaveRequirementsResult> {
-  const { large_allocation_rooms } = await getIntSettings(
-    ['large_allocation_rooms'] as const,
-    { large_allocation_rooms: 35 },
-  )
-
   return db.transaction(async (tx) => {
     const [event] = await tx
       .select({ status: schema.events.status })
@@ -656,46 +632,7 @@ export async function saveRoomRequirements(
       await freezeRoomRates(tx, eventId)
     }
 
-    await tx.delete(schema.exceptions).where(
-      and(
-        eq(schema.exceptions.eventId, eventId),
-        eq(schema.exceptions.kind, 'room_allocation_35plus'),
-        eq(schema.exceptions.status, 'pending'),
-      ),
-    )
-
     const totalRooms = requirements.reduce((n, r) => n + r.count, 0)
-    const deferred = totalRooms >= large_allocation_rooms
-    if (deferred) {
-      const [exc] = await tx
-        .insert(schema.exceptions)
-        .values({
-          eventId,
-          kind: 'room_allocation_35plus',
-          status: 'pending',
-          payload: {
-            requestedCount: totalRooms,
-            threshold: large_allocation_rooms,
-            lines: requirements.map((r) => ({
-              unitId: r.unitId,
-              roomType: r.roomType,
-              count: r.count,
-              checkIn: r.checkIn,
-              checkOut: r.checkOut,
-            })),
-          },
-          raisedBy: actor.id,
-        })
-        .returning({ id: schema.exceptions.id })
-      await audit(tx, actor, {
-        entity: 'exceptions',
-        entityId: exc!.id,
-        eventId,
-        action: 'insert',
-        field: 'room_allocation_35plus',
-        newValue: `${totalRooms} room(s) across ${requirements.length} line(s)`,
-      })
-    }
 
     await audit(tx, actor, {
       entity: 'room_requirements',
@@ -706,7 +643,7 @@ export async function saveRoomRequirements(
       newValue: `${requirements.length} line(s), ${totalRooms} room(s)`,
     })
 
-    return { lines: requirements.length, totalRooms, deferred }
+    return { lines: requirements.length, totalRooms }
   })
 }
 
@@ -734,9 +671,7 @@ export type AllocationInput = {
   overrideNote?: string
 }
 
-export type AllocateResult =
-  | { deferred: false; allocated: number }
-  | { deferred: true; exceptionId: string; count: number }
+export type AllocateResult = { allocated: number }
 
 type EventCtx = { id: string; status: string; eventType: string; isWedding: boolean; hasLawn: boolean }
 
@@ -756,9 +691,8 @@ async function loadEventCtx(tx: Tx, eventId: string): Promise<EventCtx> {
 
 /**
  * Allocates rooms to an event (FR-4.2). Validates every line first (room exists, discount
- * within the per-room cap, lawn-wedding override note), then either inserts the batch or,
- * if the event's total rooms would reach the large-allocation threshold, defers the whole
- * batch to a Higher Authority exception (BR-L2). Overlaps are caught by the DB exclusion.
+ * within the per-room cap, lawn-wedding override note), then inserts the batch. Overlaps are
+ * caught by the DB exclusion.
  */
 export async function allocateRooms(
   actor: Actor,
@@ -768,8 +702,8 @@ export async function allocateRooms(
   if (allocations.length === 0) throw badRequest('Select at least one room to allocate')
 
   const caps = await getIntSettings(
-    ['room_discount_cap_paise', 'suite_discount_cap_paise', 'large_allocation_rooms'] as const,
-    { room_discount_cap_paise: 50000, suite_discount_cap_paise: 100000, large_allocation_rooms: 35 },
+    ['room_discount_cap_paise', 'suite_discount_cap_paise'] as const,
+    { room_discount_cap_paise: 50000, suite_discount_cap_paise: 100000 },
   )
 
   try {
@@ -815,47 +749,8 @@ export async function allocateRooms(
         prepared.push({ ...a, ratePaise, discountPaise: discount, roomType: room.roomType, unitName: room.unitName, roomNo: room.roomNo })
       }
 
-      // BR-L2: if the event's total rooms would reach the threshold, defer the whole batch.
-      const [{ existing }] = (await tx.execute(sql`
-        SELECT count(*)::int AS existing FROM room_allocations WHERE event_id = ${eventId}
-      `)) as unknown as { existing: number }[]
-      if (existing + prepared.length >= caps.large_allocation_rooms) {
-        const [exc] = await tx
-          .insert(schema.exceptions)
-          .values({
-            eventId,
-            kind: 'room_allocation_35plus',
-            status: 'pending',
-            payload: {
-              allocations: prepared.map((p) => ({
-                roomId: p.roomId,
-                checkIn: p.checkIn,
-                checkOut: p.checkOut,
-                ratePaise: p.ratePaise,
-                discountPaise: p.discountPaise,
-                overrideNote: p.overrideNote ?? null,
-              })),
-              requestedCount: prepared.length,
-              existingCount: existing,
-              threshold: caps.large_allocation_rooms,
-            },
-            raisedBy: actor.id,
-          })
-          .returning({ id: schema.exceptions.id })
-
-        await audit(tx, actor, {
-          entity: 'exceptions',
-          entityId: exc!.id,
-          eventId,
-          action: 'insert',
-          field: 'room_allocation_35plus',
-          newValue: `${prepared.length} room(s), total ${existing + prepared.length}`,
-        })
-        return { deferred: true, exceptionId: exc!.id, count: prepared.length }
-      }
-
-      // Under the threshold: insert now in one statement; the exclusion constraint decides
-      // overlaps for every row (against existing rows and each other).
+      // Insert in one statement; the exclusion constraint decides overlaps for every row
+      // (against existing rows and each other).
       await tx.execute(sql`
         INSERT INTO room_allocations (event_id, room_id, stay, rate_paise, discount_paise, override_note, allocated_by)
         VALUES ${sql.join(
@@ -878,7 +773,7 @@ export async function allocateRooms(
           newValue: `${p.unitName} ${p.roomNo} ${p.checkIn}→${p.checkOut}`,
         })),
       )
-      return { deferred: false, allocated: prepared.length }
+      return { allocated: prepared.length }
     })
   } catch (err) {
     if (err instanceof ApiError) throw err

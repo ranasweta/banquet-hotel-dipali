@@ -22,8 +22,8 @@ const REQUESTABLE = new Set(['confirmed', 'in_progress'])
  * the moves they asked for themselves.
  */
 // Client, 21 Jul 2026: the Banquet Manager approves nothing — he reads the book. Venue,
-// date and time moves are the Higher Authority's call now, alongside menu increases,
-// 35+ room requests and over-cap discounts.
+// date and time moves are the Higher Authority's call now, alongside menu increases and
+// over-cap discounts.
 export const DECIDER_ROLES = new Set(['higher_authority', 'auditor'])
 const EXCLUSION_VIOLATION = '23P01'
 

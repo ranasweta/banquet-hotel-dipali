@@ -427,7 +427,6 @@ export const SETTINGS: { key: string; value: string }[] = [
   { key: 'suite_discount_cap_paise', value: String(rupeesToPaise(1_000)) }, // BR-D1
   { key: 'stale_enquiry_days', value: '7' }, // FR-1.8
   { key: 'calendar_window_days', value: '15' }, // FR-2.1
-  { key: 'large_allocation_rooms', value: '35' }, // BR-L2
   {
     key: 'terms_and_conditions',
     // FR-7.6: the client's Terms & Conditions (client PDF, 25 Jul 2026), transcribed in

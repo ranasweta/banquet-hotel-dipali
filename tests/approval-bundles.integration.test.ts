@@ -99,16 +99,16 @@ async function raiseMenuIncrease(subId: string): Promise<string> {
 }
 
 /**
- * A room booking over the 35 threshold, which raises its own request. Split across two
- * categories because Regency holds only 27 deluxe — the 35+ rule is an approval, but the
- * inventory cap in front of it is real, and a fixture that ignores it tests nothing.
+ * A discount past the 10% cap, which defers to the Authority as its own request (BR-D2).
+ *
+ * This used to be a 35+ room booking, until the client withdrew that approval on 12 Sep 2026.
+ * The bundle needs a SECOND kind of ask to prove it groups them, and an over-cap discount is
+ * the one still raised from a different module.
  */
-async function raiseRoomRequest(eventId: string): Promise<void> {
-  const regency = await unitId('Regency')
-  await roomsSvc.saveRoomRequirements(bm, eventId, [
-    { unitId: regency, roomType: 'deluxe', count: 27, checkIn: '2026-09-01', checkOut: '2026-09-03' },
-    { unitId: regency, roomType: 'semi_deluxe', count: 9, checkIn: '2026-09-01', checkOut: '2026-09-03' },
-  ])
+async function raiseDiscountRequest(eventId: string): Promise<string> {
+  const res = await discounts.addDiscount(bm, eventId, { head: 'overall', percentBp: 5000, remark: 'Owner’s friend' })
+  if (!res.deferred) throw new Error('expected the discount to defer to the Authority')
+  return res.exceptionId
 }
 
 beforeAll(async () => {
@@ -137,15 +137,14 @@ d('bundling (acceptance)', () => {
   it('collects every ask on one booking into a SINGLE bundle', async () => {
     const { eventId, subId } = await makeBooking()
     await raiseMenuIncrease(subId)
-    await raiseRoomRequest(eventId)
-    await discounts.addDiscount(bm, eventId, { head: 'overall', percentBp: 5000, remark: 'Owner’s friend' })
+    await raiseDiscountRequest(eventId)
 
     const list = await bundles.listBundles()
     const mine = list.filter((b) => b.eventId === eventId)
-    // Three separate requests, ONE row for the GM — the whole point of the change.
+    // Two separate requests from two modules, ONE row for the GM — the point of the change.
     expect(mine).toHaveLength(1)
-    expect(mine[0]!.pendingCount).toBe(3)
-    expect(new Set(mine[0]!.bySection.map((s) => s.section))).toEqual(new Set(['food', 'rooms', 'discount']))
+    expect(mine[0]!.pendingCount).toBe(2)
+    expect(new Set(mine[0]!.bySection.map((s) => s.section))).toEqual(new Set(['food', 'discount']))
   }, SLOW)
 
   it('a LATE ask joins the bundle it belongs to, after part of it was decided', async () => {
@@ -157,9 +156,9 @@ d('bundling (acceptance)', () => {
     })
     expect((await bundles.listBundles()).filter((b) => b.eventId === eventId)).toHaveLength(0)
 
-    // The Booking Manager comes back days later with rooms. It must reopen the same bundle,
-    // not start a queue of its own — the edge case the lead asked about explicitly.
-    await raiseRoomRequest(eventId)
+    // The Booking Manager comes back days later with a discount. It must reopen the same
+    // bundle, not start a queue of its own — the edge case the lead asked about explicitly.
+    await raiseDiscountRequest(eventId)
     const reopened = (await bundles.listBundles()).filter((b) => b.eventId === eventId)
     expect(reopened).toHaveLength(1)
     expect(reopened[0]!.pendingCount).toBe(1)
@@ -173,13 +172,12 @@ d('bundling (acceptance)', () => {
   it('settles the whole bundle in ONE call', async () => {
     const { eventId, subId } = await makeBooking()
     const menuExc = await raiseMenuIncrease(subId)
-    await raiseRoomRequest(eventId)
-    const roomExc = (await bundles.bundleDetail(eventId)).asks.find((a) => a.kind === 'room_allocation_35plus')!
+    const discExc = await raiseDiscountRequest(eventId)
 
     const res = await bundles.decideBundle(ha, eventId, {
       decisions: [
         { id: menuExc, source: 'exception', action: 'approve' },
-        { id: roomExc.id, source: 'exception', action: 'reject', remark: 'Regency is full that week' },
+        { id: discExc, source: 'exception', action: 'reject', remark: 'Too deep for an engagement' },
       ],
     })
     expect(res.settled).toHaveLength(2)
@@ -305,13 +303,12 @@ d('older menu requests still in live data', () => {
     // deciding the ones it can.
     const { eventId, subId } = await makeBooking()
     const excId = await legacyIncrease(eventId, subId)
-    await raiseRoomRequest(eventId)
-    const roomAsk = (await bundles.bundleDetail(eventId)).asks.find((a) => a.kind === 'room_allocation_35plus')!
+    const discExc = await raiseDiscountRequest(eventId)
 
     const res = await bundles.decideBundle(ha, eventId, {
       decisions: [
         { id: excId, source: 'exception', action: 'approve' },
-        { id: roomAsk.id, source: 'exception', action: 'approve' },
+        { id: discExc, source: 'exception', action: 'approve' },
       ],
     })
     expect(res.settled).toHaveLength(2)

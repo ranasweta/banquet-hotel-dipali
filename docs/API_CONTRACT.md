@@ -191,7 +191,8 @@ categories and does the row bookkeeping underneath.
   (migration 0009) follow only once **no** lodge anywhere still carries the old name — until
   then they may legitimately have meant another lodge's category. What deliberately does not
   move: `invoice_lines.description` (a document already issued), `audit_log` (append-only), and
-  the 35+ rooms `exceptions.payload` (a record of what was asked for, read for display only).
+  a retired room request's `exceptions.payload` (a record of what was asked for, read for
+  display only).
   Normalised like any category name, and refused (409) if the lodge already uses it — retired
   rooms count, since merging two categories is not a rename. The rename is applied before any
   rate or count in the same request, and a rename that changes nothing is a no-op.
@@ -228,7 +229,8 @@ ARE snapshotted, and the screen says so rather than implying a protection that d
 - `GET  /events/:id/room-requirements` | `POST` (from wizard step 4). **This is the booking**
   (migration 0009): lodge + category + count + dates. Gated on `bookings:create_edit`, not
   `rooms`. Refuses more than the lodge has free (409) and dates outside the event's own span
-  (400); ≥35 rooms still raises the BR-L2 request, which is an approval and not a limit.
+  (400). **Any number of rooms is allowed** (client, 12 Sep 2026): BR-L2's 35+ approval is
+  withdrawn, so the response no longer carries `deferred` and never returns 202.
 - `POST /rooms/availability` { event_id?, lines[] } — how many of each category a lodge has
   free over a range, measured per night and reported at the tightest one. Drives the ceiling
   the form shows before a save; the same numbers are re-checked inside the save transaction,
@@ -248,11 +250,9 @@ ARE snapshotted, and the screen says so rather than implying a protection that d
   date × unit × room category, never room numbers. Both ends inclusive (unlike `/rooms/board`,
   which is half-open). Defaults to the next 30 days; span capped at 92 server-side. Returns
   `{ from, to, windowDays, inventory[], occupancy[] }` — `occupancy` carries only non-empty
-  cells, each split `locked | confirmed | pending`; the client fills the rest from `inventory`.
-  `pending` is now always 0 and the field is kept only for shape: it used to count rooms held
-  inside an undecided 35+ exception, back when a deferred allocation wrote nothing.
-  Requirements ARE the booking today and are saved whether or not the Authority has ruled, so
-  counting them again there booked the same room twice. Enquiries hold nothing.
+  cells, each split `locked | confirmed`; the client fills the rest from `inventory`. (A third
+  `pending` count was dropped on 12 Sep 2026 with the 35+ approval that was its only source.)
+  Enquiries hold nothing.
   A Lodge Manager sees only their own lodge (migration 0013); every other role sees all three.
 - `GET  /rooms/calendar/:date` — that date drilled down: `{ date, inventory[], holders[] }`,
   each holder being an event, its category, its count and its state.

@@ -5,7 +5,7 @@
  *     enquiries, approvals (exceptions + change requests), 30-day balances;
  *   - Banquet: agenda carries menu state, menuGaps flags functions with no/draft menu;
  *   - Lodge: today's arrivals/departures and occupancy from the bulk booking, lodge scoping,
- *     the events awaiting the rooms sign-off, 35+ approvals;
+ *     the events awaiting the rooms sign-off;
  *   - Maintenance: In Progress / Completed events with running totals;
  *   - getDashboardForRole dispatches each role to the right board.
  */
@@ -256,7 +256,7 @@ d('getLodgeDashboard', () => {
     expect(palaceRow.available).toBe(Math.max(0, palaceRow.total - palaceRow.occupied))
   })
 
-  it('is scoped to one lodge, and 35+ approvals still surface', async () => {
+  it('is scoped to one lodge', async () => {
     const palace = await unitId('Palace')
     const regency = await unitId('Regency')
     const here = await makeEvent('confirmed')
@@ -265,18 +265,10 @@ d('getLodgeDashboard', () => {
       { eventId: here, unitId: palace, roomType: 'deluxe', count: 2, checkIn: ASOF, checkOut: '2027-03-20' },
       { eventId: elsewhere, unitId: regency, roomType: 'deluxe', count: 2, checkIn: ASOF, checkOut: '2027-03-20' },
     ])
-    await db.insert(schema.exceptions).values({
-      eventId: here,
-      kind: 'room_allocation_35plus',
-      payload: { requestedCount: 35, existingCount: 0 },
-      raisedBy: bm.id,
-    })
-
     const scoped = await getLodgeDashboard(ASOF, palace)
     expect(scoped.arrivals.some((a) => a.eventId === here)).toBe(true)
     expect(scoped.arrivals.some((a) => a.eventId === elsewhere)).toBe(false)
     expect(scoped.occupancy.every((u) => u.name === 'Palace')).toBe(true)
-    expect(scoped.pendingRoomApprovals.some((x) => x.eventId === here)).toBe(true)
   })
 
   it('lists the events waiting on the rooms sign-off, and drops them once signed', async () => {
