@@ -274,6 +274,73 @@ d('confirm gates', () => {
     expect(n).toBe(0)
   })
 
+  it('refers an over-cap discount to the Authority instead of refusing the confirm', async () => {
+    // Client, 12 Sep 2026. A discount given legally can drift over the cap when the bill moves
+    // under it, and confirm used to throw — leaving a manager holding the guest's money with no
+    // way to ask anybody, because the message said "ask the Higher Authority" and no screen
+    // could. It confirms and refers now.
+    const id = await makeEnquiry()
+    const [sub] = (await db.execute(
+      sql`SELECT id FROM sub_events WHERE event_id = ${id}`,
+    )) as unknown as { id: string }[]
+    // Crystal's wedding rate is Rs 1,51,000, so the cap is Rs 15,100. Rs 30,000 off is over it.
+    await db.insert(schema.discounts).values({
+      eventId: id,
+      head: 'venue',
+      lineKey: `venue:${sub!.id}`,
+      amountPaise: 3_000_000,
+      remark: 'Given when the bill was bigger',
+      givenBy: actor.id,
+    })
+
+    const res = await confirmEvent(actor, id, advance(ENOUGH_ADVANCE))
+    expect(res.code).toMatch(/^E-/)
+    expect(res.discountReferredPaise).toBe(3_000_000)
+
+    // Confirmed, with the money recorded and the dates held. None of it waits on the approval.
+    const [ev] = await db.select({ status: schema.events.status }).from(schema.events).where(eq(schema.events.id, id))
+    expect(ev!.status).toBe('confirmed')
+    const [counts] = (await db.execute(sql`
+      SELECT (SELECT count(*)::int FROM payments WHERE event_id = ${id}) AS paid,
+             (SELECT count(*)::int FROM venue_bookings WHERE event_id = ${id}) AS held
+    `)) as unknown as { paid: number; held: number }[]
+    expect(counts).toMatchObject({ paid: 1, held: 1 })
+
+    // ONE request for the Authority, and the discount row is untouched — still in force at the
+    // price the guest was quoted, because a confirmation is the one moment it must not move.
+    const exc = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, id))
+    expect(exc).toHaveLength(1)
+    expect(exc[0]!.kind).toBe('discount_over_cap')
+    expect(exc[0]!.status).toBe('pending')
+    const [disc] = await db
+      .select({ exceptionId: schema.discounts.exceptionId })
+      .from(schema.discounts)
+      .where(eq(schema.discounts.eventId, id))
+    expect(disc!.exceptionId).toBeNull()
+  })
+
+  it('refers nothing when the Authority confirms it himself', async () => {
+    // The cap routes a discount TO him; there is nobody to refer it to when he is the one
+    // pressing Confirm (FR-11.3a). Same user row, the role name is what the rule reads.
+    const id = await makeEnquiry()
+    const [sub] = (await db.execute(
+      sql`SELECT id FROM sub_events WHERE event_id = ${id}`,
+    )) as unknown as { id: string }[]
+    await db.insert(schema.discounts).values({
+      eventId: id,
+      head: 'venue',
+      lineKey: `venue:${sub!.id}`,
+      amountPaise: 3_000_000,
+      remark: 'His own call',
+      givenBy: actor.id,
+    })
+
+    const res = await confirmEvent({ id: actor.id, roleName: 'auditor' }, id, advance(ENOUGH_ADVANCE))
+    expect(res.discountReferredPaise).toBeNull()
+    const exc = await db.select().from(schema.exceptions).where(eq(schema.exceptions.eventId, id))
+    expect(exc).toHaveLength(0)
+  })
+
   it('refuses confirm when a venue has no rate card (BR-R1), never pricing at zero', async () => {
     // Gulmohar Lawn is sold only as the "Gulmohar + Middle" bundle, so it carries no rate
     // of its own. It replaces Upper Hall here, which was removed from the seed on 19 Jul

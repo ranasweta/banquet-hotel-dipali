@@ -303,8 +303,10 @@ is still open, and the unit rename is not yet applied to the seed.
 ### C6. Venue rate is snapshotted "at confirm", but pricing must precede confirm
 `sub_events.venue_rate_paise` is commented "snapshot from rate card at confirm". But
 BR-P1 requires a recorded advance **≥ 25% of `proposal_total_paise` before** confirm —
-and the proposal total cannot exist without venue pricing. FR-11.3 compounds it ("the
-discounted proposal cannot be confirmed until approved").
+and the proposal total cannot exist without venue pricing. FR-11.3 compounded it ("the
+discounted proposal cannot be confirmed until approved"), though that half no longer binds:
+an over-cap discount refers to the Authority at confirmation rather than blocking it
+(amended 12 Sep 2026).
 
 The rate must be snapshotted when the proposal is priced, at the latest when the advance
 is recorded. **Affects M3.**

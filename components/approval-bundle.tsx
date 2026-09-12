@@ -566,6 +566,10 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
             {pending.map((a) => {
               const target = targetOf(a)
               const prices = askedPrices(a)
+              // Raised BY a confirmation, not by someone asking for something (12 Sep 2026).
+              // These prices are already in force and the booking is already held, so calling
+              // them "Requested" would have the GM believe the guest is still waiting on him.
+              const atConfirm = a.payload.raisedAtConfirm === true
               return (
                 <li key={a.id} className={cn('rounded-lg border p-3', PURPLE_ROW)}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -574,7 +578,14 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                         <span className={cn('rounded-full px-2 py-0.5 text-xs', SECTION_STYLES[a.section])}>
                           {SECTION_LABEL[a.section] ?? a.section}
                         </span>
-                        <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs font-medium text-white">Requested</span>
+                        <span
+                          className={cn(
+                            'rounded-full px-2 py-0.5 text-xs font-medium text-white',
+                            atConfirm ? 'bg-amber-600' : 'bg-violet-600',
+                          )}
+                        >
+                          {atConfirm ? 'Already given' : 'Requested'}
+                        </span>
                       </div>
                       <p className="text-sm">{a.summary}</p>
                       {/* The prices themselves, cell by cell. A discount request used to reach
@@ -594,6 +605,13 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                             </li>
                           ))}
                         </ul>
+                      )}
+                      {atConfirm && (
+                        <p className="text-xs text-muted-foreground">
+                          Given within the cap, and the bill moved under it since. The booking is
+                          confirmed at these prices and the guest has them — approving changes
+                          nothing. To refuse, type the actual price back in Prices.
+                        </p>
                       )}
                       <p className="text-xs text-muted-foreground">raised by {a.raisedByName}</p>
                     </div>

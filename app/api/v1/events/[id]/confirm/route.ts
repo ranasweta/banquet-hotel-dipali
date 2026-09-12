@@ -53,6 +53,10 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
       // letting a partially-locked booking look like any other.
       advanceShortfallPaise: result.advanceShortfallPaise,
       advanceRequiredPaise: result.advanceRequiredPaise,
+      // Non-null when the combined discount was over the 10% cap: the booking is confirmed and
+      // the figure has gone to the Authority's queue (client, 12 Sep 2026). Not an error — the
+      // screen tells the manager what happened rather than refusing her the booking.
+      discountReferredPaise: result.discountReferredPaise,
     },
   })
 })

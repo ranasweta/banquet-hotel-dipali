@@ -6,7 +6,7 @@ import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
 import { occupancyParts } from '@/lib/occupancy'
 import { loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
-import { discountCap } from '@/lib/discounts'
+import { discountCap, discountSheet } from '@/lib/discounts'
 import { transitionEvent } from '@/lib/events'
 import { ADVANCE_PCT, payableBreakdown } from '@/lib/payment-schedule'
 import { AUTHORITY_ROLES } from '@/lib/post-confirm'
@@ -77,6 +77,12 @@ export async function confirmEvent(
   /** Still owed on the 25%. Zero when the advance was paid in full; the caller says so. */
   advanceShortfallPaise: number
   advanceRequiredPaise: number
+  /**
+   * The combined discount, when it is over the 10% cap and has therefore just been referred to
+   * the Authority — null when it is within the cap or when the Authority confirmed it himself.
+   * The booking is confirmed either way; this is what the screen tells the manager.
+   */
+  discountReferredPaise: number | null
 }> {
   try {
     return await db.transaction(async (tx) => {
@@ -137,15 +143,77 @@ export async function confirmEvent(
       //     function removed after one was given can push the combined total over the cap with
       //     nothing noticing. Confirm is the last gate before the money is committed, so the
       //     test `addDiscount` applies at entry runs once more here — the same `discountCap`,
-      //     never a second opinion. It does not bind the Higher Authority, on this screen as
-      //     on every other (FR-11.3a).
+      //     never a second opinion.
+      //
+      //     IT REFERS, IT DOES NOT REFUSE (client, 12 Sep 2026). This used to throw, and the
+      //     message told the manager to "ask the Higher Authority" while giving her nothing on
+      //     any screen that could ask him — so a guest stood at the counter with his money out
+      //     while somebody went to find the GM by phone. The booking confirms now: the advance
+      //     is recorded, the venues are held, and the over-cap discount goes to the Authority's
+      //     queue as ONE request, exactly as an over-cap save from the Billing panel does.
+      //
+      //     THE DISCOUNT ROWS ARE NOT TOUCHED. They were given legally — under the cap as it
+      //     stood — and are in force. Linking them to a pending request here would strip the
+      //     price at the very moment the guest is being confirmed, which is the one moment it
+      //     must not move. The request asks the Authority to bless the figure the bill has
+      //     drifted to; refusing is what it always is on that screen — he types the actual
+      //     price back into the grid, which supersedes the discount as the Authority's own
+      //     uncapped save.
+      //
+      //     The cap does not bind the Authority himself (FR-11.3a), so nothing is raised when
+      //     he is the one confirming — there would be no one to refer it to.
+      let discountReferredPaise: number | null = null
       if (!AUTHORITY_ROLES.has(actor.roleName)) {
         const cap = await discountCap(eventId, tx)
         if (cap.usedPaise > cap.capPaise) {
-          const rupees = (n: number) => `₹${(n / 100).toLocaleString('en-IN')}`
-          throw badRequest(
-            `The combined discount is now ${rupees(cap.usedPaise)}, over the ${cap.capPct}% cap of ${rupees(cap.capPaise)} — the bill has changed since it was given. Reduce it, or ask the Higher Authority (BR-D2).`,
-          )
+          discountReferredPaise = cap.usedPaise
+          // One request per booking. A second confirm attempt, or a discount already referred
+          // from the Billing panel, must not stack a duplicate ask in front of the Authority.
+          const [{ already }] = (await tx.execute(sql`
+            SELECT count(*)::int AS already FROM exceptions
+            WHERE event_id = ${eventId} AND kind = 'discount_over_cap' AND status = 'pending'
+          `)) as unknown as { already: number }[]
+          if (already === 0) {
+            const sheet = await discountSheet(eventId, tx)
+            const [exc] = await tx
+              .insert(schema.exceptions)
+              .values({
+                eventId,
+                kind: 'discount_over_cap',
+                status: 'pending',
+                payload: {
+                  // Same shape the Billing panel's over-cap save writes, so the approvals screen
+                  // prints the prices being asked for rather than a bare "over the cap".
+                  amountPaise: cap.usedPaise,
+                  combinedPaise: cap.usedPaise,
+                  capPaise: cap.capPaise,
+                  capBasePaise: cap.capBasePaise,
+                  remark: 'Raised at confirmation — the bill moved after the discount was given.',
+                  raisedAtConfirm: true,
+                  lines: [
+                    ...sheet.functions.flatMap((f) => [f.venue, f.food]),
+                    ...sheet.roomGroups.flatMap((g) => g.lines),
+                  ]
+                    .filter((l) => l != null && l.discountedPaise < l.actualPaise)
+                    .map((l) => ({
+                      key: l!.key,
+                      label: l!.label,
+                      actualPaise: l!.actualPaise,
+                      discountedPaise: l!.discountedPaise,
+                    })),
+                },
+                raisedBy: actor.id,
+              })
+              .returning({ id: schema.exceptions.id })
+            await audit(tx, actor, {
+              entity: 'exceptions',
+              entityId: exc!.id,
+              eventId,
+              action: 'insert',
+              field: 'discount_over_cap',
+              newValue: `${cap.usedPaise} paise against a ${cap.capPct}% cap of ${cap.capPaise} — referred at confirmation`,
+            })
+          }
         }
       }
 
@@ -301,6 +369,9 @@ export async function confirmEvent(
         proposalTotalPaise: proposalTotal,
         advanceShortfallPaise,
         advanceRequiredPaise: required,
+        // Non-null when the combined discount is over the cap: the booking is confirmed and the
+        // figure has gone to the Authority. The screen says so; it is news, not an error.
+        discountReferredPaise,
       }
     })
   } catch (err) {
