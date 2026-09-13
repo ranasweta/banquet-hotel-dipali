@@ -159,6 +159,7 @@ export const eventTypes = pgTable("event_types", {
 export const menuTiers = pgTable("menu_tiers", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	name: text().notNull(),
+	sharesVenue: boolean("shares_venue").default(false).notNull(),
 }, (table) => [
 	unique("menu_tiers_name_key").on(table.name),
 ]);
@@ -297,6 +298,7 @@ export const venueBookings = pgTable("venue_bookings", {
 	subEventId: uuid("sub_event_id").notNull(),
 	eventId: uuid("event_id").notNull(),
 	occupancy: tsrange("occupancy").notNull(),
+	sharesVenue: boolean("shares_venue").default(false).notNull(),
 }, (table) => [
 	index("vb_by_event").using("btree", table.eventId.asc().nullsLast().op("uuid_ops")),
 	index("vb_by_occupancy").using("gist", table.occupancy.asc().nullsLast().op("range_ops")),

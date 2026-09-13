@@ -60,6 +60,16 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
      allowed. A window with end_time ≤ start_time runs past midnight into the next day.
      Rely on the `venue_bookings` GiST exclusion to win races; no fixed slots, no 11 AM
      rule. Booking a bundle inserts one `venue_bookings` row per member venue.
+     **An ALL-DAY LIVE COUNTER may share a hall with its own booking's functions** (client,
+     13 Sep 2026; migration 0038). A menu tier flagged `shares_venue` in the menu master — today
+     the flat-rate tea/coffee counter, which stands in the hall the party is already in — may
+     overlap the OTHER FUNCTIONS OF ITS OWN BOOKING. Nothing else may, and it reaches no further:
+     two different bookings still cannot hold one venue at overlapping times. Two exclusion
+     constraints say it (cross-event always, same-event only between non-sharing rows) and the
+     flag is snapshotted onto the hold by a trigger, because four services insert holds. An
+     enquiry holds NO rows, so a proposal could always be built with its own breakfast and
+     dinner on top of each other and only discovered it at confirm, reported as another booking
+     taking the slot; `findSiblingClashes` checks it first and names both functions.
      **The hall is charged once a DAY, not once a function** (client, 12 Aug 2026, after staff
      hit it in the field). Hiring a venue takes it 9 AM to 8 AM the next morning; every function
      inside that window shares one let, whatever their menus. Three functions in one hall on one

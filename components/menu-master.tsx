@@ -31,7 +31,7 @@ type Category = {
   items: Item[]
 }
 type Price = { effectiveFrom: string; baseRatePaise: number; weddingSurchargePaise: number; current: boolean }
-type Tier = { id: string; name: string; prices: Price[]; categories: Category[]; savedMenus: number }
+type Tier = { id: string; name: string; prices: Price[]; categories: Category[]; savedMenus: number; sharesVenue: boolean }
 
 const today = () => new Date().toLocaleDateString('en-CA')
 
@@ -360,6 +360,9 @@ export function MenuMaster({ canEdit, canDelete }: { canEdit: boolean; canDelete
                       {formatPaise(scheduled[scheduled.length - 1]!.baseRatePaise)} from {scheduled[scheduled.length - 1]!.effectiveFrom}
                     </Badge>
                   )}
+                  {t.sharesVenue && (
+                    <Badge variant="outline">shares the hall</Badge>
+                  )}
                   {t.savedMenus > 0 && (
                     <span className="text-xs text-muted-foreground">{t.savedMenus} saved menu{t.savedMenus === 1 ? '' : 's'}</span>
                   )}
@@ -368,6 +371,7 @@ export function MenuMaster({ canEdit, canDelete }: { canEdit: boolean; canDelete
 
               {isOpen && (
                 <div className="space-y-5 border-t p-4">
+                  <SharesVenuePanel tier={t} canEdit={canEdit} busy={busy} run={run} />
                   <PricePanel tier={t} canEdit={canEdit} busy={busy} run={run} />
                   <SegmentPanel tier={t} canEdit={canEdit} canDelete={canDelete} busy={busy} run={run} />
                 </div>
@@ -377,6 +381,51 @@ export function MenuMaster({ canEdit, canDelete }: { canEdit: boolean; canDelete
         })}
       </div>
     </div>
+  )
+}
+
+/**
+ * Whether a function on this tier may stand in a hall the SAME booking is already using
+ * (client, 13 Sep 2026). The hotel has one of these: the all-day tea/coffee live counter,
+ * which runs beside breakfast, lunch and dinner in the hall the party is already in. Without
+ * the flag its own booking refused it — the venue exclusion saw two functions wanting one
+ * hall and said the slot was taken.
+ *
+ * It never lets a SECOND BOOKING into the hall; that exclusion is untouched.
+ */
+function SharesVenuePanel({
+  tier, canEdit, busy, run,
+}: {
+  tier: Tier; canEdit: boolean; busy: boolean
+  run: (fn: () => Promise<unknown>, done: string | ((result: unknown) => string)) => Promise<boolean>
+}) {
+  return (
+    <label className="flex items-start gap-3 text-sm">
+      <Checkbox
+        checked={tier.sharesVenue}
+        disabled={!canEdit || busy}
+        className="mt-0.5"
+        onCheckedChange={(v) =>
+          run(
+            () =>
+              api(`/menu/master/tiers/${tier.id}`, {
+                method: 'PUT',
+                body: JSON.stringify({ shares_venue: Boolean(v) }),
+              }),
+            Boolean(v)
+              ? `"${tier.name}" may now share a hall with the booking's other functions`
+              : `"${tier.name}" needs a hall to itself again`,
+          )
+        }
+      />
+      <span>
+        Runs alongside other functions
+        <span className="block text-xs text-muted-foreground">
+          An all-day counter: it may share a venue with the other functions of its OWN booking,
+          at overlapping times. Another booking still cannot be in that hall.
+        </span>
+      </span>
+    </label>
   )
 }
 
