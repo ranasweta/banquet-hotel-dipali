@@ -224,6 +224,11 @@ CREATE TABLE sub_events (
 -- Past midnight: a sub-event with end_time <= start_time runs into the next day. The
 -- booking service builds occupancy = [event_date + start_time,
 -- event_date + 1 day + end_time), so the exclusion catches next-morning clashes too.
+--
+-- 13 Sep 2026 - see migration 0038: a menu tier flagged `shares_venue` (the all-day live tea
+-- counter) may overlap the OTHER functions of its OWN booking, so the single exclusion below
+-- becomes two - cross-event overlap refused always, same-event overlap refused only between
+-- non-sharing rows.
 CREATE TABLE venue_bookings (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   venue_id     uuid NOT NULL REFERENCES venues(id),

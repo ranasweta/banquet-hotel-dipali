@@ -59,6 +59,8 @@ export type MasterTier = {
   categories: MasterCategory[]
   /** Menus already saved against this tier. Their snapshots are unaffected by edits here. */
   savedMenus: number
+  /** May a function on this tier overlap its OWN booking's other functions in one venue? */
+  sharesVenue: boolean
 }
 
 /**
@@ -68,10 +70,10 @@ export type MasterTier = {
 export async function getMasterCatalog(): Promise<MasterTier[]> {
   const [tiers, prices, cats, items] = await Promise.all([
     db.execute(sql`
-      SELECT t.id, t.name,
+      SELECT t.id, t.name, t.shares_venue AS "sharesVenue",
              (SELECT count(*)::int FROM sub_event_menus m WHERE m.tier_id = t.id) AS "savedMenus"
       FROM menu_tiers t ORDER BY t.name
-    `) as unknown as Promise<{ id: string; name: string; savedMenus: number }[]>,
+    `) as unknown as Promise<{ id: string; name: string; savedMenus: number; sharesVenue: boolean }[]>,
     db.execute(sql`
       SELECT tier_id AS "tierId", effective_from::text AS "effectiveFrom",
              base_rate_paise AS "baseRatePaise", wedding_surcharge_paise AS "weddingSurchargePaise",
@@ -122,6 +124,7 @@ export async function getMasterCatalog(): Promise<MasterTier[]> {
     prices: pricesByTier.get(t.id) ?? [],
     categories: catsByTier.get(t.id) ?? [],
     savedMenus: t.savedMenus,
+    sharesVenue: t.sharesVenue,
   }))
 }
 
@@ -193,6 +196,33 @@ export async function renameTier(actor: Actor, tierId: string, name: string): Pr
     await audit(tx, actor, {
       entity: 'menu_tiers', entityId: tierId, action: 'update', field: 'name',
       oldValue: t.name, newValue: next,
+    })
+  })
+}
+
+/**
+ * Marks a tier as one whose function may share a venue with the OTHER functions of its own
+ * booking (client, 13 Sep 2026). The hotel sells one such thing: an all-day tea/coffee live
+ * counter, a flat charge for the day, which stands in the hall the party is already in while
+ * breakfast, lunch and dinner come and go around it. Everything else is sold by the sitting
+ * and still cannot overlap.
+ *
+ * IT NEVER REACHES ANOTHER BOOKING. Two parties in one hall is what BR-C1 exists to prevent;
+ * the exclusion that refuses it is untouched (migration 0038). This only stops a booking from
+ * clashing with itself.
+ *
+ * Saved menus are unaffected, as with every other edit here: the flag is read from the tier
+ * when a venue hold is written, so it is the booking's tier TODAY that decides.
+ */
+export async function setTierSharesVenue(actor: Actor, tierId: string, sharesVenue: boolean): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [t] = await tx.select().from(schema.menuTiers).where(eq(schema.menuTiers.id, tierId)).limit(1)
+    if (!t) throw notFound('Tier not found')
+    if (t.sharesVenue === sharesVenue) return
+    await tx.update(schema.menuTiers).set({ sharesVenue }).where(eq(schema.menuTiers.id, tierId))
+    await audit(tx, actor, {
+      entity: 'menu_tiers', entityId: tierId, action: 'update', field: 'shares_venue',
+      oldValue: String(t.sharesVenue), newValue: String(sharesVenue),
     })
   })
 }

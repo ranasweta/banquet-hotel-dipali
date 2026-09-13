@@ -13,6 +13,9 @@ import { crossesMidnight, nextDay, occupancyParts } from '@/lib/occupancy'
  * re-run inside the confirm transaction. The occupancy maths lives in lib/occupancy.
  */
 
+/** A db handle or a transaction handle — the sibling check runs inside the confirm tx. */
+type Exec = Pick<typeof db, 'execute'>
+
 export type AvailabilityQuery = {
   date: string // YYYY-MM-DD
   startTime: string // HH:MM or HH:MM:SS
@@ -104,6 +107,68 @@ export async function checkAvailability(query: AvailabilityQuery): Promise<Avail
     venueIds,
     conflicts: rows,
   }
+}
+
+export type SiblingClash = {
+  venueLabel: string
+  aName: string; aDay: string; aStarts: string; aEnds: string
+  bName: string; bDay: string; bStarts: string; bEnds: string
+}
+
+/**
+ * Two functions of the SAME booking that want one venue at one time (BR-C1, amended
+ * 13 Sep 2026). An enquiry holds no `venue_bookings`, so nothing on the way in can see this:
+ * the wizard's venue list only hides venues a CONFIRMED booking has taken, and a proposal can
+ * therefore be built with its own breakfast and its own dinner sitting on top of each other in
+ * one hall. It surfaced at confirm as an exclusion violation reported as "another confirmed
+ * booking just took this slot" — a clash the manager could not find, because no other booking
+ * was in it.
+ *
+ * A tier flagged `shares_venue` — the all-day live tea counter — is exempt: it is meant to run
+ * beside the function it accompanies, so a pair is only a clash when NEITHER side shares.
+ * That is the same test the two exclusion constraints make (migration 0038); this one runs
+ * first so the error can name the two functions instead of the constraint.
+ *
+ * Bundles expand to their member venues to find the overlap, but the pair is reported once,
+ * labelled with what the manager actually picked.
+ */
+export async function findSiblingClashes(eventId: string, e?: Exec): Promise<SiblingClash[]> {
+  const rows = (await (e ?? db).execute(sql`
+    WITH held AS (
+      SELECT se.id,
+             se.name,
+             to_char(se.event_date, 'YYYY-MM-DD') AS day,
+             to_char(se.start_time, 'HH24:MI')    AS starts,
+             to_char(se.end_time, 'HH24:MI')      AS ends,
+             COALESCE(v.name, vb.name)            AS label,
+             m.venue_id                           AS venue_id,
+             COALESCE(t.shares_venue, false)      AS shares,
+             tsrange(se.event_date + se.start_time,
+                     CASE WHEN se.end_time <= se.start_time
+                          THEN se.event_date + 1 + se.end_time
+                          ELSE se.event_date + se.end_time END, '[)') AS occ
+      FROM sub_events se
+      LEFT JOIN venues v         ON v.id  = se.venue_id
+      LEFT JOIN venue_bundles vb ON vb.id = se.bundle_id
+      LEFT JOIN sub_event_menus sm ON sm.sub_event_id = se.id
+      LEFT JOIN menu_tiers t       ON t.id = sm.tier_id
+      CROSS JOIN LATERAL (
+        SELECT se.venue_id AS venue_id WHERE se.venue_id IS NOT NULL
+        UNION ALL
+        SELECT bm.venue_id FROM venue_bundle_members bm WHERE bm.bundle_id = se.bundle_id
+      ) m
+      WHERE se.event_id = ${eventId}
+    )
+    SELECT DISTINCT ON (a.id, b.id)
+           a.label  AS "venueLabel",
+           a.name   AS "aName", a.day AS "aDay", a.starts AS "aStarts", a.ends AS "aEnds",
+           b.name   AS "bName", b.day AS "bDay", b.starts AS "bStarts", b.ends AS "bEnds"
+    FROM held a
+    JOIN held b ON b.venue_id = a.venue_id AND b.id > a.id AND b.occ && a.occ
+    WHERE NOT a.shares AND NOT b.shares
+    ORDER BY a.id, b.id
+  `)) as unknown as SiblingClash[]
+  return rows
 }
 
 /**

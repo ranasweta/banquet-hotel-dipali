@@ -4,6 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { percentOfPaise } from '@/lib/money'
+import { findSiblingClashes } from '@/lib/availability'
 import { occupancyParts } from '@/lib/occupancy'
 import { loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
 import { discountCap, discountSheet } from '@/lib/discounts'
@@ -127,6 +128,28 @@ export async function confirmEvent(
       // 2c. At least one sub-event.
       const subs = await loadSubEventsForPricing(eventId, tx)
       if (subs.length === 0) throw badRequest('Add at least one sub-event before confirming')
+
+      // 2d. The booking's own functions must not want one venue at one time. The exclusion
+      //     constraint below would refuse it anyway, but it cannot say WHICH two functions —
+      //     and every exclusion violation used to be reported as another booking taking the
+      //     slot, which sent managers hunting for a clash that did not exist (client, 13 Sep
+      //     2026, on E-1093 and E-1128). An all-day live counter is exempt by its menu tier;
+      //     see lib/availability.ts and migration 0038.
+      const clashes = await findSiblingClashes(eventId, tx)
+      if (clashes.length > 0) {
+        const where = (n: string, d: string, s: string, e2: string) => `“${n}” (${d} ${s}–${e2})`
+        const lines = clashes
+          .slice(0, 3)
+          .map(
+            (c) =>
+              `${where(c.aName, c.aDay, c.aStarts, c.aEnds)} and ${where(c.bName, c.bDay, c.bStarts, c.bEnds)} in ${c.venueLabel}`,
+          )
+        throw conflict(
+          `Two functions of this booking want the same venue at the same time: ${lines.join('; ')}${
+            clashes.length > 3 ? `, and ${clashes.length - 3} more` : ''
+          }. Change one of the times or move it to another venue. (Only an all-day live counter may sit inside another function.)`,
+        )
+      }
 
       // 3. Price the proposal; a venue with no rate card is a gate (BR-R1). Food and
       //    add-ons from any menu already saved this enquiry fold into the total, so the
@@ -377,7 +400,9 @@ export async function confirmEvent(
   } catch (err) {
     if (err instanceof ApiError) throw err
     if (pgCode(err) === EXCLUSION_VIOLATION) {
-      // A racing confirm won this slot between our check and our insert.
+      // A racing confirm won this slot between step 2d's check and our insert. This booking's
+      // OWN functions were checked and named there, so by here the other side really is
+      // somebody else's booking.
       throw conflict(
         'One or more of these venue slots was just taken by another confirmed booking. Please pick a different time or venue.',
       )
