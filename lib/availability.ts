@@ -334,3 +334,56 @@ export async function listVenuesForBoard(): Promise<
     .orderBy(schema.properties.name, schema.venues.name)
   return rows
 }
+
+export type TapeVenue = { id: string; name: string; kind: string; propertyName: string }
+export type TapeBundle = { id: string; name: string; memberIds: string[]; memberNames: string }
+export type TapeBusy = { venueId: string; starts: string; ends: string }
+export type VenueTape = {
+  from: string
+  to: string
+  venues: TapeVenue[]
+  bundles: TapeBundle[]
+  busy: TapeBusy[]
+}
+
+/**
+ * Venue occupancy over a window for the tape chart (client's lead, 18 Sep 2026): every hall,
+ * lawn and bundle with the windows it is taken in, so the desk can answer "what is free on the
+ * 25th, and from when?" without opening a booking.
+ *
+ * A whole month in one call (client, 19 Sep 2026 — the month grid picks the day, as the lodging
+ * calendar's does). The payload is thin enough to carry a month: this is the ONE screen that
+ * deliberately says nothing about whose booking a window is — no guest, no code, no event type,
+ * no money — so the day the user opens needs no second request.
+ *
+ * Confirmed-and-beyond only, like the board (FR-2.5) — and necessarily so: an enquiry holds no
+ * `venue_bookings` row at all, so nothing here could show one. Overlap (not containment) picks
+ * up the window that started the night before, which is how an 11 PM → 5 PM booking appears on
+ * both mornings, the first of the month included.
+ */
+export async function getVenueTape(from: string, to: string): Promise<VenueTape> {
+  const dayEnd = nextDay(to)
+  const [venues, bundleRows, busy] = await Promise.all([
+    listVenuesForBoard(),
+    db.execute(sql`
+      SELECT b.id, b.name,
+             array_agg(m.venue_id::text)            AS "memberIds",
+             string_agg(v.name, ' + ' ORDER BY v.name) AS "memberNames"
+      FROM venue_bundles b
+      JOIN venue_bundle_members m ON m.bundle_id = b.id
+      JOIN venues v ON v.id = m.venue_id
+      GROUP BY b.id, b.name ORDER BY b.name
+    `) as unknown as Promise<TapeBundle[]>,
+    db.execute(sql`
+      SELECT vb.venue_id AS "venueId",
+             to_char(lower(vb.occupancy), 'YYYY-MM-DD"T"HH24:MI') AS "starts",
+             to_char(upper(vb.occupancy), 'YYYY-MM-DD"T"HH24:MI') AS "ends"
+      FROM venue_bookings vb
+      JOIN events e ON e.id = vb.event_id
+      WHERE e.status IN ('confirmed','in_progress','completed','locked','billed','closed')
+        AND vb.occupancy && tsrange(${from}::date::timestamp, ${dayEnd}::date::timestamp, '[)')
+      ORDER BY lower(vb.occupancy)
+    `) as unknown as Promise<TapeBusy[]>,
+  ])
+  return { from, to, venues, bundles: bundleRows, busy }
+}

@@ -64,6 +64,15 @@ races return 409 with a human-readable message.
   Locked-in deals only — events at status confirmed or beyond. Enquiries are never
   returned (FR-2.5, amended 17 Jul 2026); slot contention surfaces via `/availability`,
   which still returns `open_enquiries`.
+- `GET /calendar/availability?from=&to=` — the venue tape chart (client's lead, 18 Sep 2026):
+  every active venue, every bundle with its member ids, and the occupancy windows over the span
+  as `{ venueId, starts, ends }`. A month per request, since the screen picks its day from a
+  month grid; both ends inclusive, capped at 92 days. Deliberately the thinnest payload in the
+  app — no guest, no code, no event type, no money — because the only question it answers is
+  whether a venue is free and from when. Confirmed-and-beyond only, and necessarily so: an
+  enquiry holds no `venue_bookings` row. Matched on OVERLAP, so a window that began the night
+  before the span still appears. `calendar:view`, with no 15-day clamp (the board's cap guards
+  whose booking a date is, which this never says).
 - `GET /calendar/day-sheet/:date` — consolidated ops/kitchen order (printable)
 - `GET /calendar/horizon?from=&days=` — the operations board (client, 21 Jul 2026). Every
   function over a window with venue, timing, pax, the full menu including per-dish
