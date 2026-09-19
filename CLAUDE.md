@@ -392,6 +392,13 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
   locked-in deals only, no enquiries, per amended FR-2.5; the carryover tail was withdrawn
   12 Aug 2026, see rule 3), 5-step booking wizard, tier dish picker with per-category any-N counters
   (all-included categories render read-only), approvals queue, lock checklist.
+- **Venue availability** is a tape chart (client's lead, 18 Sep 2026) — the lodging calendar's
+  counterpart for halls: its month grid picks the day (19 Sep 2026), and below it every hall,
+  lawn and bundle is drawn against a 24-hour axis. It answers "free or not, and from when", and
+  deliberately says nothing about WHOSE booking a window is — the board is where a booking is
+  read. A date's count is of PLACES, so bundles (the same halls a second time) are drawn but
+  never counted, which the group header says on screen. Every row also spells its free windows
+  out in words: colour is the glance, the times are the fact.
 - The approvals queue is **one row per proposal** (1 Aug 2026), opening onto that booking's
   asks grouped by section and, below them, the whole proposal as an editable form. Requested
   items are marked in **violet** — always with the word "Requested" beside them, never colour

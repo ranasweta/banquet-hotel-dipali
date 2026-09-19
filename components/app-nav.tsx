@@ -11,6 +11,7 @@ import {
   BedDouble,
   BookOpen,
   CalendarDays,
+  CalendarRange,
   ChefHat,
   FileText,
   History,
@@ -38,6 +39,9 @@ const NAV: { href: string; label: string; module?: string; icon: LucideIcon }[] 
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/bookings', label: 'Proposal', module: 'bookings', icon: FileText },
   { href: '/calendar', label: 'Calendar', module: 'calendar', icon: CalendarDays },
+  // The tape chart (client's lead, 18 Sep 2026): which hall, lawn or bundle is free, and from
+  // when. Same grant as the board it sits beside — it shows less, never more, than the board.
+  { href: '/calendar/availability', label: 'Venue availability', module: 'calendar', icon: CalendarRange },
   // The 15-day operations board (client, 21 Jul 2026). It is the Banquet Manager's main
   // screen, so it earns a sidebar row — the Chef and Booking Manager reach the same board.
   { href: '/day-sheet', label: 'Next 15 days', module: 'calendar', icon: CalendarDays },
