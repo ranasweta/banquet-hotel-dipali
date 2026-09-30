@@ -12,6 +12,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 
 const maint = await import('@/lib/maintenance')
+const lock = await import('@/lib/lock')
 const daysheet = await import('@/lib/daysheet')
 const changes = await import('@/lib/change-requests')
 const menus = await import('@/lib/menus')
@@ -84,11 +85,40 @@ afterAll(async () => { if (hasDb) await cleanup() })
 d('maintenance gating (FR-5.1/5.2)', () => {
   const entry = { item: 'Generator (extra hours)', qty: 3, unit: 'hrs', ratePaise: 100_000 }
 
-  it('is blocked before In Progress and after lock', async () => {
-    const confirmed = await makeEvent('confirmed')
-    await expect(maint.addEntry(mt, confirmed, entry)).rejects.toThrow(/In Progress/)
+  it('is blocked on an enquiry and after lock', async () => {
+    const enquiry = await makeEvent('enquiry')
+    await expect(maint.addEntry(mt, enquiry, entry)).rejects.toThrow(/confirmed/)
     const locked = await makeEvent('locked')
-    await expect(maint.addEntry(mt, locked, entry)).rejects.toThrow(/In Progress/)
+    await expect(maint.addEntry(mt, locked, entry)).rejects.toThrow(/confirmed/)
+  })
+
+  /**
+   * Widened 30 Sep 2026: plenty of maintenance is arranged and paid for in the run-up — a
+   * generator hired in, a repair, scaffolding on site — and the window used to open only when
+   * the event did, so the team had nowhere to put those until the morning of.
+   */
+  it('accepts an entry on a confirmed booking that has not started', async () => {
+    const e = await makeEvent('confirmed')
+    const r = await maint.addEntry(mt, e, entry)
+    expect(r.amountPaise).toBe(300_000)
+    expect((await maint.listEntries(e)).totalPaise).toBe(300_000)
+  })
+
+  /**
+   * The close is a one-way door with no reopen, and it also turns the lock-checklist item
+   * green. Allowed on a booking that has not started, it would silently throw away every
+   * charge the event itself went on to incur.
+   */
+  it('refuses to close before the event starts, and hides the button until then', async () => {
+    const e = await makeEvent('confirmed')
+    await maint.addEntry(mt, e, entry)
+    expect((await maint.listEntries(e)).canClose).toBe(false)
+    await expect(maint.closeMaintenance(mt, e)).rejects.toThrow(/started/)
+
+    await db.update(schema.events).set({ status: 'in_progress' }).where(eq(schema.events.id, e))
+    expect((await maint.listEntries(e)).canClose).toBe(true)
+    await maint.closeMaintenance(mt, e)
+    expect((await maint.listEntries(e)).canClose).toBe(false) // already closed
   })
 
   it('allows entries In Progress and computes the amount, then freezes on close', async () => {
@@ -108,6 +138,27 @@ d('maintenance gating (FR-5.1/5.2)', () => {
     // After close: no new entries, no edits.
     await expect(maint.addEntry(mt, e, entry)).rejects.toThrow(/closed/)
     await expect(maint.updateEntry(mt, closed.entries[0]!.id, { qty: 5 })).rejects.toThrow(/closed/)
+  })
+
+  /**
+   * Read off the bare sign-off this was red on every booking in the hotel, which is how it came
+   * to be ignored — and an entry left open is dropped from the bill entirely, since only closed
+   * maintenance is charged. Red must mean money genuinely waiting, as it does for the lodge's
+   * extras and the kitchen's plates.
+   */
+  it('is a lock-checklist item that is green when there is nothing to close', async () => {
+    const item = (c: Awaited<ReturnType<typeof lock.lockChecklist>>) => c.items.find((i) => i.key === 'maintenance')!
+
+    const quiet = await makeEvent('completed')
+    expect(item(await lock.lockChecklist(quiet)).done).toBe(true)
+    // Non-blocking, as it has been since 25 Jul 2026: a booking that owes nothing still locks.
+    expect(item(await lock.lockChecklist(quiet)).blocking).toBe(false)
+
+    const busy = await makeEvent('in_progress')
+    await maint.addEntry(mt, busy, entry)
+    expect(item(await lock.lockChecklist(busy)).done).toBe(false)
+    await maint.closeMaintenance(mt, busy)
+    expect(item(await lock.lockChecklist(busy)).done).toBe(true)
   })
 
   it('only the entry’s author (or Auditor) may edit', async () => {

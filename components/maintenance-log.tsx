@@ -23,8 +23,9 @@ type EventRow = {
 /**
  * The Maintenance team's own way in. Charges are logged against an event, but the team has no
  * Bookings access — the event page they'd otherwise need is closed to them — so this lists the
- * events they may log against (In Progress / Completed, FR-5.1) and opens the same entry editor
- * inline. Live events come first; a closed section is frozen and read-only (FR-5.2).
+ * events they may log against (Confirmed / In Progress / Completed, FR-5.1) and opens the same
+ * entry editor inline. Live events come first, then what is still to come, then what is done
+ * and waiting on a close. A closed section is frozen and read-only (FR-5.2).
  */
 export function MaintenanceLog({ canEdit }: { canEdit: boolean }) {
   const [events, setEvents] = useState<EventRow[] | null>(null)
@@ -49,7 +50,8 @@ export function MaintenanceLog({ canEdit }: { canEdit: boolean }) {
   }
 
   const live = events.filter((e) => e.status === 'in_progress')
-  const done = events.filter((e) => e.status !== 'in_progress')
+  const upcoming = events.filter((e) => e.status === 'confirmed')
+  const done = events.filter((e) => e.status === 'completed')
 
   return (
     <div className="space-y-6">
@@ -62,9 +64,21 @@ export function MaintenanceLog({ canEdit }: { canEdit: boolean }) {
         setOpen={setOpen}
         canEdit={canEdit}
       />
+      {/* Confirmed but not started. A generator hired in, a repair, scaffolding on site — all
+          arranged and paid for before the day, and until 30 Sep 2026 there was nowhere to put
+          them until the morning of. */}
+      <Section
+        title="Upcoming events"
+        note="confirmed — log what is arranged ahead of the day"
+        rows={upcoming}
+        empty="Nothing confirmed and still to come."
+        open={open}
+        setOpen={setOpen}
+        canEdit={canEdit}
+      />
       <Section
         title="Completed events"
-        note="still open until you close them"
+        note="log what is left, then add it to the bill"
         rows={done}
         empty="Nothing completed and awaiting a close."
         open={open}
@@ -117,15 +131,19 @@ function Section({
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
+                    {/* What the guest will be charged, not what state the log is in. "open" in
+                        green read as done and meant the opposite — money logged and not billed. */}
                     <span
                       className={cn(
                         'rounded-full px-2 py-0.5 text-xs font-medium',
                         e.closed
-                          ? 'bg-muted text-muted-foreground'
-                          : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300',
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                          : e.entryCount > 0
+                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                            : 'bg-muted text-muted-foreground',
                       )}
                     >
-                      {e.closed ? 'closed' : 'open'}
+                      {e.closed ? 'on the bill' : e.entryCount > 0 ? 'not billed' : 'nothing logged'}
                     </span>
                     <Button size="sm" variant="outline" onClick={() => setOpen(open === e.id ? null : e.id)}>
                       {open === e.id ? 'Hide' : e.closed ? 'View charges' : 'Log charges'}
@@ -137,7 +155,9 @@ function Section({
                     {/* Same editor the event page uses — one implementation, two ways in. */}
                     <EventMaintenance eventId={e.id} editable={canEdit && !e.closed} />
                     <p className="mt-2 text-xs text-muted-foreground">
-                      Closing freezes these entries and signs off the maintenance line.
+                      {e.status === 'confirmed'
+                        ? 'Charges go to the bill once the event starts — until then keep logging.'
+                        : 'Adding to the bill charges these to the guest and freezes them — log everything first.'}
                     </p>
                   </div>
                 )}

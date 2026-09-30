@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/table'
 
 type Entry = { id: string; item: string; qty: string; unit: string; ratePaise: number; amountPaise: number; remarks: string | null; hasAttachment: boolean; createdBy: string; isClosed: boolean }
-type View = { closed: boolean; totalPaise: number; entries: Entry[] }
+type View = { closed: boolean; canClose: boolean; totalPaise: number; entries: Entry[] }
 
 export function EventMaintenance({ eventId, editable }: { eventId: string; editable: boolean }) {
   const [view, setView] = useState<View | null>(null)
@@ -38,10 +38,19 @@ export function EventMaintenance({ eventId, editable }: { eventId: string; edita
       <div className="flex items-center justify-between">
         <div className="text-sm text-muted-foreground">
           Total: <span className="font-medium tabular-nums text-foreground">{formatPaise(view.totalPaise)}</span>
-          {view.closed && <Badge variant="outline" className="ml-2 text-muted-foreground"><Lock className="mr-1 size-3" /> closed</Badge>}
+          {view.closed ? (
+            <Badge variant="outline" className="ml-2 text-muted-foreground"><Lock className="mr-1 size-3" /> on the bill</Badge>
+          ) : (
+            // Said plainly because it is the whole point of the button beside it. Logged and
+            // not yet sent, these entries are charged nothing, and the word that used to
+            // describe that state was "closed" — on the button, not on the entries.
+            view.entries.length > 0 && <span className="ml-2 text-amber-700 dark:text-amber-500">not on the bill yet</span>
+          )}
         </div>
-        {canEdit && view.entries.length > 0 && (
-          <CloseButton eventId={eventId} onDone={load} />
+        {/* Sending is a one-way door with no reopen, so it is not offered before the event has
+            started — until then more maintenance may still be coming. */}
+        {canEdit && view.entries.length > 0 && view.canClose && (
+          <CloseButton eventId={eventId} totalPaise={view.totalPaise} onDone={load} />
         )}
       </div>
 
@@ -82,7 +91,7 @@ export function EventMaintenance({ eventId, editable }: { eventId: string; edita
         </div>
       )}
 
-      {canEdit ? <AddEntry eventId={eventId} onAdded={load} /> : !view.closed && <p className="text-sm text-muted-foreground">Maintenance can be logged while the event is In Progress or Completed.</p>}
+      {canEdit ? <AddEntry eventId={eventId} onAdded={load} /> : !view.closed && <p className="text-sm text-muted-foreground">Maintenance can be logged once a booking is confirmed, and only until it is locked.</p>}
     </div>
   )
 }
@@ -135,21 +144,25 @@ function AddEntry({ eventId, onAdded }: { eventId: string; onAdded: () => Promis
   )
 }
 
-function CloseButton({ eventId, onDone }: { eventId: string; onDone: () => Promise<void> }) {
+/**
+ * The one action that charges maintenance to the guest. It was labelled "Close maintenance",
+ * which named what it does to the LOG and not what it does to the BILL, so entries sat open —
+ * and an open entry is charged nothing. The label now states the amount and where it is going.
+ */
+function CloseButton({ eventId, totalPaise, onDone }: { eventId: string; totalPaise: number; onDone: () => Promise<void> }) {
   const [busy, setBusy] = useState(false)
   return (
     <Button
-      variant="outline"
       size="sm"
       disabled={busy}
       onClick={async () => {
         setBusy(true)
-        try { await api(`/events/${eventId}/maintenance/close`, { method: 'POST' }); await onDone(); toast.success('Maintenance closed') }
+        try { await api(`/events/${eventId}/maintenance/close`, { method: 'POST' }); await onDone(); toast.success(`${formatPaise(totalPaise)} added to the bill`) }
         catch (e) { toast.error(e instanceof Error ? e.message : 'Failed') }
         finally { setBusy(false) }
       }}
     >
-      <Lock className="size-3.5" /> Close maintenance
+      {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Lock className="size-3.5" />} Add {formatPaise(totalPaise)} to the bill
     </Button>
   )
 }

@@ -545,14 +545,14 @@ export function EventDetailView({
         </>
       )}
 
-      {canViewMaintenance && ['in_progress', 'completed', 'locked', 'billed', 'closed'].includes(event.status) && (
+      {canViewMaintenance && ['confirmed', 'in_progress', 'completed', 'locked', 'billed', 'closed'].includes(event.status) && (
         <>
           <Separator />
           <div className="space-y-4">
             <h2 className="text-lg font-semibold">Maintenance</h2>
             <EventMaintenance
               eventId={event.id}
-              editable={canEditMaintenance && ['in_progress', 'completed'].includes(event.status)}
+              editable={canEditMaintenance && ['confirmed', 'in_progress', 'completed'].includes(event.status)}
             />
           </div>
         </>
