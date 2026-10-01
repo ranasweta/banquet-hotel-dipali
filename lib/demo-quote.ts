@@ -43,7 +43,6 @@ export type DemoQuote = {
     perPlatePaise: number
     foodPaise: number
   }[]
-  menus: { tierName: string; perPlatePaise: number; categories: { name: string; pickCount: number | null }[] }[]
   rooms: { unitName: string; roomType: string; count: number; nights: number; ratePaise: number; amountPaise: number }[]
   functionsPaise: number
   roomsPaise: number
@@ -99,14 +98,6 @@ export async function demoQuote(input: {
       { name: t.name, perPlatePaise: Number(t.basePaise) + (isWedding ? Number(t.surchargePaise) : 0) },
     ]),
   )
-  const cats = tierIds.length
-    ? ((await db.execute(sql`
-        SELECT tier_id::text AS "tierId", name, pick_count AS "pickCount"
-        FROM menu_categories
-        WHERE tier_id IN (${sql.join(tierIds.map((id) => sql`${id}::uuid`), sql`, `)})
-        ORDER BY sort_order
-      `)) as unknown as { tierId: string; name: string; pickCount: number | null }[])
-    : []
 
   let shownGstPaise = 0
   const functions = subs.map((s) => {
@@ -129,12 +120,6 @@ export async function demoQuote(input: {
     }
   })
   const functionsPaise = functions.reduce((sum, f) => sum + (f.venuePaise ?? 0) + f.foodPaise, 0)
-
-  const menus = tierIds.map((id) => ({
-    tierName: tierById.get(id)?.name ?? 'Menu',
-    perPlatePaise: tierById.get(id)?.perPlatePaise ?? 0,
-    categories: cats.filter((c) => c.tierId === id).map((c) => ({ name: c.name, pickCount: c.pickCount })),
-  }))
 
   // Rooms at the lodge's rack rate for the category, the same estimate an enquiry is priced at.
   const rateRows = input.rooms.length
@@ -159,7 +144,6 @@ export async function demoQuote(input: {
   const payablePaise = functionsPaise + roomsPaise + roomTaxPaise
   return {
     functions,
-    menus,
     rooms,
     functionsPaise,
     roomsPaise,

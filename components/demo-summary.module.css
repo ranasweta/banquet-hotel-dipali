@@ -41,6 +41,7 @@
 .menuH span { font-family: var(--font-display), Georgia, serif; font-weight: 700; font-size: 13pt; }
 .menuH em { font-style: normal; font-size: 7pt; color: var(--gold); }
 .menus p { font-size: 7.6pt; color: var(--body); line-height: 1.6; }
+.menus .menuFor { font-size: 6.8pt; color: var(--mute); margin-bottom: .8mm; }
 
 .bottom { position: absolute; left: 16mm; right: 16mm; bottom: 22mm;
           display: grid; grid-template-columns: 1fr 1fr; gap: 9mm; align-items: end; }

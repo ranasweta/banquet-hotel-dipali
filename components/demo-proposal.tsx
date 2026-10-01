@@ -13,6 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { TimePicker12 } from '@/components/ui/time-picker-12'
 import { Field, Nav, StepCard, Stepper } from '@/components/booking-wizard'
 import type { DemoQuote } from '@/lib/demo-quote'
+import type { CatalogTier } from '@/components/menu-picker'
+import { cn } from '@/lib/utils'
 import styles from './demo-summary.module.css'
 
 /**
@@ -30,8 +32,18 @@ type Options = {
   roomRates: { unitId: string; roomType: string; rackRatePaise: number }[]
   lodgingUnits?: { id: string; name: string }[]
 }
-type Tier = { id: string; name: string }
-type Fn = { name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; tierId: string }
+type Tier = CatalogTier
+/** `dishes` maps a category name to the dishes picked in it. */
+type Fn = {
+  name: string
+  eventDate: string
+  startTime: string
+  endTime: string
+  target: string
+  pax: number
+  tierId: string
+  dishes: Record<string, string[]>
+}
 type Room = { unitId: string; roomType: string; count: number; nights: number }
 
 const STEPS = ['Date & event', 'Guest', 'Functions & menu', 'Rooms', 'Summary']
@@ -180,6 +192,8 @@ export function DemoProposal() {
           <div className="overflow-x-auto print:overflow-visible">
             <DemoSummary
               quote={quote}
+              fns={fns}
+              tiers={tiers}
               guestName={guestName}
               eventLabel={types.find((t) => t.value === eventType)?.label ?? ''}
               fromDate={fromDate}
@@ -214,6 +228,7 @@ function DemoFunctions({
   const [target, setTarget] = useState('')
   const [pax, setPax] = useState('')
   const [tierId, setTierId] = useState('')
+  const [openMenu, setOpenMenu] = useState<number | null>(null)
 
   // Every priceable place, free or not — a demo holds nothing, so availability does not matter.
   const venueItems = [
@@ -225,13 +240,14 @@ function DemoFunctions({
 
   function add() {
     setFns(
-      [...fns, { name: name.trim(), eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), tierId }].sort(
+      [...fns, { name: name.trim(), eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), tierId, dishes: {} }].sort(
         (a, b) => (a.eventDate + a.startTime).localeCompare(b.eventDate + b.startTime),
       ),
     )
     setName('')
     setStart(end)
     setEnd('')
+    setOpenMenu(null)
   }
 
   return (
@@ -239,17 +255,38 @@ function DemoFunctions({
       {fns.length > 0 && (
         <ol className="space-y-2">
           {fns.map((f, i) => (
-            <li key={i} className="flex items-center justify-between gap-3 rounded-lg border bg-card p-3 text-sm">
-              <div className="min-w-0">
-                <span className="font-medium">{f.name}</span>{' '}
-                <span className="tabular-nums text-muted-foreground">
-                  {f.eventDate} · {formatTimeRange(f.startTime, f.endTime)} · {venueItems.find((v) => v.value === f.target)?.label} · {f.pax} pax
-                </span>
-                <div className="text-xs text-muted-foreground">{tiers.find((t) => t.id === f.tierId)?.name}</div>
+            <li key={i} className="rounded-lg border bg-card p-3 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="font-medium">{f.name}</span>{' '}
+                  <span className="tabular-nums text-muted-foreground">
+                    {f.eventDate} · {formatTimeRange(f.startTime, f.endTime)} · {venueItems.find((v) => v.value === f.target)?.label} · {f.pax} pax
+                  </span>
+                  <div className="text-xs text-muted-foreground">{tiers.find((t) => t.id === f.tierId)?.name}</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button variant="outline" size="sm" onClick={() => setOpenMenu((o) => (o === i ? null : i))}>
+                    {openMenu === i ? 'Hide dishes' : 'Choose dishes'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      setFns(fns.filter((_, j) => j !== i))
+                      setOpenMenu(null)
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => setFns(fns.filter((_, j) => j !== i))}>
-                <Trash2 className="size-4" />
-              </Button>
+              {openMenu === i && (
+                <DemoDishes
+                  tier={tiers.find((t) => t.id === f.tierId)}
+                  dishes={f.dishes}
+                  onChange={(dishes) => setFns(fns.map((x, j) => (j === i ? { ...x, dishes } : x)))}
+                />
+              )}
             </li>
           ))}
         </ol>
@@ -300,6 +337,66 @@ function DemoFunctions({
         </div>
         <Button className="mt-3 w-full sm:w-auto" onClick={add} disabled={!ready}>Add function</Button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * A plain dish picker held in page state. Each section takes up to its "any N"; a section with
+ * no count is all included and read-only, as in the real picker. No Increase — a demo shows the
+ * menu as sold, and asking the Authority for extras belongs to a real proposal.
+ */
+function DemoDishes({
+  tier,
+  dishes,
+  onChange,
+}: {
+  tier: Tier | undefined
+  dishes: Record<string, string[]>
+  onChange: (d: Record<string, string[]>) => void
+}) {
+  if (!tier) return null
+  return (
+    <div className="mt-3 space-y-3 rounded-lg border bg-muted/20 p-3">
+      {tier.categories.map((c) => {
+        const picked = dishes[c.name] ?? []
+        const full = c.pickCount != null && picked.length >= c.pickCount
+        return (
+          <div key={c.id}>
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <span className="text-sm font-medium">{c.name}</span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {c.pickCount == null ? 'All included' : `${picked.length} of ${c.pickCount} chosen`}
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {c.items.map((item) => {
+                const on = c.pickCount == null || picked.includes(item)
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    disabled={c.pickCount == null || (!on && full)}
+                    aria-pressed={on}
+                    onClick={() =>
+                      onChange({ ...dishes, [c.name]: on ? picked.filter((x) => x !== item) : [...picked, item] })
+                    }
+                    className={cn(
+                      'rounded-full border px-2.5 py-0.5 text-xs transition-colors',
+                      on ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted',
+                      c.pickCount == null && 'cursor-default',
+                      !on && full && 'opacity-40',
+                    )}
+                  >
+                    {on && c.pickCount != null && '✓ '}
+                    {item}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -385,18 +482,38 @@ const longDate = (iso: string) =>
 /** The one-page summary the lead drew (booking-summary.html), filled from the demo quote. */
 function DemoSummary({
   quote,
+  fns,
+  tiers,
   guestName,
   eventLabel,
   fromDate,
   toDate,
 }: {
   quote: DemoQuote
+  fns: Fn[]
+  tiers: Tier[]
   guestName: string
   eventLabel: string
   fromDate: string
   toDate: string
 }) {
   const roomCount = quote.rooms.reduce((s, r) => s + r.count, 0)
+  // One block per distinct menu: functions on the same tier with the same dishes share one.
+  // `quote.functions` comes back in the same (date, start) order `fns` is kept in.
+  const menus = new Map<string, { names: string[]; tierName: string; perPlatePaise: number; lines: string[] }>()
+  quote.functions.forEach((qf, i) => {
+    const f = fns[i]!
+    const tier = tiers.find((t) => t.id === f.tierId)
+    const lines = (tier?.categories ?? []).flatMap((c) => {
+      if (c.pickCount == null) return [c.name]
+      const picked = f.dishes[c.name] ?? []
+      return picked.length ? picked : [`${c.name} (any ${c.pickCount})`]
+    })
+    const key = `${f.tierId}|${lines.join('|')}`
+    const m = menus.get(key)
+    if (m) m.names.push(f.name)
+    else menus.set(key, { names: [f.name], tierName: qf.tierName, perPlatePaise: qf.perPlatePaise, lines })
+  })
   const dates = fromDate === toDate ? longDate(fromDate) : `${longDate(fromDate)} – ${longDate(toDate)}`
   return (
     <div className={styles.sheet}>
@@ -444,10 +561,11 @@ function DemoSummary({
 
         <div className={styles.sec}>MENUS</div>
         <div className={styles.menus}>
-          {quote.menus.map((m) => (
-            <div key={m.tierName}>
+          {[...menus.entries()].map(([key, m]) => (
+            <div key={key}>
               <div className={styles.menuH}><span>{m.tierName}</span><em>₹{inr(m.perPlatePaise)} / plate</em></div>
-              <p>{m.categories.map((c) => (c.pickCount == null ? c.name : `${c.name} (any ${c.pickCount})`)).join(' · ')}</p>
+              <p className={styles.menuFor}>{m.names.join(', ')}</p>
+              <p>{m.lines.join(' · ')}</p>
             </div>
           ))}
         </div>
