@@ -39,10 +39,10 @@ export async function lockChecklist(
       (SELECT count(*)::int FROM change_requests WHERE event_id = e.id AND status = 'pending') AS "pendingCr",
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'banquet_manager') AS banquet,
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'lodge_manager') AS lodge,
+      EXISTS (SELECT 1 FROM maintenance_entries WHERE event_id = e.id) AS "hasMaint",
       EXISTS (SELECT 1 FROM lock_signoffs WHERE event_id = e.id AND designation = 'maintenance') AS maint,
-      -- The Lodge Manager's extras (migration 0034). Two facts, because unlike maintenance this
-      -- item can be green for the right reason: hasExtras says there is money waiting on a
-      -- close, extrasClosed says it has had one.
+      -- The Lodge Manager's extras (migration 0034). Two facts, like maintenance above:
+      -- hasExtras says there is money waiting on a close, extrasClosed says it has had one.
       (EXISTS (SELECT 1 FROM additional_rooms WHERE event_id = e.id)
         OR EXISTS (SELECT 1 FROM lodge_extras WHERE event_id = e.id AND in_room_dining_paise > 0)) AS "hasExtras",
       EXISTS (SELECT 1 FROM lodge_extras WHERE event_id = e.id AND closed_at IS NOT NULL) AS "extrasClosed",
@@ -72,7 +72,7 @@ export async function lockChecklist(
     FROM events e WHERE e.id = ${eventId}
   `)) as unknown as {
     status: string; subCount: number; menuComplete: number; pendingExc: number; pendingCr: number
-    banquet: boolean; lodge: boolean; maint: boolean; hasExtras: boolean; extrasClosed: boolean
+    banquet: boolean; lodge: boolean; hasMaint: boolean; maint: boolean; hasExtras: boolean; extrasClosed: boolean
     hasPlates: boolean; platesClosed: boolean; hasRooms: boolean
     unsubmittedExtras: number; paid: number
   }[]
@@ -94,7 +94,12 @@ export async function lockChecklist(
     // booking must not be held from locking waiting on a sign-off that is not owed. It stays on
     // the checklist so Maintenance can still close it when they do log something, but it no
     // longer blocks the lock — an event with no entries simply bills Rs 0.
-    { key: 'maintenance', label: 'Maintenance closed', done: row.maint, blocking: false },
+    //
+    // Green when there is nothing to close, like the two below. Read off the bare sign-off it
+    // was red on every booking in the hotel, which is how it came to be ignored: an entry left
+    // open is dropped from the bill (only closed maintenance is charged), and the one item that
+    // would have said so looked exactly the same as the 90-odd bookings that owed nothing.
+    { key: 'maintenance', label: 'Maintenance charges on the bill', done: !row.hasMaint || row.maint, blocking: false },
     // Same shape and the same reason as maintenance: most bookings take no extras, and a
     // booking must not be held from locking waiting on a close that is not owed. Green when
     // there is nothing to close, so what the Auditor sees red is money genuinely waiting.

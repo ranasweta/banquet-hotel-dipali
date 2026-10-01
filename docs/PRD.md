@@ -207,9 +207,11 @@ Requirements are numbered FR-x.y. "Shall" items are mandatory for v1.
 
 ### 5.5 Maintenance
 
-- FR-5.1 Maintenance users shall see events in In Progress or Completed states and add cost entries: item, quantity, unit, rate, amount, remarks, optional photo/receipt attachment.
-- FR-5.2 Entries are editable by their creator until the maintenance section for the event is marked closed by the Maintenance lead; closure is a lock-checklist item.
-- FR-5.3 All closed entries flow to the bill as itemised maintenance lines.
+- FR-5.1 Maintenance users shall see events in **Confirmed**, In Progress or Completed states and add cost entries: item, quantity, unit, rate, amount, remarks, optional photo/receipt attachment. Any number of entries may be logged against one event.
+- FR-5.1a **The window opens at confirmation, not at the event (amended 30 Sep 2026).** It previously opened only when the event did, which assumed every maintenance cost is incurred on the day. Plenty are not — a generator hired in, a marquee repaired, scaffolding brought on site — and all of those are arranged and paid for in the run-up, with nowhere to record them until the morning of. An **enquiry is still refused**: it holds nothing and may never happen, so there is no booking for the cost to belong to. The **close keeps the narrower window** (In Progress / Completed, the same one every other lock sign-off has): it is one-way and there is no reopen, so allowing it on a booking that has not started would silently throw away every charge the event itself went on to incur.
+- FR-5.2 Entries are editable by their creator until the maintenance section for the event is marked closed by the Maintenance lead; closure is a lock-checklist item. The close is **per event, not per entry** — one sign-off freezes every entry logged against that booking. On screen it is labelled for what it does to the **bill** ("Add ₹X to the bill"), not for what it does to the log: called "Close maintenance" it named the wrong half of its own effect, and charges sat open and unbilled because nothing said that pressing it was what billed them.
+- FR-5.2a **The checklist item is green when there is nothing to close (30 Sep 2026).** Read off the bare sign-off it was red on every booking in the hotel, so it carried no information and was ignored. It now follows the shape the lodge's extras and the kitchen's plates already use — `no entries OR closed` — so red means money genuinely waiting. It stays non-blocking (client, 25 Jul 2026).
+- FR-5.3 All closed entries flow to the bill as itemised maintenance lines. **Open entries are charged nothing**, and an event locked with its maintenance still open can never be closed, so that money is lost from the bill — which is what FR-5.2a exists to make visible.
 
 ### 5.6 Higher Authority approvals
 

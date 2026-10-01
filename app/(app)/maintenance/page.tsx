@@ -18,7 +18,7 @@ export default async function MaintenancePage() {
         <h1 className="text-2xl font-semibold">Maintenance</h1>
         <p className="text-muted-foreground">
           {canEdit
-            ? 'Charges can be added until you close the event’s maintenance.'
+            ? 'Log every charge against its booking, then add them to the bill. Nothing is charged to the guest until you do.'
             : 'Read only — the Maintenance team adds charges.'}
         </p>
       </div>
