@@ -53,6 +53,10 @@ races return 409 with a human-readable message.
 - `GET  /events/:id/quote` — the priced proposal for the review step: per-function venue
   charges, `payablePaise`, `shownGstPaise`, `displayTotalPaise`, `advanceRequiredPaise`,
   `weddingMilestonePaise`, and `missing[]` for BR-R1 gaps
+- `POST /demo-quote` { event_type, functions[], rooms[] } — prices a **demo proposal** (client's
+  lead, 1 Oct 2026) with the same rules, writing nothing: no event, no hold, no audit row, no
+  availability check. Feeds the one-page summary at `/bookings/demo`; gated on `bookings`
+  create_edit like New proposal
 
 ## Calendar (module: calendar)
 - `GET /calendar?from=&to=` — venues × dates board; banquet manager capped to

@@ -1,0 +1,63 @@
+/* The one-page booking summary (booking-summary.html, client's lead, 1 Oct 2026). An A4 sheet. */
+.sheet {
+  --gold: #8a6a1f; --line: #ece1c6; --mute: #958b78; --ink: #2a2418; --body: #5a5140;
+  width: 210mm; height: 297mm; margin: 0 auto; background: #fff; color: var(--ink);
+  position: relative; overflow: hidden; font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 8.6pt; line-height: 1.45; box-shadow: 0 2px 18px rgba(0,0,0,.08);
+}
+.sheet * { box-sizing: border-box; }
+.bar { height: 1.6mm; background: linear-gradient(90deg,#8a6a1f,#ecd38f,#c9a24a,#f6e7bd,#8a6a1f); }
+.wrap { padding: 11mm 16mm 0; }
+
+.hdr { display: flex; justify-content: space-between; align-items: center; }
+.hdr img { height: 20mm; }
+.hdrR { text-align: right; }
+.eyebrow { font-size: 6.5pt; letter-spacing: .3em; color: var(--mute); }
+.title { font-family: var(--font-display), Georgia, serif; font-weight: 600; font-size: 27pt; letter-spacing: .07em; color: var(--gold); line-height: 1.05; }
+.ref { font-size: 7pt; color: var(--mute); letter-spacing: .05em; }
+
+.guest { margin-top: 8mm; padding: 6mm 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+         display: flex; justify-content: space-between; align-items: flex-end; }
+.guestName { font-family: var(--font-display), Georgia, serif; font-weight: 600; font-size: 21pt; line-height: 1.1; }
+.guestEvent { color: var(--mute); margin-top: 1mm; }
+.stats { display: flex; gap: 9mm; text-align: right; }
+.stats b { display: block; font-family: var(--font-display), Georgia, serif; font-size: 16pt; font-weight: 600; color: var(--gold); line-height: 1; }
+.stats span { font-size: 6.3pt; letter-spacing: .18em; color: var(--mute); }
+
+.sec { font-size: 6.8pt; letter-spacing: .28em; color: var(--gold); font-weight: 700; margin: 8mm 0 2.5mm; }
+
+.fn { width: 100%; border-collapse: collapse; }
+.fn th { font-size: 6pt; letter-spacing: .18em; color: var(--mute); font-weight: 500; text-align: left;
+         padding-bottom: 1.5mm; border-bottom: 1px solid #d9c48c; }
+.fn td { padding: 2.3mm 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.fn td b { font-weight: 600; }
+.fn td small { display: block; font-size: 7pt; color: var(--mute); }
+.menuName { color: var(--gold); font-weight: 500; }
+.fn .r { text-align: right; }
+
+.menus { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm 9mm; }
+.menuH { display: flex; justify-content: space-between; align-items: baseline;
+         border-bottom: 1px solid var(--line); padding-bottom: 1mm; margin-bottom: 1.5mm; }
+.menuH span { font-family: var(--font-display), Georgia, serif; font-weight: 700; font-size: 13pt; }
+.menuH em { font-style: normal; font-size: 7pt; color: var(--gold); }
+.menus p { font-size: 7.6pt; color: var(--body); line-height: 1.6; }
+.menus .menuFor { font-size: 6.8pt; color: var(--mute); margin-bottom: .8mm; }
+
+.bottom { position: absolute; left: 16mm; right: 16mm; bottom: 22mm;
+          display: grid; grid-template-columns: 1fr 1fr; gap: 9mm; align-items: end; }
+.sumRow { display: flex; justify-content: space-between; padding: 1.4mm 0; border-bottom: 1px dotted var(--line); color: var(--body); }
+.total { background: linear-gradient(135deg,#f7ecc9,#fcf6e6); border-radius: 3mm; padding: 5mm 6mm; }
+.totalL { font-size: 6.5pt; letter-spacing: .24em; color: var(--gold); font-weight: 700; }
+.totalV { font-size: 22pt; font-weight: 700; color: var(--gold); line-height: 1.15; }
+.totalA { margin-top: 2mm; font-size: 7.6pt; color: var(--body); }
+.totalA b { color: var(--ink); }
+
+.ftr { position: absolute; bottom: 0; left: 0; right: 0; height: 13mm; border-top: 1px solid var(--line);
+       display: flex; align-items: center; justify-content: space-between; padding: 0 16mm; background: #fdfaf2; }
+.ftrQ { font-family: var(--font-display), Georgia, serif; font-style: italic; font-size: 11.5pt; color: var(--gold); }
+.ftrC { font-size: 6.6pt; color: var(--mute); }
+
+@media print {
+  .sheet { box-shadow: none; }
+  .sheet * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}

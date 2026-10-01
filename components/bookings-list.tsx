@@ -195,6 +195,11 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
             </button>
           )}
           {canCreate && (
+            <Link href="/bookings/demo" className={buttonVariants({ variant: 'outline' })}>
+              Demo proposal
+            </Link>
+          )}
+          {canCreate && (
             <Link href="/bookings/new" className={buttonVariants()}>
               New proposal
             </Link>

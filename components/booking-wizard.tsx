@@ -735,18 +735,20 @@ export function BookingWizard({
  * legible at a glance, and a done step keeps its number as a tick so progress reads
  * left-to-right. Colour is never the only cue — position, number and tick all carry it.
  */
-function Stepper({
+export function Stepper({
   step,
   onStep,
   canStep,
+  steps = STEPS,
 }: {
+  steps?: string[]
   step: number
   onStep: (i: number) => void
   canStep: (i: number) => boolean
 }) {
   return (
     <ol className="flex items-start">
-      {STEPS.map((label, i) => {
+      {steps.map((label, i) => {
         const done = i < step
         const current = i === step
         // A step is reachable once its data can exist; clicking it jumps straight there so a
@@ -765,7 +767,7 @@ function Stepper({
                 )}
               />
             )}
-            {i < STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <span
                 aria-hidden
                 className={cn(
@@ -807,7 +809,7 @@ function Stepper({
   )
 }
 
-function StepCard({ title, children }: { title: string; children: React.ReactNode }) {
+export function StepCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Card>
       <CardHeader><CardTitle>{title}</CardTitle></CardHeader>
@@ -816,7 +818,7 @@ function StepCard({ title, children }: { title: string; children: React.ReactNod
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
       <Label>{label}</Label>
@@ -825,7 +827,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-function Nav({
+export function Nav({
   onBack,
   onNext,
   busy,
