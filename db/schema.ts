@@ -1062,3 +1062,30 @@ export const utensilExtras = pgTable("utensil_extras", {
 			name: "utensil_extras_updated_by_fkey"
 		}),
 ]);
+
+
+// Instant proposals (migration 0039): a saved demo proposal — only the name is required, the
+// rest is one Zod-validated JSON draft. Holds nothing; converts into a real enquiry.
+export const instantProposals = pgTable("instant_proposals", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+	draft: jsonb().default({}).notNull(),
+	convertedEventId: uuid("converted_event_id"),
+	convertedAt: timestamp("converted_at", { withTimezone: true, mode: 'string' }),
+	createdBy: uuid("created_by").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("instant_proposals_recent").using("btree", table.updatedAt.desc().nullsFirst().op("timestamptz_ops")),
+	foreignKey({
+			columns: [table.convertedEventId],
+			foreignColumns: [events.id],
+			name: "instant_proposals_converted_event_id_fkey"
+		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.createdBy],
+			foreignColumns: [users.id],
+			name: "instant_proposals_created_by_fkey"
+		}),
+	check("instant_proposals_name_check", sql`(length(btrim(name)) >= 1) AND (length(btrim(name)) <= 160)`),
+]);

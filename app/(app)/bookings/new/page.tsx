@@ -3,7 +3,9 @@ import { redirect } from 'next/navigation'
 import { getCurrentUser, getPermissionMatrix } from '@/lib/auth'
 import { BookingWizard } from '@/components/booking-wizard'
 
-export default async function NewBookingPage() {
+export default async function NewBookingPage({ searchParams }: { searchParams: Promise<{ instant?: string }> }) {
+  // `?instant=<id>` starts from an instant proposal (its "Convert to a real proposal").
+  const { instant } = await searchParams
   const user = await getCurrentUser()
   if (!user) redirect('/login')
   const perms = await getPermissionMatrix(user.roleId)
@@ -18,7 +20,7 @@ export default async function NewBookingPage() {
           Past proposals →
         </Link>
       </div>
-      <BookingWizard canChangeEventType={user.roleName === 'auditor'} />
+      <BookingWizard instantId={instant} canChangeEventType={user.roleName === 'auditor'} />
     </div>
   )
 }

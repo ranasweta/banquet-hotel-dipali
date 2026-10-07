@@ -77,4 +77,29 @@ d('demoQuote', () => {
     const [{ n: after }] = (await db.execute(sql`SELECT count(*)::int AS n FROM events`)) as unknown as { n: number }[]
     expect(after).toBe(before)
   })
+
+  it('prices an instant proposal only as far as it is filled in', async () => {
+    const blank = { name: '', eventDate: null, startTime: null, endTime: null, venueId: null, bundleId: null, pax: null, tierId: null }
+    // No event type: no hall can be priced, but the plate can — and nothing is a stand-in zero.
+    const q = await demoQuote({
+      eventType: null,
+      functions: [
+        { ...blank, name: 'Dinner', eventDate: '2027-02-02', startTime: '19:00', venueId: hall.id, pax: 50, tierId: tier.id },
+        { ...blank, name: 'Undecided' },
+      ],
+      rooms: [],
+    })
+    const byName = new Map(q.functions.map((f) => [f.name, f]))
+    expect(byName.get('Dinner')!.venuePaise).toBeNull()
+    expect(byName.get('Dinner')!.foodPaise).toBe(tier.base * 50)
+    expect(byName.get('Undecided')).toMatchObject({ venuePaise: null, perPlatePaise: null, foodPaise: 0, venueName: null })
+    expect(q.functionsPaise).toBe(tier.base * 50)
+    expect(q.missingVenueRates).toEqual([])
+    // `index` pairs the date-sorted reply back to the input.
+    expect(q.functions.map((f) => [f.index, f.name])).toEqual([[0, 'Dinner'], [1, 'Undecided']])
+
+    // With the type, the same hall is priced.
+    const typed = await demoQuote({ eventType: 'wedding', functions: [{ ...blank, name: 'Dinner', eventDate: '2027-02-02', startTime: '19:00', venueId: hall.id }], rooms: [] })
+    expect(typed.functions[0]!.venuePaise).toBe(hall.rate)
+  })
 })

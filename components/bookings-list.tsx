@@ -43,6 +43,16 @@ type EventRow = {
   stale: boolean
 }
 type EventTypeOption = { code: string; displayName: string }
+/** An instant proposal (client, 7 Oct 2026) — saved, holding nothing, listed on its own tab. */
+type InstantRow = {
+  id: string
+  name: string
+  draft: { fromDate: string; toDate: string; eventType: string; functions: unknown[] }
+  convertedEventId: string | null
+  convertedCode: string | null
+  createdByName: string
+  updatedAt: string
+}
 
 const STATUS_STYLES: Record<string, string> = {
   enquiry: 'bg-muted text-muted-foreground',
@@ -61,6 +71,8 @@ const FILTERS: { value: string; label: string }[] = [
   { value: 'in_progress', label: 'In progress' },
   { value: 'completed', label: 'Completed' },
   { value: 'cancelled', label: 'Cancelled' },
+  // Not a status: instant proposals are their own table and their own list (InstantList).
+  { value: 'instant', label: 'Instants' },
 ]
 
 export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boolean; canEditConfirmed: boolean }) {
@@ -195,8 +207,8 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
             </button>
           )}
           {canCreate && (
-            <Link href="/bookings/demo" className={buttonVariants({ variant: 'outline' })}>
-              Demo proposal
+            <Link href="/bookings/instant/new" className={buttonVariants({ variant: 'outline' })}>
+              Instant proposal
             </Link>
           )}
           {canCreate && (
@@ -206,6 +218,9 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
           )}
         </div>
       </div>
+      {filter === 'instant' ? (
+        <InstantList query={debouncedQuery} types={types} from={from} to={to} eventType={eventType} canCreate={canCreate} />
+      ) : (
       <div className="overflow-x-auto rounded-lg border">
         <Table>
           <TableHeader>
@@ -298,6 +313,120 @@ export function BookingsList({ canCreate, canEditConfirmed }: { canCreate: boole
           </TableBody>
         </Table>
       </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The "Instants" tab. Fetched only when opened, and searched in the browser — instants are a
+ * short list of open conversations, not years of bookings. Dates overlap the range like the
+ * proposals list; an instant with no dates yet still shows unless a date range is set.
+ */
+function InstantList({
+  query,
+  types,
+  from,
+  to,
+  eventType,
+  canCreate,
+}: {
+  query: string
+  types: EventTypeOption[]
+  from: string
+  to: string
+  eventType: string
+  canCreate: boolean
+}) {
+  const [rows, setRows] = useState<InstantRow[] | null>(null)
+
+  useEffect(() => {
+    api<{ instants: InstantRow[] }>('/instant-proposals')
+      .then((r) => setRows(r.instants))
+      .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load instant proposals'))
+  }, [])
+
+  const shown = (rows ?? []).filter((r) => {
+    const d = r.draft
+    if (query && !r.name.toLowerCase().includes(query.toLowerCase())) return false
+    if (eventType && d.eventType !== eventType) return false
+    // A date range set means "dated in it": an instant with no dates yet falls out.
+    if ((from || to) && !d.fromDate) return false
+    if (from && (d.toDate || d.fromDate) < from) return false
+    if (to && d.fromDate > to) return false
+    return true
+  })
+
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Name</TableHead>
+            <TableHead>Type</TableHead>
+            <TableHead>Dates</TableHead>
+            <TableHead className="text-right">Functions</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows == null ? (
+            <TableRow>
+              <TableCell colSpan={6} className="text-muted-foreground">Loading…</TableCell>
+            </TableRow>
+          ) : shown.length === 0 ? (
+            <TableRow>
+              <TableCell colSpan={6} className="text-muted-foreground">
+                {rows.length === 0
+                  ? `No instant proposals yet.${canCreate ? ' Start one with “Instant proposal”.' : ''}`
+                  : 'No instant proposals match this search.'}
+              </TableCell>
+            </TableRow>
+          ) : (
+            shown.map((r) => (
+              <TableRow key={r.id}>
+                <TableCell>
+                  {/* Opening one is the counter's tool (bookings create_edit), like New proposal. */}
+                  {canCreate ? (
+                    <Link href={`/bookings/instant/${r.id}`} className="font-medium text-primary hover:underline">
+                      {titleCase(r.name)}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{titleCase(r.name)}</span>
+                  )}
+                  <span className="block text-xs text-muted-foreground">by {titleCase(r.createdByName)}</span>
+                </TableCell>
+                <TableCell>
+                  {r.draft.eventType ? titleCase(types.find((t) => t.code === r.draft.eventType)?.displayName ?? r.draft.eventType) : '—'}
+                </TableCell>
+                <TableCell className="tabular-nums text-muted-foreground">
+                  {r.draft.fromDate
+                    ? `${r.draft.fromDate}${r.draft.toDate && r.draft.toDate !== r.draft.fromDate ? ` → ${r.draft.toDate}` : ''}`
+                    : '—'}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{r.draft.functions.length}</TableCell>
+                <TableCell>
+                  {r.convertedEventId ? (
+                    <Link href={`/bookings/${r.convertedEventId}`} className="text-xs text-primary hover:underline">
+                      Converted → {r.convertedCode ?? 'proposal'}
+                    </Link>
+                  ) : (
+                    <span className="inline-block rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">Instant</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {canCreate && (
+                    <Link href={`/bookings/instant/${r.id}`} className="text-xs text-primary hover:underline">
+                      {r.convertedEventId ? 'View' : 'Open'}
+                    </Link>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
     </div>
   )
 }

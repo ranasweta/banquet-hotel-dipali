@@ -55,8 +55,17 @@ races return 409 with a human-readable message.
   `weddingMilestonePaise`, and `missing[]` for BR-R1 gaps
 - `POST /demo-quote` { event_type, functions[], rooms[] } — prices a **demo proposal** (client's
   lead, 1 Oct 2026) with the same rules, writing nothing: no event, no hold, no audit row, no
-  availability check. Feeds the one-page summary at `/bookings/demo`; gated on `bookings`
-  create_edit like New proposal
+  availability check. Feeds the one-page summary of an instant proposal; gated on `bookings`
+  create_edit like New proposal. Since 7 Oct 2026 every field but the function name may be null:
+  a hall is priced once it has event type + date + start + venue, a plate once it has menu + pax
+- `GET /instant-proposals` · `POST /instant-proposals` { name, draft } · `GET|PUT
+  /instant-proposals/:id` — **instant proposals** (client, 7 Oct 2026; migration 0039): the demo
+  proposal, saved. Only `name` is required; `draft` is one Zod-validated document (dates, event
+  type, phone, functions, rooms), every field optional. Holds nothing. Listed on the "Instants"
+  tab of Past proposals at `/bookings/instant/:id`. View: `bookings` view; write: create_edit
+- `POST /instant-proposals/:id/convert` { event_id } — records the real enquiry an instant became
+  (the New-proposal wizard, opened as `/bookings/new?instant=<id>`, calls this when it creates
+  the event). Once only; a converted instant is read-only (409)
 
 ## Calendar (module: calendar)
 - `GET /calendar?from=&to=` — venues × dates board; banquet manager capped to

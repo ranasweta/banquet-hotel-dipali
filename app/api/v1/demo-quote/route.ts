@@ -7,24 +7,24 @@ import { demoQuote } from '@/lib/demo-quote'
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 
+// Everything but the name may be missing: an instant proposal is priced as far as it is filled in.
 const bodySchema = z.object({
-  event_type: z.string().min(1).max(40),
+  event_type: z.string().min(1).max(40).nullable(),
   functions: z
     .array(
       z
         .object({
-          name: z.string().min(1).max(80),
-          event_date: z.string().regex(ISO_DATE),
-          start_time: z.string().regex(HHMM),
-          end_time: z.string().regex(HHMM),
+          name: z.string().max(80),
+          event_date: z.string().regex(ISO_DATE).nullable(),
+          start_time: z.string().regex(HHMM).nullable(),
+          end_time: z.string().regex(HHMM).nullable(),
           venue_id: z.uuid().nullable(),
           bundle_id: z.uuid().nullable(),
-          pax: z.number().int().positive(),
-          tier_id: z.uuid(),
+          pax: z.number().int().positive().nullable(),
+          tier_id: z.uuid().nullable(),
         })
-        .refine((f) => Boolean(f.venue_id) !== Boolean(f.bundle_id), { message: 'Pick one venue or one bundle' }),
+        .refine((f) => !(f.venue_id && f.bundle_id), { message: 'Pick one venue or one bundle' }),
     )
-    .min(1)
     .max(30),
   rooms: z
     .array(
