@@ -339,11 +339,16 @@ function InstantList({
   canCreate: boolean
 }) {
   const [rows, setRows] = useState<InstantRow[] | null>(null)
+  // A failed load must say so in the table, not leave "Loading…" up for ever.
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     api<{ instants: InstantRow[] }>('/instant-proposals')
       .then((r) => setRows(r.instants))
-      .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load instant proposals'))
+      .catch((e) => {
+        setFailed(true)
+        toast.error(e instanceof Error ? e.message : 'Failed to load instant proposals')
+      })
   }, [])
 
   const shown = (rows ?? []).filter((r) => {
@@ -373,7 +378,9 @@ function InstantList({
         <TableBody>
           {rows == null ? (
             <TableRow>
-              <TableCell colSpan={6} className="text-muted-foreground">Loading…</TableCell>
+              <TableCell colSpan={6} className="text-muted-foreground">
+                {failed ? 'Could not load instant proposals. Refresh the page to try again.' : 'Loading…'}
+              </TableCell>
             </TableRow>
           ) : shown.length === 0 ? (
             <TableRow>
