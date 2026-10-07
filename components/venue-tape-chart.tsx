@@ -341,6 +341,47 @@ export function VenueTapeChart() {
   )
 }
 
+/**
+ * One day's tape and nothing else — the instant proposal's "Check availability" (client, 7 Oct
+ * 2026: no need for the whole calendar there). Pick a date, see every venue's free windows.
+ */
+export function VenueDayCheck({ initialDate }: { initialDate?: string }) {
+  const today = new Date().toLocaleDateString('en-CA')
+  const [date, setDate] = useState(initialDate || today)
+  const [data, setData] = useState<TapeResponse | null>(null)
+
+  useEffect(() => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return
+    let live = true
+    api<TapeResponse>(`/calendar/availability?from=${date}&to=${date}`)
+      .then((r) => { if (live) setData(r) })
+      .catch((e) => toast.error(e instanceof Error ? e.message : 'Failed to load venue availability'))
+    return () => { live = false }
+  }, [date])
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="flex items-center gap-2 text-sm">
+          Date
+          <input
+            type="date"
+            className="h-9 rounded-md border bg-background px-2 text-sm"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </label>
+        <Legend />
+      </div>
+      {data && data.from === date ? (
+        <DayTape date={date} data={data} isToday={date === today} />
+      ) : (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      )}
+    </div>
+  )
+}
+
 function OccupancyBar({ taken, free }: { taken: number; free: number }) {
   const total = taken + free
   if (total === 0) return <div className="h-1.5 rounded-full bg-muted" />
@@ -362,7 +403,8 @@ function DayTape({
   date: string
   data: TapeResponse
   isToday: boolean
-  onClose: () => void
+  /** Omitted where the tape is the whole view (VenueDayCheck): there is nothing to close to. */
+  onClose?: () => void
 }) {
   const { groups, venueRows } = useMemo(() => {
     const byVenue = new Map<string, Busy[]>()
@@ -428,14 +470,16 @@ function DayTape({
             {freeAllDay} of {venueRows.length} halls &amp; lawns free all day
           </p>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onClose}
-          className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground"
-        >
-          Close
-        </Button>
+        {onClose && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground"
+          >
+            Close
+          </Button>
+        )}
       </div>
 
       <div className="flex border-b bg-muted/40">

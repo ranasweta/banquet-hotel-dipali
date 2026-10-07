@@ -50,6 +50,22 @@ type SubEvent = {
   pax: number
 }
 type RoomReq = { unit_id: string; room_type: string; count: number; check_in: string; check_out: string }
+/** A function carried over from an instant proposal (7 Oct 2026). Blank fields were never decided. */
+type CarriedFn = {
+  name: string
+  eventDate: string
+  startTime: string
+  endTime: string
+  target: string
+  pax: number
+  tierId: string
+  dishes: Record<string, string[]>
+}
+type FunctionSpec = {
+  name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; tierId: string
+  /** Dishes already picked on an instant proposal; the menu falls back to tier-only if refused. */
+  dishes?: Record<string, string[]>
+}
 type Quote = {
   totalPaise: number
   discountPaise: number
@@ -96,9 +112,17 @@ const roomTaxBp = (nightlyRatePaise: number, roomType: string) =>
 
 export function BookingWizard({
   resumeEventId,
+  instantId,
   canChangeEventType = false,
 }: {
   resumeEventId?: string
+  /**
+   * An instant proposal to start from (client, 7 Oct 2026: "Convert" just opens New proposal).
+   * Whatever it has is filled in; its functions and rooms are offered at their steps, and the
+   * manager completes the rest under the wizard's ordinary rules. Creating the proposal records
+   * the instant as converted.
+   */
+  instantId?: string
   /**
    * Whether this user may RE-type an existing proposal. Picking the type on a new one is
    * everybody's; changing it afterwards is the Auditor's, because it re-prices every function
@@ -145,6 +169,61 @@ export function BookingWizard({
 
   // Step 5 — review
   const [quote, setQuote] = useState<Quote | null>(null)
+
+  // Carried over from an instant proposal, waiting to be added at their steps.
+  const [carriedFns, setCarriedFns] = useState<CarriedFn[]>([])
+  const [carriedRooms, setCarriedRooms] = useState<{ unitId: string; roomType: string; count: number; nights: number }[]>([])
+
+  useEffect(() => {
+    if (!instantId) return
+    api<{
+      instant: {
+        name: string
+        convertedCode: string | null
+        draft: {
+          fromDate: string
+          toDate: string
+          eventType: string
+          phone: string
+          functions: CarriedFn[]
+          rooms: { unitId: string; roomType: string; count: number; nights: number }[]
+        }
+      }
+    }>(`/instant-proposals/${instantId}`)
+      .then(({ instant }) => {
+        if (instant.convertedCode) {
+          toast.error(`This instant proposal is already ${instant.convertedCode}.`)
+          return
+        }
+        const d = instant.draft
+        setGuestName(instant.name)
+        setFromDate(d.fromDate)
+        setToDate(d.toDate)
+        setEventType(d.eventType)
+        if (d.phone) setContacts([d.phone])
+        setCarriedFns(d.functions)
+        setCarriedRooms(d.rooms)
+      })
+      .catch((e) => toast.error(e instanceof Error ? e.message : 'Could not open the instant proposal'))
+  }, [instantId])
+
+  // The instant counts its rooms in nights; the proposal books dates. They start on the From
+  // date, read when the Rooms step opens so a run settled since then is the one used.
+  useEffect(() => {
+    if (step !== 3 || carriedRooms.length === 0 || !fromDate) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRooms((prev) => [
+      ...prev,
+      ...carriedRooms.map((r) => ({
+        unit_id: r.unitId,
+        room_type: r.roomType,
+        count: r.count,
+        check_in: fromDate,
+        check_out: addDays(fromDate, r.nights),
+      })),
+    ])
+    setCarriedRooms([])
+  }, [step, carriedRooms, fromDate])
 
   useEffect(() => {
     api<Options>('/booking-options')
@@ -287,6 +366,12 @@ export function BookingWizard({
         })
         setEventId(event.id)
         toast.success('Proposal created — now add the Aadhaar images.')
+        if (instantId) {
+          await api(`/instant-proposals/${instantId}/convert`, {
+            method: 'POST',
+            body: JSON.stringify({ event_id: event.id }),
+          }).catch((e) => toast.error(e instanceof Error ? e.message : 'Could not mark the instant proposal converted'))
+        }
       } else {
         await api(`/events/${eventId}`, { method: 'PUT', body: JSON.stringify({ guest_name: guestName, event_type: eventType, from_date: fromDate, to_date: toDate, contacts: contactsPayload }) })
         savedStep1.current = { fromDate, toDate, guestName, eventType }
@@ -372,9 +457,7 @@ export function BookingWizard({
   }
 
   // ---- Step 3: add / remove a function, with its menu tier ----
-  async function addFunction(spec: {
-    name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; tierId: string
-  }) {
+  async function addFunction(spec: FunctionSpec) {
     if (!eventId) return
     const [kind, vid] = spec.target.split(':')
     const { subEvent } = await api<{ subEvent: { id: string } }>(`/events/${eventId}/sub-events`, {
@@ -391,13 +474,19 @@ export function BookingWizard({
     // Tier now, dishes later: saving with no selections keeps the menu incomplete (FR-3.2).
     if (spec.tierId) {
       try {
-        const saved = await api<{ menu: { tierName: string; perPlatePaise: number } }>(
-          `/sub-events/${subEvent.id}/menu`,
-          {
+        const saveMenu = (selections: Record<string, string[]>) =>
+          api<{ menu: { tierName: string; perPlatePaise: number } }>(`/sub-events/${subEvent.id}/menu`, {
             method: 'PUT',
-            body: JSON.stringify({ tier_id: spec.tierId, is_tentative: true, selections: {} }),
-          },
-        )
+            body: JSON.stringify({ tier_id: spec.tierId, is_tentative: true, selections }),
+          })
+        // Dishes carried from an instant that the real picker refuses leave the tier chosen,
+        // to pick again in the picker.
+        const saved = spec.dishes && Object.keys(spec.dishes).length
+          ? await saveMenu(spec.dishes).catch(() => {
+              toast.warning(`${spec.name}: the dishes from the instant proposal need picking again.`)
+              return saveMenu({})
+            })
+          : await saveMenu({})
         // Read the rate back rather than assuming the tier's base: the wedding surcharge
         // (BR-M5) is added server-side, so a base-rate guess shows Rs. 650 where the guest
         // is billed Rs. 700. Money is never recomputed on the client.
@@ -650,6 +739,8 @@ export function BookingWizard({
             }))}
             onAdd={addFunction}
             onRemove={removeFunction}
+            carried={carriedFns}
+            onCarriedAdded={(i) => setCarriedFns((c) => c.filter((_, j) => j !== i))}
           />
           <Nav onBack={() => setStep(1)} onNext={() => setStep(3)} busy={busy} nextDisabled={subEvents.length === 0} />
         </StepCard>
@@ -879,13 +970,18 @@ function FunctionsEditor({
   onRemove,
   canEditRows,
   onEdited,
+  carried = [],
+  onCarriedAdded,
 }: {
   tiers: Tier[]
   pools: MenuPool[]
   fromDate: string
   toDate: string
   rows: EditableFunctionRow[]
-  onAdd: (spec: { name: string; eventDate: string; startTime: string; endTime: string; target: string; pax: number; tierId: string }) => Promise<void>
+  onAdd: (spec: FunctionSpec) => Promise<void>
+  /** Functions from an instant proposal, each filled into the form on a click and added as usual. */
+  carried?: CarriedFn[]
+  onCarriedAdded?: (index: number) => void
   onRemove: (id: string) => Promise<void>
   /**
    * Whether a function on this proposal can be edited in place. False once it is confirmed:
@@ -908,6 +1004,21 @@ function FunctionsEditor({
   const [freeVenues, setFreeVenues] = useState<{ value: string; label: string }[] | null>(null)
   const [hiddenCount, setHiddenCount] = useState(0)
   const [checking, setChecking] = useState(false)
+  /** Which carried function is in the form, so adding it takes it off the list. */
+  const [fromCarried, setFromCarried] = useState<number | null>(null)
+
+  function fillFromCarried(i: number) {
+    const f = carried[i]!
+    setName(f.name)
+    setDate(f.eventDate)
+    setStart(f.startTime)
+    setEnd(f.endTime)
+    // Kept only if still free once the slot is checked — the availability effect drops it otherwise.
+    setTarget(f.target)
+    setPax(f.pax ? String(f.pax) : '')
+    setTierId(f.tierId)
+    setFromCarried(i)
+  }
 
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
   const inRange = Boolean(date && (!fromDate || date >= fromDate) && (!toDate || date <= toDate))
@@ -944,7 +1055,12 @@ function FunctionsEditor({
     if (!tierId) return toast.error('Choose a menu for this function')
     setBusy(true)
     try {
-      await onAdd({ name, eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), tierId })
+      const dishes = fromCarried != null && carried[fromCarried]?.tierId === tierId ? carried[fromCarried]!.dishes : undefined
+      await onAdd({ name, eventDate: date, startTime: start, endTime: end, target, pax: Number(pax), tierId, dishes })
+      if (fromCarried != null) {
+        onCarriedAdded?.(fromCarried)
+        setFromCarried(null)
+      }
       // Carry the run of the event forward rather than blanking the form: the next function
       // usually follows straight on, on the same day, at the same head count and tier. Only
       // what genuinely differs each time is cleared. (Client: adding functions one by one
@@ -1046,6 +1162,32 @@ function FunctionsEditor({
             </li>
           ))}
         </ol>
+      )}
+
+      {carried.length > 0 && (
+        <div className="space-y-2 rounded-lg border border-dashed p-3">
+          <h4 className="text-sm font-medium">From the instant proposal</h4>
+          <p className="text-xs text-muted-foreground">
+            Fill one into the form below, complete anything missing, and add it.
+          </p>
+          <ul className="space-y-1.5">
+            {carried.map((f, i) => (
+              <li key={i} className={cn('flex items-center justify-between gap-3 rounded-md border bg-card px-3 py-2 text-sm', fromCarried === i && 'ring-2 ring-primary/40')}>
+                <span className="min-w-0">
+                  <span className="font-medium">{f.name || 'Untitled function'}</span>{' '}
+                  <span className="tabular-nums text-muted-foreground">
+                    {[
+                      f.eventDate || 'no date',
+                      f.startTime && f.endTime ? formatTimeRange(f.startTime, f.endTime) : 'no time',
+                      f.pax ? `${f.pax} pax` : 'no pax',
+                    ].join(' · ')}
+                  </span>
+                </span>
+                <Button variant="outline" size="sm" onClick={() => fillFromCarried(i)}>Fill in</Button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       <div className="rounded-lg border p-4">
