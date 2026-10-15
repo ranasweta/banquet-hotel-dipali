@@ -4,6 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound, ApiError } from '@/lib/api'
 import { occupancyParts } from '@/lib/occupancy'
+import { recutVenueRates } from '@/lib/change-requests'
 import { foodAndAddonTotal, loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
 
 /**
@@ -128,7 +129,8 @@ export async function addConfirmedFunction(
         `)
       }
 
-      await tx.update(schema.subEvents).set({ venueRatePaise: pricing.rates.get(sub!.id) ?? 0 }).where(eq(schema.subEvents.id, sub!.id))
+      // The new function may now open a venue-day another function was carrying; re-cut them all.
+      await recutVenueRates(tx, actor, eventId, new Set([sub!.id]))
       await recomputeProposal(tx, eventId, event.eventType)
       await audit(tx, actor, {
         entity: 'sub_events',
@@ -179,6 +181,8 @@ export async function removeConfirmedFunction(actor: Actor, subEventId: string):
       throw badRequest('A confirmed booking must keep at least one function — cancel the booking instead.')
     }
     await tx.delete(schema.subEvents).where(eq(schema.subEvents.id, subEventId)) // cascade drops venue_bookings
+    // If it was carrying its hall-day, the next function in that hall carries it now.
+    await recutVenueRates(tx, actor, row.eventId, new Set())
     await recomputeProposal(tx, row.eventId, row.eventType)
     await audit(tx, actor, {
       entity: 'sub_events',

@@ -24,6 +24,8 @@ const proposal = await import('@/lib/proposal')
 const invoice = await import('@/lib/invoice')
 const schedule = await import('@/lib/payment-schedule')
 const availability = await import('@/lib/availability')
+const { applyMove } = await import('@/lib/change-requests')
+const { removeConfirmedFunction } = await import('@/lib/post-confirm')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -343,5 +345,59 @@ d('the bill and the printed proposal agree with the total', () => {
     await addFunction(twoHalls, 'Ceremony', '2027-09-03', '10:00', '13:00', hallA)
     await addFunction(twoHalls, 'Party', '2027-09-03', '19:00', '23:00', hallB)
     expect((await schedule.payableBreakdown(twoHalls)).payablePaise).toBe(rateA + rateB)
+  }, 120_000)
+})
+
+/**
+ * A MOVE AFTER CONFIRMATION (E-1132, 15 Oct 2026). Confirm froze one hall rate per venue-day on
+ * the day's first function. The Auditor then moved a breakfast and a lunch from Crystal into
+ * Gulmohar, and they went on carrying Crystal's frozen price — so the bill charged Gulmohar at
+ * Crystal's rate on one day and at its own on the next. A move must re-cut the carriers.
+ */
+d('the frozen hall rate follows a post-confirm move', () => {
+  const STALE = 777 // a price that was never hall A's, so it cannot pass by coincidence
+
+  async function frozen(id: string): Promise<number> {
+    const [r] = await db.select({ r: schema.subEvents.venueRatePaise }).from(schema.subEvents).where(sql`id = ${id}`)
+    return Number(r!.r)
+  }
+
+  async function confirmedDay(): Promise<{ eventId: string; lunch: string; dinner: string }> {
+    const eventId = await makeEvent()
+    await db.update(schema.events).set({ status: 'confirmed' }).where(sql`id = ${eventId}`)
+    // As confirm left it: lunch carrying hall B's day, dinner carrying hall A's.
+    const lunch = await addFunction(eventId, 'Lunch', '2027-09-01', '12:00', '16:00', hallB)
+    const dinner = await addFunction(eventId, 'Dinner', '2027-09-01', '19:00', '23:00', hallA)
+    await db.update(schema.subEvents).set({ venueRatePaise: STALE }).where(sql`id = ${lunch}`)
+    await db.update(schema.subEvents).set({ venueRatePaise: rateA }).where(sql`id = ${dinner}`)
+    return { eventId, lunch, dinner }
+  }
+
+  it('moves the charge onto the moved function at the new hall’s rate, and off the one it now covers', async () => {
+    const { eventId, lunch, dinner } = await confirmedDay()
+    await db.transaction((tx) =>
+      applyMove(tx, { id: bmId, roleName: 'auditor' }, lunch, eventId, {
+        eventDate: '2027-09-01', startTime: '12:00', endTime: '16:00', venueId: hallA, bundleId: null,
+      }),
+    )
+
+    expect(await frozen(lunch)).toBe(rateA) // hall A's price, not the hall it came from
+    expect(await frozen(dinner)).toBe(0) // covered by the lunch now
+    const billVenue = (await invoice.computeBillLines(db, eventId))
+      .filter((l) => l.section === 'venue')
+      .reduce((n, l) => n + l.amountPaise, 0)
+    expect(billVenue).toBe(rateA)
+    expect((await schedule.payableBreakdown(eventId)).payablePaise).toBe(rateA)
+  }, 120_000)
+
+  it('hands the day to the next function when its carrier is removed', async () => {
+    const { eventId, lunch, dinner } = await confirmedDay()
+    await db.transaction((tx) =>
+      applyMove(tx, { id: bmId, roleName: 'auditor' }, lunch, eventId, {
+        eventDate: '2027-09-01', startTime: '12:00', endTime: '16:00', venueId: hallA, bundleId: null,
+      }),
+    )
+    await removeConfirmedFunction({ id: bmId, roleName: 'auditor' }, lunch)
+    expect(await frozen(dinner)).toBe(rateA)
   }, 120_000)
 })
