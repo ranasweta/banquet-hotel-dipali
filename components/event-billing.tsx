@@ -54,7 +54,9 @@ type Ledger = {
   balancePaise: number
   milestones: Milestone[]
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string; note: string | null }[]
+  loggedCharges: LoggedCharge[]
 }
+type LoggedCharge = { key: string; label: string; closedBy: string; entryCount: number; totalPaise: number; closed: boolean }
 
 export function EventBilling({
   eventId,
@@ -118,6 +120,8 @@ export function EventBilling({
         collected, so the printed total reads {formatPaise(ledger.displayTotalPaise)}.
       </p>
 
+      <LoggedChargesSection charges={ledger.loggedCharges} />
+
       <MilestoneSection milestones={ledger.milestones} />
 
       {/* The bill in two columns — the actual price of every line and what the guest is being
@@ -176,6 +180,42 @@ function MilestoneSection({ milestones }: { milestones: Milestone[] }) {
                   )}
                 >
                   {m.shortfallPaise > 0 ? formatPaise(m.shortfallPaise) : 'met'}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Maintenance, the lodge's extras and the extra plates, open or closed (client, 15 Oct 2026).
+ * Only a closed log is on the bill, and an open one used to appear nowhere here, so a logged
+ * charge looked lost. The status is spelled out — colour is only the glance.
+ */
+function LoggedChargesSection({ charges }: { charges: LoggedCharge[] }) {
+  if (charges.length === 0) return null
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-medium">Logged during the event</h3>
+      <div className="overflow-x-auto rounded-lg border">
+        <Table>
+          <TableHeader><TableRow>
+            <TableHead>Log</TableHead>
+            <TableHead className="text-right">Entries</TableHead>
+            <TableHead className="text-right">Amount</TableHead>
+            <TableHead>Status</TableHead>
+          </TableRow></TableHeader>
+          <TableBody>
+            {charges.map((c) => (
+              <TableRow key={c.key}>
+                <TableCell>{c.label}</TableCell>
+                <TableCell className="text-right tabular-nums">{c.entryCount}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatPaise(c.totalPaise)}</TableCell>
+                <TableCell className={c.closed ? 'text-emerald-600' : 'text-amber-600'}>
+                  {c.closed ? 'On the bill' : `Not on the bill yet — ${c.closedBy} must close the log`}
                 </TableCell>
               </TableRow>
             ))}

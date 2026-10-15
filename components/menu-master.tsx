@@ -27,6 +27,7 @@ type Category = {
   name: string
   pickCount: number | null
   freeIncreaseEligible: boolean
+  freeChoice: boolean
   sortOrder: number
   items: Item[]
 }
@@ -652,7 +653,7 @@ function SegmentRow({
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{cat.name}</span>
         <Badge variant="outline" className={allIncluded ? 'text-muted-foreground' : undefined}>
-          {allIncluded ? 'all included' : `pick ${cat.pickCount}`}
+          {cat.freeChoice ? 'tick any' : allIncluded ? 'all included' : `pick ${cat.pickCount}`}
         </Badge>
         {cat.freeIncreaseEligible && <Badge variant="outline" className="text-amber-600">free-increase eligible</Badge>}
         <span className="text-xs text-muted-foreground">

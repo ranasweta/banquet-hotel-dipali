@@ -328,16 +328,15 @@ These rules bias toward caution over speed; for trivial tasks, use judgement.
    Nights, not dates, is deliberate: this records what was handed over, so it reaches no
    availability check, no rooms board and no lodging calendar. The hard inventory cap (rule 9)
    governs the booking; this governs the bill.
-15. **Extra plates are the Utensil Manager's, and no entry exists without a photograph**
-   (client, 15 Aug 2026; migration 0035, `lib/utensils.ts`). On the day, more guests arrive
-   than a function was catered for and the kitchen issues extra plates. He logs how many,
-   against which **function**, with a remark and a picture of them.
-   **The photo is mandatory and `file_key` is NOT NULL** — not "saved and flagged". This is the
-   one charge in the system with no booking, no rate card and no guest signature behind it,
-   only a number somebody counted at the pass, so the evidence *is* the entry. It is encrypted
-   at rest (rule 7) and served behind `utensils:view`, which by default means the Auditor and
-   the Higher Authority: the people who can question the charge are exactly the people who can
-   see the picture. Deleting an entry deletes its photo.
+15. **Extra plates are the Utensil Manager's** (client, 15 Aug 2026; migration 0035,
+   `lib/utensils.ts`). On the day, more guests arrive than a function was catered for and the
+   kitchen issues extra plates. He logs how many, against which **function**, with a remark and,
+   if he has one, a picture of them.
+   **The photo is optional** (client, 15 Oct 2026, migration 0040 — it was mandatory, with
+   `file_key` NOT NULL, until then; `SEED_ASSUMPTIONS.md` §F31 records the control given up).
+   When attached it is encrypted at rest (rule 7) and served behind `utensils:view`, which by
+   default means the Auditor and the Higher Authority; a row without one says "no photo".
+   Deleting an entry deletes its photo.
    **A function, not just a booking**, because the price is that function's own per-plate rate:
    `base_rate_paise + surcharge_paise + priced chef delicacies`, composed exactly as
    `computeBillLines` composes a catered plate's, so an extra plate and a booked one at the same
@@ -452,5 +451,8 @@ Two rules it establishes that reach beyond the seed:
   dated). A new venue is created with NO rate rather than a zero, and a bundle's membership
   freezes once it is booked because it decides which halls that booking holds.
 - **`pick_count = NULL` means every item is included** (breads, salad bar,
-  accompaniments, breakfast, high tea). Read-only in the picker, always counts complete,
-  never free-increase eligible.
+  accompaniments, high tea). Read-only in the picker, always counts complete,
+  never free-increase eligible — **unless `free_choice` is set** (migration 0041, client
+  15 Oct 2026; today the two breakfast tiers): then the dishes are ticked, any number,
+  nought included, always complete, never an extra. Breakfast Gold → Breakfast Platinum is
+  a ladder of its own for the dish cascade (`TIER_LADDERS`, `lib/menu-ladder.ts`).

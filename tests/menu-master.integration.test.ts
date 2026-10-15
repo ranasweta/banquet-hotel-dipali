@@ -434,16 +434,31 @@ d('dishes', () => {
     expect(r.skippedTiers).toEqual(['Gold', 'Platinum', 'Diamond', 'Crown'])
   }, 120_000)
 
-  it('leaves a tier that is off the ladder cascading nowhere', async () => {
-    // A meal-time card is a different card, not a richer one — and "Breakfast Gold" is above
-    // nothing. Same for any tier created later, which is why the ZZTest tiers above still pass.
+  it('carries a breakfast dish up the breakfast ladder, and never onto a dinner card', async () => {
+    // Client, 15 Oct 2026: Breakfast Gold → Breakfast Platinum is a ladder of its own.
     const catalog = await master.getMasterCatalog()
     const bf = catalog.find((t) => t.name === 'Breakfast Gold')!
     const r = await master.createItem(auditor, bf.categories[0]!.id, 'Cascade Paratha')
-    expect(r).toMatchObject({ cascadedTo: [], skippedTiers: [] })
+    expect(r).toMatchObject({ cascadedTo: ['Breakfast Platinum'], skippedTiers: [] })
 
-    const crown = (await master.getMasterCatalog()).find((t) => t.name === 'Crown')!
-    expect(crown.categories.flatMap((c) => c.items.map((i) => i.name))).not.toContain('Cascade Paratha')
+    const after = await master.getMasterCatalog()
+    const dishes = (tier: string) => after.find((t) => t.name === tier)!.categories.flatMap((c) => c.items.map((i) => i.name))
+    expect(dishes('Breakfast Platinum')).toContain('Cascade Paratha')
+    expect(dishes('Crown')).not.toContain('Cascade Paratha')
+  }, 120_000)
+
+  it('leaves a tier on no ladder cascading nowhere', async () => {
+    const catalog = await master.getMasterCatalog()
+    const tea = catalog.find((t) => t.name === 'High Tea Silver')!
+    const r = await master.createItem(auditor, tea.categories[0]!.id, 'Cascade Samosa')
+    expect(r).toMatchObject({ cascadedTo: [], skippedTiers: [] })
+  }, 120_000)
+
+  it('keeps a free-choice segment free-choice when it is edited without a count', async () => {
+    const seg = (await master.getMasterCatalog()).find((t) => t.name === 'Breakfast Gold')!.categories[0]!
+    expect(seg.freeChoice).toBe(true)
+    await master.updateCategory(auditor, seg.id, { name: seg.name, pickCount: null, freeIncreaseEligible: false, sortOrder: seg.sortOrder })
+    expect((await master.getMasterCatalog()).find((t) => t.name === 'Breakfast Gold')!.categories[0]!.freeChoice).toBe(true)
   }, 120_000)
 
   it('audits every card the dish landed on, not just the one it was typed into', async () => {

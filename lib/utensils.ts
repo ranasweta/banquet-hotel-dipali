@@ -21,11 +21,11 @@ import { deleteStored } from '@/lib/storage'
  * SNAPSHOTTED at entry (rule 4): re-pricing the tier tomorrow cannot move a plate already
  * served. A function with no saved menu has no rate and is refused, never priced at zero.
  *
- * WHY THE PHOTO IS MANDATORY. This is the one charge in the system a member of staff can invent
- * outright — there is no booking, no rate card and no guest signature behind it, only a number
- * somebody counted at the pass. The photo is what the Auditor and the Higher Authority check it
- * against, so an entry without one does not exist rather than existing and being flagged. It is
- * encrypted at rest and served only behind `utensils:view` (rule 7).
+ * THE PHOTO IS OPTIONAL (client, 15 Oct 2026, reversing the 15 Aug rule that made it
+ * mandatory — migration 0040, SEED_ASSUMPTIONS §F31). This is still the one charge a member of
+ * staff could invent outright, so a photo, when attached, is what the Auditor and the Higher
+ * Authority check it against: encrypted at rest and served only behind `utensils:view`
+ * (rule 7). An entry without one says so on its row.
  *
  * THE CLOSE. Nothing here is charged until he closes the log, exactly as Maintenance and the
  * lodge's extras work: an open log is still being counted. Closed-only is enforced identically
@@ -81,22 +81,17 @@ const platRateSql = (subEventId: string) => sql`
 export type ExtraPlatesInput = {
   subEventId: string
   plates: number
-  fileKey: string
+  /** The stored photo, when one was attached. Optional since 15 Oct 2026. */
+  fileKey?: string | null
   remarks?: string
 }
 
-/**
- * Logs plates issued at a function.
- *
- * `fileKey` is required by the signature as well as the column: the photo is stored by the
- * route before this is called, so an entry can never be written without one.
- */
+/** Logs plates issued at a function. The route stores any photo before this is called. */
 export async function addPlates(
   actor: Actor,
   input: ExtraPlatesInput,
 ): Promise<{ id: string; eventId: string; amountPaise: number }> {
   if (!Number.isInteger(input.plates) || input.plates < 1) throw badRequest('Enter at least one plate.')
-  if (!input.fileKey) throw badRequest('A photo of the plates is required.')
 
   return db.transaction(async (tx) => {
     const [fn] = (await tx.execute(platRateSql(input.subEventId))) as unknown as {
@@ -123,7 +118,7 @@ export async function addPlates(
         ratePaise,
         amountPaise,
         remarks: input.remarks?.trim() || null,
-        fileKey: input.fileKey,
+        fileKey: input.fileKey ?? null,
         createdBy: actor.id,
       })
       .returning({ id: schema.extraPlateEntries.id })
@@ -158,7 +153,7 @@ export async function removePlates(actor: Actor, entryId: string): Promise<void>
   })
   // Outside the transaction: the row is gone either way, and a storage hiccup must not roll
   // back a delete the audit log has already recorded.
-  await deleteStored(fileKey).catch(() => {})
+  if (fileKey) await deleteStored(fileKey).catch(() => {})
 }
 
 /** Closes the event's plate log: from here the entries are frozen, and they reach the bill. */
@@ -194,6 +189,7 @@ export type PlateLine = {
   amountPaise: number
   remarks: string | null
   createdBy: string
+  hasPhoto: boolean
 }
 
 /** A function the plates can be charged against, with what one plate there costs. */
@@ -221,7 +217,7 @@ export async function getUtensilExtras(eventId: string): Promise<UtensilExtrasVi
       SELECT p.id, p.sub_event_id AS "subEventId", se.name AS "functionName",
              se.event_date::text AS "eventDate", p.plates::int AS plates,
              p.rate_paise AS "ratePaise", p.amount_paise AS "amountPaise", p.remarks,
-             u.full_name AS "createdBy"
+             u.full_name AS "createdBy", p.file_key IS NOT NULL AS "hasPhoto"
       FROM extra_plate_entries p
       JOIN sub_events se ON se.id = p.sub_event_id
       JOIN users u ON u.id = p.created_by
@@ -282,6 +278,6 @@ export async function platePhotoKey(entryId: string): Promise<string> {
     .from(schema.extraPlateEntries)
     .where(eq(schema.extraPlateEntries.id, entryId))
     .limit(1)
-  if (!e) throw notFound('Entry not found')
+  if (!e?.fileKey) throw notFound(e ? 'No photo was attached to this entry' : 'Entry not found')
   return e.fileKey
 }

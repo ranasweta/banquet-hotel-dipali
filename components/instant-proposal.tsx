@@ -632,23 +632,29 @@ function InstantDishes({
     <div className="mt-3 space-y-3 rounded-lg border bg-muted/20 p-3">
       {tier.categories.map((c) => {
         const picked = dishes[c.name] ?? []
+        // Free choice (breakfasts): ticked, any number, nought included.
+        const allIncluded = c.pickCount == null && !c.freeChoice
         const full = c.pickCount != null && picked.length >= c.pickCount
         return (
           <div key={c.id}>
             <div className="mb-1.5 flex items-baseline justify-between gap-2">
               <span className="text-sm font-medium">{c.name}</span>
               <span className="text-xs tabular-nums text-muted-foreground">
-                {c.pickCount == null ? 'All included' : `${picked.length} of ${c.pickCount} chosen`}
+                {allIncluded
+                  ? 'All included'
+                  : c.pickCount == null
+                    ? `${picked.length} ticked`
+                    : `${picked.length} of ${c.pickCount} chosen`}
               </span>
             </div>
             <div className="flex flex-wrap gap-1.5">
               {c.items.map((item) => {
-                const on = c.pickCount == null || picked.includes(item)
+                const on = allIncluded || picked.includes(item)
                 return (
                   <button
                     key={item}
                     type="button"
-                    disabled={c.pickCount == null || (!on && full)}
+                    disabled={allIncluded || (!on && full)}
                     aria-pressed={on}
                     onClick={() =>
                       onChange({ ...dishes, [c.name]: on ? picked.filter((x) => x !== item) : [...picked, item] })
@@ -656,11 +662,11 @@ function InstantDishes({
                     className={cn(
                       'rounded-full border px-2.5 py-0.5 text-xs transition-colors',
                       on ? 'border-primary bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted',
-                      c.pickCount == null && 'cursor-default',
+                      allIncluded && 'cursor-default',
                       !on && full && 'opacity-40',
                     )}
                   >
-                    {on && c.pickCount != null && '✓ '}
+                    {on && !allIncluded && '✓ '}
                     {item}
                   </button>
                 )
@@ -777,8 +783,9 @@ function InstantSummary({
     const tier = f && tiers.find((t) => t.id === f.tierId)
     if (!f || !tier || !qf.tierName || qf.perPlatePaise == null) return
     const lines = tier.categories.flatMap((c) => {
-      if (c.pickCount == null) return [c.name]
+      if (c.pickCount == null && !c.freeChoice) return [c.name]
       const picked = f.dishes[c.name] ?? []
+      if (c.freeChoice) return picked
       return picked.length ? picked : [`${c.name} (any ${c.pickCount})`]
     })
     const key = `${f.tierId}|${lines.join('|')}`

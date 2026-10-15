@@ -35,6 +35,7 @@ type PlateLine = {
   amountPaise: number
   remarks: string | null
   createdBy: string
+  hasPhoto: boolean
 }
 type FunctionOption = {
   subEventId: string
@@ -48,8 +49,8 @@ type View = { closed: boolean; entries: PlateLine[]; totalPaise: number; functio
 /**
  * Extra plates (client, 15 Aug 2026) — the Utensil Manager's panel.
  *
- * Every row links to its photograph, because that is what the Auditor and the Higher Authority
- * are here to look at. The rate is the function's own per-plate price and is never typed.
+ * A row links to its photograph when one was attached (optional since 15 Oct 2026), because that
+ * is what the Auditor and the Higher Authority are here to look at. The rate is the function's own per-plate price and is never typed.
  */
 export function EventExtraPlates({ eventId, editable }: { eventId: string; editable: boolean }) {
   const [view, setView] = useState<View | null>(null)
@@ -114,16 +115,19 @@ export function EventExtraPlates({ eventId, editable }: { eventId: string; edita
                   <TableCell className="text-right tabular-nums">{formatPaise(e.ratePaise)}</TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{formatPaise(e.amountPaise)}</TableCell>
                   <TableCell>
-                    {/* Always present — the column cannot be empty, because an entry without a
-                        photo cannot be saved. */}
-                    <a
-                      href={`/api/v1/extra-plates/${e.id}/photo`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-primary hover:underline"
-                    >
-                      <ImageIcon className="size-3" /> view
-                    </a>
+                    {/* Optional since 15 Oct 2026 — said in words when there is none. */}
+                    {e.hasPhoto ? (
+                      <a
+                        href={`/api/v1/extra-plates/${e.id}/photo`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                      >
+                        <ImageIcon className="size-3" /> view
+                      </a>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">no photo</span>
+                    )}
                   </TableCell>
                   {canEdit && (
                     <TableCell className="text-right">
@@ -197,17 +201,13 @@ function AddPlates({
       toast.error('Enter how many plates, as a whole number')
       return
     }
-    if (!photo) {
-      toast.error('A photo of the plates is required')
-      return
-    }
     setBusy(true)
     try {
       const fd = new FormData()
       fd.set('sub_event_id', subEventId)
       fd.set('plates', String(n))
       if (remarks.trim()) fd.set('remarks', remarks.trim())
-      fd.set('photo', photo)
+      if (photo) fd.set('photo', photo)
       const res = await fetch(`/api/v1/events/${eventId}/extra-plates`, { method: 'POST', body: fd })
       if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error?.message ?? 'Failed')
       setPlates('')
@@ -309,7 +309,7 @@ function AddPlates({
           <ImageIcon className="size-4" /> Gallery
         </Button>
         <span className={photo ? 'text-xs text-emerald-600' : 'text-xs text-muted-foreground'}>
-          {photo ? `${photo.name} ready` : 'A photo of the plates is required'}
+          {photo ? `${photo.name} ready` : 'Photo optional'}
         </span>
         <Button className="ml-auto" onClick={add} disabled={busy}>
           {busy ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} Add

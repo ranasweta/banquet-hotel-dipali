@@ -4,7 +4,7 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { assertPaise } from '@/lib/money'
-import { TIER_LADDER, segmentAliases } from '@/lib/menu-ladder'
+import { segmentAliases, tiersAbove } from '@/lib/menu-ladder'
 import { menuItemKey } from '@/lib/menu-name'
 
 /**
@@ -42,6 +42,8 @@ export type MasterCategory = {
   /** NULL = every dish is included and there is nothing to pick. */
   pickCount: number | null
   freeIncreaseEligible: boolean
+  /** Ticked, any number, nought included — no count (migration 0041). */
+  freeChoice: boolean
   sortOrder: number
   items: MasterItem[]
 }
@@ -107,6 +109,7 @@ export async function getMasterCatalog(): Promise<MasterTier[]> {
         name: c.name,
         pickCount: c.pickCount,
         freeIncreaseEligible: c.freeIncreaseEligible,
+        freeChoice: c.freeChoice,
         sortOrder: c.sortOrder,
         items: itemsByCat.get(c.id) ?? [],
       },
@@ -328,7 +331,9 @@ export async function updateCategory(actor: Actor, categoryId: string, input: Ca
     try {
       await tx
         .update(schema.menuCategories)
-        .set({ name: input.name.trim(), pickCount: input.pickCount, freeIncreaseEligible: input.freeIncreaseEligible, sortOrder: input.sortOrder })
+        // A count makes it an "any N" segment, which free choice is not; with no count the
+        // segment keeps whichever no-count kind it was (all included, or free choice).
+        .set({ name: input.name.trim(), pickCount: input.pickCount, freeIncreaseEligible: input.freeIncreaseEligible, sortOrder: input.sortOrder, ...(input.pickCount != null && { freeChoice: false }) })
         .where(eq(schema.menuCategories.id, categoryId))
     } catch (e) {
       if (isUnique(e)) throw conflict(`"${input.name.trim()}" is already a segment of this tier.`)
@@ -438,11 +443,10 @@ export async function createItem(actor: Actor, categoryId: string, name: string)
       newValue: `${cat.name} · ${clean}`,
     })
 
-    // -1 for a tier off the ladder — Breakfast Gold, High Tea Silver, anything newly created.
-    // Guarded before the slice, because slice(-1 + 1) is slice(0), which would cascade a high
-    // tea dish onto every banquet card. Crown, at the top, lands on the same early return.
-    const rung = (TIER_LADDER as readonly string[]).indexOf(tier.name)
-    const above: string[] = rung === -1 ? [] : TIER_LADDER.slice(rung + 1)
+    // Only up the tier's OWN ladder: a Breakfast Gold dish reaches Breakfast Platinum, never a
+    // dinner card. A tier on no ladder (High Tea Silver, anything newly created) and the top of
+    // a ladder (Crown, Breakfast Platinum) land on the same early return.
+    const above = tiersAbove(tier.name)
     if (above.length === 0) return { id, cascadedTo: [], skippedTiers: [] }
 
     // LEFT join: a tier carrying no segment of this name — nor any alias of it — still comes

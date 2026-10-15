@@ -50,6 +50,8 @@ export type ProposalSegment = {
   name: string
   /** NULL = every item in the category is included; the picker renders it read-only. */
   basePick: number | null
+  /** No count, but ticked: any number, nought included (migration 0041). */
+  freeChoice: boolean
   extraPicks: number
   picked: number
   dishes: ProposalDish[]
@@ -399,7 +401,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
   // pick rules but not the running order, and "Welcome drink" must not sort after "Soup".
   const segRows = (await db.execute(sql`
     SELECT c.menu_id AS "menuId", c.category_name AS "categoryName",
-           c.base_pick AS "basePick", c.extra_picks AS "extraPicks",
+           c.base_pick AS "basePick", c.extra_picks AS "extraPicks", c.free_choice AS "freeChoice",
            COALESCE(mc.sort_order, 999) AS "sortOrder"
     FROM sub_event_menu_categories c
     JOIN sub_event_menus m ON m.id = c.menu_id
@@ -471,6 +473,7 @@ export async function proposalDocument(eventId: string): Promise<ProposalDocumen
               return {
                 name: c.categoryName as string,
                 basePick: c.basePick == null ? null : num(c.basePick),
+                freeChoice: Boolean(c.freeChoice),
                 extraPicks: num(c.extraPicks),
                 picked: dishes.length,
                 dishes,

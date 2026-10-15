@@ -171,6 +171,8 @@ export const menuCategories = pgTable("menu_categories", {
 	pickCount: integer("pick_count"),
 	freeIncreaseEligible: boolean("free_increase_eligible").default(false).notNull(),
 	sortOrder: integer("sort_order").default(0).notNull(),
+	// Tick any number, nought included; no count (migration 0041).
+	freeChoice: boolean("free_choice").default(false).notNull(),
 }, (table) => [
 	foreignKey({
 			columns: [table.tierId],
@@ -180,6 +182,7 @@ export const menuCategories = pgTable("menu_categories", {
 	unique("menu_categories_tier_id_name_key").on(table.tierId, table.name),
 	check("menu_categories_pick_count_check", sql`(pick_count IS NULL) OR (pick_count > 0)`),
 	check("menu_categories_check", sql`NOT ((pick_count IS NULL) AND free_increase_eligible)`),
+	check("menu_categories_free_choice_no_count", sql`NOT (free_choice AND (pick_count IS NOT NULL))`),
 ]);
 
 export const menuItems = pgTable("menu_items", {
@@ -885,6 +888,8 @@ export const subEventMenuCategories = pgTable("sub_event_menu_categories", {
 	// Increase pressed on this segment: picking is unbounded from here on (migration 0013).
 	increaseUnlocked: boolean("increase_unlocked").default(false).notNull(),
 	exceptionId: uuid("exception_id"),
+	// Snapshot of menu_categories.free_choice (migration 0041).
+	freeChoice: boolean("free_choice").default(false).notNull(),
 }, (table) => [
 	foreignKey({
 			columns: [table.menuId],
@@ -899,6 +904,7 @@ export const subEventMenuCategories = pgTable("sub_event_menu_categories", {
 	primaryKey({ columns: [table.menuId, table.categoryName], name: "sub_event_menu_categories_pkey"}),
 	check("sub_event_menu_categories_base_pick_check", sql`(base_pick IS NULL) OR (base_pick > 0)`),
 	check("sub_event_menu_categories_check", sql`NOT ((base_pick IS NULL) AND (extra_picks > 0))`),
+	check("semc_free_choice_no_count", sql`NOT (free_choice AND (base_pick IS NOT NULL))`),
 ]);
 
 // Chef delicacy requests: an off-menu ask the Chef prices per plate. See db/schema.sql.
@@ -1013,7 +1019,7 @@ export const extraPlateEntries = pgTable("extra_plate_entries", {
 	remarks: text(),
 	// NOT NULL by design: the photo is the only check on an invented charge, so an entry
 	// without one must not exist.
-	fileKey: text("file_key").notNull(),
+	fileKey: text("file_key"),
 	createdBy: uuid("created_by").notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
