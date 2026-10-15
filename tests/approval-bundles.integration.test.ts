@@ -415,6 +415,23 @@ d('the lock override', () => {
     expect([...cat.selected].sort()).toEqual(['Handi Paneer', 'Kadai Paneer'])
   }, SLOW)
 
+  it('lets the Authority tick a free-choice breakfast, with nothing counted as an extra', async () => {
+    const { eventId, subId } = await makeBooking()
+    const bf = await tierId('Breakfast Gold')
+    await menus.saveSubEventMenu(bm, subId, { tierId: bf, selections: {} })
+    const dishes = (await menus.getTierCatalog()).find((t) => t.id === bf)!.categories[0]!.items.slice(0, 3)
+
+    await gm.editProposalAsAuthority(ha, eventId, {
+      menus: [{ subEventId: subId, categoryName: 'Breakfast', dishes }],
+      reason: 'Guest chose the breakfast',
+    })
+
+    const menu = (await menus.getSubEventMenu(subId)).menu!
+    expect([...menu.categories[0]!.selected].sort()).toEqual([...dishes].sort())
+    expect(menu.categories[0]!.extras).toEqual([])
+    expect(menu.isComplete).toBe(true)
+  }, SLOW)
+
   it('treats an unchanged room list as a no-op, burning no document number', async () => {
     const { eventId } = await makeBooking()
     const regency = await unitId('Regency')

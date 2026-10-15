@@ -46,6 +46,8 @@ export type CatalogCategory = {
   name: string
   pickCount: number | null
   freeIncreaseEligible: boolean
+  /** Tick any number, nought included — no count, no ceiling, never extras (migration 0041). */
+  freeChoice: boolean
   items: string[]
 }
 export type CatalogTier = {
@@ -75,6 +77,7 @@ export async function getTierCatalog(): Promise<CatalogTier[]> {
       name: schema.menuCategories.name,
       pickCount: schema.menuCategories.pickCount,
       freeIncreaseEligible: schema.menuCategories.freeIncreaseEligible,
+      freeChoice: schema.menuCategories.freeChoice,
       sortOrder: schema.menuCategories.sortOrder,
     })
     .from(schema.menuCategories)
@@ -100,6 +103,7 @@ export async function getTierCatalog(): Promise<CatalogTier[]> {
       name: c.name,
       pickCount: c.pickCount,
       freeIncreaseEligible: c.freeIncreaseEligible,
+      freeChoice: c.freeChoice,
       items: itemsByCat.get(c.id) ?? [],
     })
     catsByTier.set(c.tierId, list)
@@ -187,6 +191,8 @@ export async function loadSubEventContext(exec: Tx | typeof db, subEventId: stri
 export type MenuCategorySnapshot = {
   categoryName: string
   basePick: number | null
+  /** Ticked, any number, nought included (migration 0041). basePick is null and it is always complete. */
+  freeChoice: boolean
   extraPicks: number
   effectivePick: number | null
   exceptionId: string | null
@@ -316,6 +322,7 @@ export async function getSubEventMenu(subEventId: string): Promise<SubEventMenuR
     return {
       categoryName: c.categoryName,
       basePick: c.basePick,
+      freeChoice: c.freeChoice,
       extraPicks: c.extraPicks,
       effectivePick,
       exceptionId: c.exceptionId,
@@ -405,6 +412,7 @@ export async function saveSubEventMenu(
         id: schema.menuCategories.id,
         name: schema.menuCategories.name,
         pickCount: schema.menuCategories.pickCount,
+        freeChoice: schema.menuCategories.freeChoice,
       })
       .from(schema.menuCategories)
       .where(eq(schema.menuCategories.tierId, input.tierId))
@@ -489,6 +497,7 @@ export async function saveSubEventMenu(
     type CatWrite = {
       categoryName: string
       basePick: number | null
+      freeChoice: boolean
       extraPicks: number
       submittedExtraPicks: number
       approvedExtraPicks: number
@@ -506,7 +515,7 @@ export async function saveSubEventMenu(
       const exceptionId = overlay?.exceptionId ?? null
 
       let selected: string[]
-      if (mc.pickCount == null) {
+      if (mc.pickCount == null && !mc.freeChoice) {
         // All-included: the whole item list is part of the menu, read-only (BR).
         selected = [...(itemsByCat.get(mc.name) ?? [])]
       } else {
@@ -518,7 +527,8 @@ export async function saveSubEventMenu(
         }
         // Unlocked means unlimited: the guest may take as much of this segment as they
         // like, and the overflow becomes the Authority's decision rather than a refusal.
-        if (!unlocked && requested.length > mc.pickCount) {
+        // Free choice has no count, so no ceiling (and `n > null` would refuse every pick).
+        if (mc.pickCount != null && !unlocked && requested.length > mc.pickCount) {
           throw badRequest(
             `Select at most ${mc.pickCount} in ${mc.name}. Press Increase to add more.`,
           )
@@ -539,6 +549,7 @@ export async function saveSubEventMenu(
       writes.push({
         categoryName: mc.name,
         basePick,
+        freeChoice: mc.freeChoice,
         extraPicks,
         submittedExtraPicks,
         approvedExtraPicks,
@@ -595,6 +606,7 @@ export async function saveSubEventMenu(
         approvedExtraPicks: w.approvedExtraPicks,
         increaseUnlocked: w.unlocked,
         exceptionId: w.exceptionId,
+        freeChoice: w.freeChoice,
       })),
     )
     const selectionRows = writes.flatMap((w) =>
@@ -689,7 +701,11 @@ export async function increaseCategory(
       .limit(1)
     if (!cat) throw badRequest(`"${categoryName}" is not a category of this menu`)
     if (cat.basePick == null) {
-      throw badRequest(`Every item in ${categoryName} is already included — there is nothing to increase.`)
+      throw badRequest(
+        cat.freeChoice
+          ? `${categoryName} has no limit — tick as many as the guest wants.`
+          : `Every item in ${categoryName} is already included — there is nothing to increase.`,
+      )
     }
     if (cat.increaseUnlocked) {
       // Idempotent: pressing it twice is not an error, it is a manager double-checking.

@@ -137,6 +137,29 @@ d('save + snapshot (BR-M1)', () => {
     await expect(menus.increaseCategory(actor, sub, 'Assorted Indian Bread')).rejects.toThrow(/already included/)
   })
 
+  it('lets a breakfast be ticked freely — any number, none at all, never an extra', async () => {
+    // Client, 15 Oct 2026 (migration 0041): "as much as they want, can be 0 too".
+    const sub = await makeSubEvent()
+    const bf = await tierId('Breakfast Gold')
+    const items = (await menus.getTierCatalog()).find((t) => t.id === bf)!.categories[0]!.items
+
+    await menus.saveSubEventMenu(actor, sub, { tierId: bf, selections: {} })
+    let seg = (await menus.getSubEventMenu(sub)).menu!.categories[0]!
+    expect(seg).toMatchObject({ freeChoice: true, selected: [], complete: true, extraPicks: 0 })
+    expect((await menus.getSubEventMenu(sub)).menu!.isComplete).toBe(true)
+
+    // Every dish, with no Increase pressed: there is no ceiling to hit.
+    await menus.saveSubEventMenu(actor, sub, { tierId: bf, selections: { Breakfast: items } })
+    const snap = (await menus.getSubEventMenu(sub)).menu!
+    seg = snap.categories[0]!
+    expect(seg.selected).toHaveLength(items.length)
+    expect(seg.extras).toEqual([])
+    expect(seg.complete).toBe(true)
+    // Ticking more never moves the plate price.
+    expect(snap.perPlatePaise).toBe(snap.baseRatePaise + snap.surchargePaise)
+    await expect(menus.increaseCategory(actor, sub, 'Breakfast')).rejects.toThrow(/no limit/)
+  })
+
   it('rejects selecting more than the pick count', async () => {
     const sub = await makeSubEvent()
     await expect(

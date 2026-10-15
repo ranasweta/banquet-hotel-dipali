@@ -5,7 +5,8 @@
  * number somebody counted at the pass. So the things worth pinning down are the ones that stop
  * it becoming a licence to invent money:
  *
- *   - THE PHOTO IS THE ENTRY. No photo, no row — not a row with a warning on it.
+ *   - THE PHOTO IS OPTIONAL (client, 15 Oct 2026, migration 0040) — an entry without one is
+ *     saved and charged like any other, and the panel says it has none.
  *   - THE RATE IS THE FUNCTION'S OWN, composed exactly as a booked plate's is, and frozen at
  *     entry. A Sangeet plate must not be charged at the Reception's rate.
  *   - NOTHING COUNTS UNTIL HE CLOSES, and even then only in the settlement — never in the 25%
@@ -21,6 +22,7 @@ const schedule = await import('@/lib/payment-schedule')
 const invoice = await import('@/lib/invoice')
 const proposal = await import('@/lib/proposal')
 const lock = await import('@/lib/lock')
+const payments = await import('@/lib/payments')
 const { createClient } = await import('@/db/client')
 const { migrate } = await import('@/db/migrate')
 const { seed } = await import('@/db/seed')
@@ -178,16 +180,15 @@ d('logging plates', () => {
     expect(view.functions.find((f) => f.name === 'Haldi')!.ratePaise).toBeNull()
   })
 
-  it('cannot be written without a photo', async () => {
-    const { sangeet } = await makeWedding()
-    await expect(utensils.addPlates(ut, { subEventId: sangeet, plates: 10, fileKey: '' })).rejects.toThrow(/photo/i)
+  it('saves an entry without a photo, and says it has none', async () => {
+    const { eventId, sangeet } = await makeWedding()
+    const entry = await utensils.addPlates(ut, { subEventId: sangeet, plates: 10 })
+    expect(entry.amountPaise).toBeGreaterThan(0)
 
-    // And the column agrees, so no other code path can slip one past either.
-    const [col] = (await db.execute(sql`
-      SELECT is_nullable AS "isNullable" FROM information_schema.columns
-      WHERE table_name = 'extra_plate_entries' AND column_name = 'file_key'
-    `)) as unknown as { isNullable: string }[]
-    expect(col!.isNullable).toBe('NO')
+    const row = (await utensils.getUtensilExtras(eventId)).entries.find((e) => e.id === entry.id)!
+    expect(row.hasPhoto).toBe(false)
+    await expect(utensils.platePhotoKey(entry.id)).rejects.toThrow(/no photo/i)
+    await utensils.removePlates(ut, entry.id) // nothing to delete from storage, and no throw
   })
 
   it('refuses before the event starts and after the log is closed', async () => {
@@ -234,6 +235,22 @@ d('the close', () => {
     const doc = await proposal.proposalDocument(eventId)
     expect(doc.extras.some((x) => x.description.includes('Extra plates'))).toBe(true)
     expect(doc.totals.totalPaise).toBe(after.payablePaise)
+  })
+
+  it('shows on the billing ledger while open, and goes on the bill when closed', async () => {
+    const { eventId, sangeet } = await makeWedding()
+    const entry = await utensils.addPlates(ut, { subEventId: sangeet, plates: 10 })
+
+    let ledger = await payments.getLedger(eventId)
+    expect(ledger.loggedCharges).toEqual([
+      expect.objectContaining({ key: 'plates', entryCount: 1, totalPaise: entry.amountPaise, closed: false }),
+    ])
+    expect(ledger.extraPlatesPaise).toBe(0) // listed, but not charged until the close
+
+    await utensils.closeUtensilExtras(ut, eventId)
+    ledger = await payments.getLedger(eventId)
+    expect(ledger.loggedCharges[0]!.closed).toBe(true)
+    expect(ledger.extraPlatesPaise).toBe(entry.amountPaise)
   })
 
   it('is a lock-checklist item, green when there is nothing to close', async () => {

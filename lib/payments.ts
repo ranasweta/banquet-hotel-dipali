@@ -5,6 +5,9 @@ import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, notFound } from '@/lib/api'
 import { shownTaxPaise } from '@/lib/invoice'
 import { paymentSchedule, type Milestone } from '@/lib/payment-schedule'
+import { listEntries as maintenanceLog } from '@/lib/maintenance'
+import { getLodgeExtras } from '@/lib/lodge-extras'
+import { getUtensilExtras } from '@/lib/utensils'
 
 /**
  * Payment ledger (M7, FR-7.7, FR-11.4). Part-payments of any amount are recorded as they
@@ -73,6 +76,23 @@ export async function recordPayment(actor: Actor, eventId: string, input: Paymen
   }
 }
 
+/**
+ * One team's after-the-event log, open or closed (client, 15 Oct 2026: "the maintenance and
+ * plates and lodging logs are not working … not reflecting in ledger"). They were reaching the
+ * bill exactly as designed — on the close — but an OPEN log was invisible here, so a logged
+ * charge looked lost. Listed with its status, it can be chased instead.
+ */
+export type LoggedCharge = {
+  key: 'maintenance' | 'lodge' | 'plates'
+  label: string
+  /** Who presses the close that puts it on the bill. */
+  closedBy: string
+  entryCount: number
+  totalPaise: number
+  /** Closed means it is inside `payablePaise`; open means it is not, yet. */
+  closed: boolean
+}
+
 export type Ledger = {
   /** Venue + food + add-ons. */
   proposalTotalPaise: number
@@ -99,6 +119,8 @@ export type Ledger = {
   /** What is due, when, and what is short — the panel a reopened proposal is read from. */
   milestones: Milestone[]
   payments: { id: string; kind: string; amountPaise: number; mode: string; receiptNo: string; receivedOn: string; note: string | null }[]
+  /** Only the logs with something in them. */
+  loggedCharges: LoggedCharge[]
 }
 
 /**
@@ -114,9 +136,12 @@ export async function getLedger(eventId: string): Promise<Ledger> {
   const [ev] = await db.select({ id: schema.events.id }).from(schema.events).where(eq(schema.events.id, eventId)).limit(1)
   if (!ev) throw notFound('Event not found')
 
-  const [schedule, shownGstPaise, rows] = await Promise.all([
+  const [schedule, shownGstPaise, maintenance, lodge, plates, rows] = await Promise.all([
     paymentSchedule(eventId),
     shownTaxPaise(eventId),
+    maintenanceLog(eventId),
+    getLodgeExtras(eventId),
+    getUtensilExtras(eventId),
     db
       .select({
         id: schema.payments.id,
@@ -150,5 +175,11 @@ export async function getLedger(eventId: string): Promise<Ledger> {
     balancePaise: schedule.balancePaise,
     milestones: schedule.milestones,
     payments: rows,
+    // Each total is the team's own panel figure, so this list and their screen cannot differ.
+    loggedCharges: ([
+      { key: 'maintenance', label: 'Maintenance', closedBy: 'the Maintenance team', entryCount: maintenance.entries.length, totalPaise: maintenance.totalPaise, closed: maintenance.closed },
+      { key: 'lodge', label: 'Lodge extras', closedBy: 'the Lodge Manager', entryCount: lodge.rooms.length + (lodge.inRoomDiningPaise > 0 ? 1 : 0), totalPaise: lodge.totalPaise, closed: lodge.closed },
+      { key: 'plates', label: 'Extra plates', closedBy: 'the Utensil Manager', entryCount: plates.entries.length, totalPaise: plates.totalPaise, closed: plates.closed },
+    ] satisfies LoggedCharge[]).filter((c) => c.entryCount > 0),
   }
 }

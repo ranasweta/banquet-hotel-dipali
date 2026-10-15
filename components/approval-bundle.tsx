@@ -75,7 +75,7 @@ type Ask = {
 }
 
 type Dish = { name: string; note: string | null; isExtra: boolean }
-type Segment = { name: string; basePick: number | null; extraPicks: number; picked: number; dishes: Dish[] }
+type Segment = { name: string; basePick: number | null; freeChoice: boolean; extraPicks: number; picked: number; dishes: Dish[] }
 type Menu = { tierId: string; tierName: string; perPlatePaise: number; segments: Segment[] }
 type Fn = {
   id: string; venueId: string | null; bundleId: string | null; name: string; date: string
@@ -746,13 +746,17 @@ export function ApprovalBundle({ eventId }: { eventId: string }) {
                     const pool = catalog.pools.find((x) => x.categoryName === seg.name)?.items ?? []
                     // Every dish the guest has, plus everything else on offer for this heading.
                     const all = [...new Set([...seg.dishes.map((d) => d.name), ...pool])].sort()
-                    const included = seg.basePick == null
+                    const included = seg.basePick == null && !seg.freeChoice
                     return (
                       <div key={seg.name} className="space-y-1.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="text-sm font-medium">{seg.name}</span>
                           <span className="text-xs text-muted-foreground tabular-nums">
-                            {included ? 'all included' : `${chosen.length} of ${seg.basePick} + ${Math.max(0, chosen.length - seg.basePick!)} extra`}
+                            {included
+                              ? 'all included'
+                              : seg.basePick == null
+                                ? `${chosen.length} ticked`
+                                : `${chosen.length} of ${seg.basePick} + ${Math.max(0, chosen.length - seg.basePick)} extra`}
                           </span>
                           {askedHere.size > 0 && (
                             <span className="rounded-full bg-violet-600 px-2 py-0.5 text-xs font-medium text-white">

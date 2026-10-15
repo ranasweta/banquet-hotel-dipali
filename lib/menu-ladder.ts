@@ -13,16 +13,25 @@
  */
 
 /**
- * The banquet tiers, cheapest first.
+ * The ladders, each cheapest first: the banquet card, and the breakfast card (client,
+ * 15 Oct 2026: "the breakfast gold and platinum should be ladders").
  *
- * Hardcoded rather than a `menu_tiers` column because the ladder is the hotel's price list,
+ * Hardcoded rather than a `menu_tiers` column because a ladder is the hotel's price list,
  * not something a screen should let anyone re-order: promoting Silver above Crown would
- * silently rewrite what every card contains from then on. It also keeps the meal-time tiers
- * — Breakfast Gold, High Tea Silver — off the ladder, which is right: those are separate
- * cards, not richer ones, and "Breakfast Gold" is above nothing. A tier not named here
- * neither cascades nor receives.
+ * silently rewrite what every card contains from then on. The two are separate ladders, not
+ * one: a breakfast dish has no business on a Crown dinner card. A tier named in neither —
+ * High Tea Silver, the tea counters — neither cascades nor receives.
  */
-export const TIER_LADDER = ['Silver', 'Gold', 'Platinum', 'Diamond', 'Crown'] as const
+export const TIER_LADDERS = [
+  ['Silver', 'Gold', 'Platinum', 'Diamond', 'Crown'],
+  ['Breakfast Gold', 'Breakfast Platinum'],
+] as const
+
+/** The tiers above `tierName` on its own ladder, cheapest first — none for a tier on no ladder. */
+export function tiersAbove(tierName: string): string[] {
+  const ladder: readonly string[] | undefined = TIER_LADDERS.find((l) => (l as readonly string[]).includes(tierName))
+  return ladder ? ladder.slice(ladder.indexOf(tierName) + 1) : []
+}
 
 /**
  * The same course under two names. The card relabels three segments as it climbs, and

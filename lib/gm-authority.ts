@@ -303,19 +303,20 @@ export async function applyGmProposalEdits(
  */
 async function applyMenuEdit(tx: Tx, actor: Actor, eventId: string, m: MenuEdit): Promise<string[]> {
   const [menu] = (await tx.execute(sql`
-    SELECT mu.id AS "menuId", se.name AS "subEventName", c.base_pick AS "basePick",
+    SELECT mu.id AS "menuId", se.name AS "subEventName", c.base_pick AS "basePick", c.free_choice AS "freeChoice",
            c.extra_picks AS "extraPicks", c.approved_extra_picks AS "approvedExtraPicks",
            c.submitted_extra_picks AS "submittedExtraPicks"
       FROM sub_event_menus mu
       JOIN sub_events se ON se.id = mu.sub_event_id
       JOIN sub_event_menu_categories c ON c.menu_id = mu.id AND c.category_name = ${m.categoryName}
      WHERE mu.sub_event_id = ${m.subEventId} AND se.event_id = ${eventId}
-  `)) as unknown as { menuId: string; subEventName: string; basePick: number | null; extraPicks: number; approvedExtraPicks: number; submittedExtraPicks: number }[]
+  `)) as unknown as { menuId: string; subEventName: string; basePick: number | null; freeChoice: boolean; extraPicks: number; approvedExtraPicks: number; submittedExtraPicks: number }[]
   if (!menu) throw notFound(`No “${m.categoryName}” on that function's menu.`)
 
   // pick_count NULL means every item in the category is included (SEED_ASSUMPTIONS). It is
   // read-only in the manager's picker and it stays read-only here — there is no "some" to pick.
-  if (menu.basePick == null) {
+  // A free-choice segment (migration 0041) has no count but IS ticked, so it is editable here.
+  if (menu.basePick == null && !menu.freeChoice) {
     throw badRequest(`“${m.categoryName}” includes every item — there is nothing to tick or untick.`)
   }
 
@@ -347,7 +348,8 @@ async function applyMenuEdit(tx: Tx, actor: Actor, eventId: string, m: MenuEdit)
   const dropped = [...had].filter((d) => !dishes.includes(d))
   if (!added.length && !dropped.length) return []
 
-  const extras = Math.max(0, dishes.length - menu.basePick)
+  // Free choice has no count, so nothing in it is ever an extra.
+  const extras = menu.basePick == null ? 0 : Math.max(0, dishes.length - menu.basePick)
 
   await tx.execute(sql`
     DELETE FROM sub_event_menu_selections
@@ -359,7 +361,7 @@ async function applyMenuEdit(tx: Tx, actor: Actor, eventId: string, m: MenuEdit)
     await tx.execute(sql`
       INSERT INTO sub_event_menu_selections (menu_id, category_name, item_name, is_extra)
       VALUES ${sql.join(
-        dishes.map((d, i) => sql`(${menu.menuId}, ${m.categoryName}, ${d}, ${i >= menu.basePick!})`),
+        dishes.map((d, i) => sql`(${menu.menuId}, ${m.categoryName}, ${d}, ${menu.basePick != null && i >= menu.basePick})`),
         sql`, `,
       )}
     `)

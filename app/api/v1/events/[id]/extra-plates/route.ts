@@ -24,11 +24,10 @@ export const GET = route(async (_req: NextRequest, ctx: { params: Promise<{ id: 
 })
 
 /**
- * POST /events/:id/extra-plates — log plates issued at one function, with their photograph.
+ * POST /events/:id/extra-plates — log plates issued at one function, optionally with a photograph.
  *
- * Multipart, and the photo is REQUIRED (client, 15 Aug 2026): this is the one charge in the
- * system a member of staff could invent, so an entry without evidence is refused outright
- * rather than saved and flagged. The bytes are encrypted before they leave the process.
+ * Multipart. The photo was mandatory until 15 Oct 2026, when the client made it optional
+ * (migration 0040). When one is attached it is encrypted before the bytes leave the process.
  */
 export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   const actor = await requirePermission('utensils', 'create_edit')
@@ -41,12 +40,12 @@ export const POST = route(async (req: NextRequest, ctx: { params: Promise<{ id: 
   })
 
   const file = form.get('photo')
-  if (!(file instanceof File) || file.size === 0) {
-    throw badRequest('A photo of the plates is required — take one now or pick one from the gallery.')
+  let fileKey: string | null = null
+  if (file instanceof File && file.size > 0) {
+    if (!ALLOWED_TYPES.has(file.type)) throw badRequest('The photo must be a JPEG, PNG, WebP or HEIC image')
+    if (file.size > MAX_BYTES) throw badRequest('The photo must be 8 MB or smaller')
+    ;({ fileKey } = await storeEncrypted(Buffer.from(await file.arrayBuffer()), { contentType: file.type }))
   }
-  if (!ALLOWED_TYPES.has(file.type)) throw badRequest('The photo must be a JPEG, PNG, WebP or HEIC image')
-  if (file.size > MAX_BYTES) throw badRequest('The photo must be 8 MB or smaller')
-  const { fileKey } = await storeEncrypted(Buffer.from(await file.arrayBuffer()), { contentType: file.type })
 
   const entry = await addPlates(actor, {
     subEventId: input.sub_event_id,

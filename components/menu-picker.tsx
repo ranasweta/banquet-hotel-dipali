@@ -24,6 +24,8 @@ export type CatalogCategory = {
   name: string
   pickCount: number | null
   freeIncreaseEligible: boolean
+  /** Tick any number, nought included (migration 0041). */
+  freeChoice: boolean
   items: string[]
 }
 export type CatalogTier = { id: string; name: string; baseRatePaise: number; categories: CatalogCategory[] }
@@ -300,7 +302,7 @@ export function MenuPicker({
 
         const selections: Record<string, string[]> = {}
         for (const c of tier.categories) {
-          if (c.pickCount == null) continue // all-included: server fills the full list
+          if (c.pickCount == null && !c.freeChoice) continue // all-included: server fills the full list
           selections[c.name] = [...(snapSelected[c.name] ?? [])]
         }
         const saved = await api<{ snapshot: MenuResponse; increases: IncreaseSummary }>(
@@ -493,14 +495,17 @@ export function MenuPicker({
           {tier.categories.map((cat) => {
             const cap = effectivePick(cat)
             const chosen = selected[cat.name] ?? []
-            const allIncluded = cat.pickCount == null
+            // Free choice (breakfasts, 15 Oct 2026): ticked like any segment, but no count —
+            // any number, nought included, so no ceiling, no extras and always complete.
+            const freeChoice = cat.freeChoice
+            const allIncluded = cat.pickCount == null && !freeChoice
             const unlocked = isUnlocked(cat.name)
             // Extras are the picks past the printed count — the tail of the array.
-            const base = cat.pickCount ?? 0
-            const extraCount = allIncluded ? 0 : Math.max(0, chosen.length - base)
+            const base = freeChoice ? Infinity : cat.pickCount ?? 0
+            const extraCount = allIncluded || freeChoice ? 0 : Math.max(0, chosen.length - base)
             const count = allIncluded ? cat.items.length : chosen.length
             const need = allIncluded ? cat.items.length : cap ?? 0
-            const complete = allIncluded || chosen.length >= base
+            const complete = allIncluded || freeChoice || chosen.length >= base
             const snap = savedForThisTier?.categories.find((c) => c.categoryName === cat.name)
             return (
               <div key={cat.id} className="rounded-lg border p-3">
@@ -512,6 +517,8 @@ export function MenuPicker({
                     <span className="font-medium">{cat.name}</span>
                     {allIncluded ? (
                       <Badge variant="outline" className="text-muted-foreground">all included</Badge>
+                    ) : freeChoice ? (
+                      <Badge variant="outline">tick any</Badge>
                     ) : (
                       <Badge variant="outline">pick {cap}</Badge>
                     )}
@@ -552,7 +559,7 @@ export function MenuPicker({
                       )}
                     >
                       {complete && <Check className="size-3" />}
-                      {unlocked ? `${count} picked` : `${count} of ${need}`}
+                      {unlocked || freeChoice ? `${count} picked` : `${count} of ${need}`}
                     </span>
                     {editable && !allIncluded && (
                       <Button
@@ -564,7 +571,7 @@ export function MenuPicker({
                         <ArrowLeftRight className="size-3" /> swap
                       </Button>
                     )}
-                    {editable && !allIncluded && savedForThisTier && !unlocked && (
+                    {editable && !allIncluded && !freeChoice && savedForThisTier && !unlocked && (
                       <Button
                         size="xs"
                         variant="ghost"

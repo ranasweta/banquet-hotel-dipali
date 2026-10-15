@@ -789,6 +789,7 @@
           "name": "Breakfast",
           "pick": null,
           "freeIncreaseEligible": false,
+          "freeChoice": true,
           "items": [
             "Tea",
             "Coffee",
@@ -816,6 +817,7 @@
           "name": "Breakfast",
           "pick": null,
           "freeIncreaseEligible": false,
+          "freeChoice": true,
           "items": [
             "Tea",
             "Coffee",

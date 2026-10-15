@@ -1585,6 +1585,35 @@ list is ever wanted with both figures, the fix is a bulk `shownTaxByEvent` that 
 option — a list and a booking page that differ by a few paise is the disagreement all of this
 exists to prevent.
 
+### F31. Extra plates — the photograph is optional now
+Client, 15 Oct 2026: *"in the plates one remove the required field that is the image one."*
+§F28 made the photo the entry — `file_key NOT NULL` — because a plate count is the one charge
+with no booking, rate card or guest signature behind it. That control is **given up on the
+client's instruction** (migration 0040). A photo can still be attached and is still encrypted and
+served behind `utensils:view`; a row without one says "no photo" on the panel.
+
+The trigger was practical: the live site has no storage driver (no `GCS_BUCKET` on Vercel, so
+`storeEncrypted` refuses every upload) and with the photo mandatory **no plate entry could ever
+be saved** — there are none in production. The same missing storage still breaks maintenance
+receipts and guest ID documents; the client chose to leave that for now (15 Oct 2026).
+
+**Flagged:** an Auditor questioning a plate charge now has only the count and the remark.
+
+### F32. Breakfast menus are ticked, not copied — "free choice"
+Client, 15 Oct 2026: Breakfast Gold and Breakfast Platinum *"should be tickable … no need to
+just keep all the items selected"*, and the guest may tick *"as much as they want, can be 0 too"*.
+A third kind of segment beside "any N" and "all included" (migration 0041,
+`menu_categories.free_choice`, snapshotted onto `sub_event_menu_categories`): no count, no
+ceiling, nought allowed, always complete, nothing in it ever an extra. Ticking more never moves
+the plate price — the tier rate is the rate. The breakfasts already booked kept every dish they
+had and became tickable, so a manager can untick what the guest does not want.
+
+The same day the two became a **ladder of their own** (`TIER_LADDERS` in `lib/menu-ladder.ts`):
+a dish added to Breakfast Gold is carried to Breakfast Platinum, never onto a dinner card.
+Existing dishes were **not** back-filled — Platinum's card today lacks some of Gold's dishes
+(Assorted Paratha, Bombay Kaccha Sandwich and others), and whether a richer breakfast should
+contain them all is the client's call, not a cascade's.
+
 ---
 
 ## E. Still needed from the client

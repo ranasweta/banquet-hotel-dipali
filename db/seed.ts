@@ -230,16 +230,18 @@ export async function seed(
         name: c.name,
         pick_count: c.pick,
         free_increase_eligible: c.freeIncreaseEligible,
+        free_choice: c.freeChoice,
         sort_order: i,
       })),
     )
     const categories = (await tx`
       INSERT INTO menu_categories ${tx(
-        categoryRows, 'tier_id', 'name', 'pick_count', 'free_increase_eligible', 'sort_order',
+        categoryRows, 'tier_id', 'name', 'pick_count', 'free_increase_eligible', 'free_choice', 'sort_order',
       )}
       ON CONFLICT (tier_id, name) DO UPDATE SET
         pick_count = EXCLUDED.pick_count,
         free_increase_eligible = EXCLUDED.free_increase_eligible,
+        free_choice = EXCLUDED.free_choice,
         sort_order = EXCLUDED.sort_order
       RETURNING id, tier_id, name`) as { id: string; tier_id: string; name: string }[]
     const categoryId = new Map<string, string>(
