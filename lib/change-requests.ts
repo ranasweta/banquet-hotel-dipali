@@ -4,6 +4,8 @@ import { db, schema } from '@/db/drizzle'
 import { audit, type Actor } from '@/lib/audit'
 import { badRequest, conflict, forbidden, notFound, ApiError } from '@/lib/api'
 import { occupancyParts } from '@/lib/occupancy'
+import { loadSubEventsForPricing, priceProposal } from '@/lib/pricing'
+import { formatPaise } from '@/lib/money'
 
 /**
  * Post-confirmation change requests (M8, FR-1.9). Changing a confirmed sub-event's date,
@@ -199,11 +201,56 @@ export async function applyMove(tx: Tx, actor: Actor, subEventId: string, eventI
   const dates = (await tx.select({ eventDate: schema.subEvents.eventDate }).from(schema.subEvents).where(eq(schema.subEvents.eventId, eventId))).map((r) => r.eventDate).sort()
   await tx.update(schema.events).set({ firstDate: dates[0], lastDate: dates[dates.length - 1] }).where(eq(schema.events.id, eventId))
 
+  // The place goes in the trail too: without it a hall change read as "12:00–16:00 → 12:00–16:00".
+  const placeOf = async (venueId: string | null, bundleId: string | null): Promise<string> => {
+    const [r] = (await tx.execute(sql`
+      SELECT COALESCE((SELECT name FROM venues WHERE id = ${venueId}),
+                      (SELECT name FROM venue_bundles WHERE id = ${bundleId})) AS name
+    `)) as unknown as { name: string | null }[]
+    return r?.name ?? '—'
+  }
   await audit(tx, actor, {
     entity: 'sub_events', entityId: subEventId, eventId, action: 'update', field: 'schedule',
-    oldValue: `${before.eventDate} ${before.startTime.slice(0, 5)}–${before.endTime.slice(0, 5)}`,
-    newValue: `${next.eventDate} ${next.startTime}–${next.endTime}`,
+    oldValue: `${before.eventDate} ${before.startTime.slice(0, 5)}–${before.endTime.slice(0, 5)} · ${await placeOf(before.venueId, before.bundleId)}`,
+    newValue: `${next.eventDate} ${next.startTime}–${next.endTime} · ${await placeOf(next.venueId, next.bundleId)}`,
   })
+  await recutVenueRates(tx, actor, eventId, new Set([subEventId]))
+}
+
+/**
+ * Re-cuts the frozen hall rates (`sub_events.venue_rate_paise`) after a confirmed booking's
+ * functions change shape — a move, an added function, a removed one.
+ *
+ * Confirm froze one rate per venue-day on the day's first function and 0 on the rest. Moving a
+ * function left that snapshot where it was: E-1132's breakfast and lunch were moved from
+ * Crystal into Gulmohar Lawn and went on carrying Crystal's ₹1,51,000, so the bill — which
+ * reads the day's first snapshot — charged Gulmohar at Crystal's price on one day and its own
+ * on the next, while `proposal_total_paise` (priced live) said something else again.
+ *
+ * `priceProposal` decides the carriers, exactly as confirm does. A covered function freezes 0.
+ * A carrier keeps its snapshot when it was not `repriced` and already held one — an untouched
+ * hall-day keeps the price it was confirmed at — and otherwise takes today's card, as every
+ * post-confirm venue edit does (rule 9).
+ */
+export async function recutVenueRates(tx: Tx, actor: Actor, eventId: string, repriced: Set<string>): Promise<void> {
+  const [ev] = await tx.select({ eventType: schema.events.eventType }).from(schema.events).where(eq(schema.events.id, eventId)).limit(1)
+  const subs = await loadSubEventsForPricing(eventId, tx)
+  const priced = await priceProposal(ev!.eventType, subs, tx)
+  const frozen = new Map(
+    (await tx.select({ id: schema.subEvents.id, rate: schema.subEvents.venueRatePaise }).from(schema.subEvents).where(eq(schema.subEvents.eventId, eventId)))
+      .map((r) => [r.id, Number(r.rate)]),
+  )
+  for (const s of subs) {
+    const old = frozen.get(s.id) ?? 0
+    const next = priced.coveredBy.has(s.id) ? 0 : !repriced.has(s.id) && old > 0 ? old : (priced.rates.get(s.id) ?? 0)
+    if (next === old) continue
+    await tx.update(schema.subEvents).set({ venueRatePaise: next }).where(eq(schema.subEvents.id, s.id))
+    await audit(tx, actor, {
+      entity: 'sub_events', entityId: s.id, eventId, action: 'update', field: 'venue_rate_paise',
+      oldValue: `${s.name}: ${formatPaise(old)}`,
+      newValue: `${s.name}: ${formatPaise(next)}${priced.coveredBy.has(s.id) ? ' (covered by the day’s first function)' : ''}`,
+    })
+  }
 }
 
 /**
