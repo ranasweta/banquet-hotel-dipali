@@ -172,7 +172,7 @@ export function BookingWizard({
 
   // Carried over from an instant proposal, waiting to be added at their steps.
   const [carriedFns, setCarriedFns] = useState<CarriedFn[]>([])
-  const [carriedRooms, setCarriedRooms] = useState<{ unitId: string; roomType: string; count: number; nights: number }[]>([])
+  const [carriedRooms, setCarriedRooms] = useState<{ unitId: string; roomType: string; count: number; nights: number; checkIn?: string }[]>([])
 
   useEffect(() => {
     if (!instantId) return
@@ -207,8 +207,8 @@ export function BookingWizard({
       .catch((e) => toast.error(e instanceof Error ? e.message : 'Could not open the instant proposal'))
   }, [instantId])
 
-  // The instant counts its rooms in nights; the proposal books dates. They start on the From
-  // date, read when the Rooms step opens so a run settled since then is the one used.
+  // The instant counts its rooms in nights from a check-in date, or from the From date when it
+  // has none — read when the Rooms step opens so a run settled since then is the one used.
   useEffect(() => {
     if (step !== 3 || carriedRooms.length === 0 || !fromDate) return
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -218,8 +218,8 @@ export function BookingWizard({
         unit_id: r.unitId,
         room_type: r.roomType,
         count: r.count,
-        check_in: fromDate,
-        check_out: addDays(fromDate, r.nights),
+        check_in: r.checkIn || fromDate,
+        check_out: addDays(r.checkIn || fromDate, r.nights),
       })),
     ])
     setCarriedRooms([])

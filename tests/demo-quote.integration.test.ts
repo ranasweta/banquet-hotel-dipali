@@ -80,9 +80,8 @@ d('demoQuote', () => {
 
   it('prices an instant proposal only as far as it is filled in', async () => {
     const blank = { name: '', eventDate: null, startTime: null, endTime: null, venueId: null, bundleId: null, pax: null, tierId: null }
-    // No event type: no hall can be priced, but the plate can — and nothing is a stand-in zero.
     const q = await demoQuote({
-      eventType: null,
+      eventType: 'wedding',
       functions: [
         { ...blank, name: 'Dinner', eventDate: '2027-02-02', startTime: '19:00', venueId: hall.id, pax: 50, tierId: tier.id },
         { ...blank, name: 'Undecided' },
@@ -90,16 +89,36 @@ d('demoQuote', () => {
       rooms: [],
     })
     const byName = new Map(q.functions.map((f) => [f.name, f]))
-    expect(byName.get('Dinner')!.venuePaise).toBeNull()
-    expect(byName.get('Dinner')!.foodPaise).toBe(tier.base * 50)
+    expect(byName.get('Dinner')!.venuePaise).toBe(hall.rate)
+    // Nothing chosen is nothing priced — never a stand-in zero.
     expect(byName.get('Undecided')).toMatchObject({ venuePaise: null, perPlatePaise: null, foodPaise: 0, venueName: null })
-    expect(q.functionsPaise).toBe(tier.base * 50)
     expect(q.missingVenueRates).toEqual([])
     // `index` pairs the date-sorted reply back to the input.
     expect(q.functions.map((f) => [f.index, f.name])).toEqual([[0, 'Dinner'], [1, 'Undecided']])
+  })
 
-    // With the type, the same hall is priced.
-    const typed = await demoQuote({ eventType: 'wedding', functions: [{ ...blank, name: 'Dinner', eventDate: '2027-02-02', startTime: '19:00', venueId: hall.id }], rooms: [] })
-    expect(typed.functions[0]!.venuePaise).toBe(hall.rate)
+  it('prices as a wedding when no event type is picked (client, 16 Oct 2026)', async () => {
+    const blank = { name: '', eventDate: null, startTime: null, endTime: null, venueId: null, bundleId: null, pax: null, tierId: null }
+    const fns = [{ ...blank, name: 'Dinner', eventDate: '2027-02-02', startTime: '19:00', venueId: hall.id, pax: 50, tierId: tier.id }]
+    const untyped = await demoQuote({ eventType: null, functions: fns, rooms: [] })
+    const wedding = await demoQuote({ eventType: 'wedding', functions: fns, rooms: [] })
+    expect(untyped.functions).toEqual(wedding.functions)
+    expect(untyped.functions[0]).toMatchObject({ venuePaise: hall.rate, perPlatePaise: tier.base + tier.surcharge })
+  })
+
+  it('prices a function with no start time as its date’s hall hire, shared like any other', async () => {
+    const blank = { name: '', eventDate: null, startTime: null, endTime: null, venueId: null, bundleId: null, pax: null, tierId: null }
+    const q = await demoQuote({
+      eventType: 'wedding',
+      functions: [
+        { ...blank, name: 'Untimed', eventDate: '2027-02-02', venueId: hall.id },
+        { ...blank, name: 'Dinner', eventDate: '2027-02-02', startTime: '19:00', venueId: hall.id },
+        { ...blank, name: 'Next day', eventDate: '2027-02-03', venueId: hall.id },
+      ],
+      rooms: [],
+    })
+    const byName = new Map(q.functions.map((f) => [f.name, f.venuePaise]))
+    // One hire on the 2nd (the untimed function carries it, the dinner shares it), one on the 3rd.
+    expect([byName.get('Untimed'), byName.get('Dinner'), byName.get('Next day')]).toEqual([hall.rate, 0, hall.rate])
   })
 })

@@ -70,4 +70,15 @@ d('instant proposals', () => {
       { action: 'status', field: 'converted_event_id' },
     ])
   })
+
+  it('keeps a room line’s check-in date, and still takes a line without one', async () => {
+    const [unit] = (await db.execute(sql`SELECT id FROM lodging_units LIMIT 1`)) as unknown as { id: string }[]
+    const room = { unitId: unit!.id, roomType: 'deluxe', count: 2, nights: 2 }
+    const draft = draftSchema.parse({ rooms: [{ ...room, checkIn: '2027-02-10' }, room] })
+    const id = await createInstantProposal(actor, 'Rooms', draft)
+    const saved = (await getInstantProposal(id)).draft.rooms
+    expect(saved[0]!.checkIn).toBe('2027-02-10')
+    expect(saved[1]!.checkIn).toBeUndefined() // the From date, as before
+    expect(() => draftSchema.parse({ rooms: [{ ...room, checkIn: '10/02/2027' }] })).toThrow()
+  })
 })
