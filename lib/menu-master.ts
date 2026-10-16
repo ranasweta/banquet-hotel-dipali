@@ -284,7 +284,7 @@ export async function setTierPrice(
 
 export type CategoryInput = {
   name: string
-  /** NULL means every dish is included — the picker renders it read-only. */
+  /** NULL means free choice: tick any number, nought included (migration 0042). */
   pickCount: number | null
   freeIncreaseEligible: boolean
   sortOrder: number
@@ -293,11 +293,11 @@ export type CategoryInput = {
 function validateCategory(input: CategoryInput): void {
   if (!input.name.trim()) throw badRequest('A segment needs a name.')
   if (input.pickCount != null && input.pickCount < 1) {
-    throw badRequest('Pick count must be at least 1, or blank for "all included".')
+    throw badRequest('Pick count must be at least 1, or blank for "any number".')
   }
   // Mirrors the DB CHECK. Caught here so the message names the actual problem.
   if (input.pickCount == null && input.freeIncreaseEligible) {
-    throw badRequest('An all-included segment has nothing to increase, so it cannot be free-increase eligible.')
+    throw badRequest('A segment with no count has no limit to increase, so it cannot be free-increase eligible.')
   }
 }
 
@@ -309,11 +309,11 @@ export async function createCategory(actor: Actor, tierId: string, input: Catego
     try {
       const [c] = await tx
         .insert(schema.menuCategories)
-        .values({ tierId, name: input.name.trim(), pickCount: input.pickCount, freeIncreaseEligible: input.freeIncreaseEligible, sortOrder: input.sortOrder })
+        .values({ tierId, name: input.name.trim(), pickCount: input.pickCount, freeChoice: input.pickCount == null, freeIncreaseEligible: input.freeIncreaseEligible, sortOrder: input.sortOrder })
         .returning({ id: schema.menuCategories.id })
       await audit(tx, actor, {
         entity: 'menu_categories', entityId: c!.id, action: 'insert', field: 'name',
-        newValue: `${tier.name} · ${input.name.trim()} (pick ${input.pickCount ?? 'all'})`,
+        newValue: `${tier.name} · ${input.name.trim()} (pick ${input.pickCount ?? 'any'})`,
       })
       return { id: c!.id }
     } catch (e) {
@@ -331,9 +331,8 @@ export async function updateCategory(actor: Actor, categoryId: string, input: Ca
     try {
       await tx
         .update(schema.menuCategories)
-        // A count makes it an "any N" segment, which free choice is not; with no count the
-        // segment keeps whichever no-count kind it was (all included, or free choice).
-        .set({ name: input.name.trim(), pickCount: input.pickCount, freeIncreaseEligible: input.freeIncreaseEligible, sortOrder: input.sortOrder, ...(input.pickCount != null && { freeChoice: false }) })
+        // No count IS free choice (migration 0042's CHECK): there is no all-included segment.
+        .set({ name: input.name.trim(), pickCount: input.pickCount, freeChoice: input.pickCount == null, freeIncreaseEligible: input.freeIncreaseEligible, sortOrder: input.sortOrder })
         .where(eq(schema.menuCategories.id, categoryId))
     } catch (e) {
       if (isUnique(e)) throw conflict(`"${input.name.trim()}" is already a segment of this tier.`)
@@ -343,8 +342,8 @@ export async function updateCategory(actor: Actor, categoryId: string, input: Ca
     // holds its own `base_pick`. Changing it here governs menus saved from now on.
     await audit(tx, actor, {
       entity: 'menu_categories', entityId: categoryId, action: 'update', field: 'segment',
-      oldValue: `${c.name} (pick ${c.pickCount ?? 'all'})`,
-      newValue: `${input.name.trim()} (pick ${input.pickCount ?? 'all'})`,
+      oldValue: `${c.name} (pick ${c.pickCount ?? 'any'})`,
+      newValue: `${input.name.trim()} (pick ${input.pickCount ?? 'any'})`,
     })
   })
 }

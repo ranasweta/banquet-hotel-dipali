@@ -450,9 +450,10 @@ Two rules it establishes that reach beyond the seed:
   master** (`venue_master`, migration 0029 — venues, bundles and every per-event-type rate,
   dated). A new venue is created with NO rate rather than a zero, and a bundle's membership
   freezes once it is booked because it decides which halls that booking holds.
-- **`pick_count = NULL` means every item is included** (breads, salad bar,
-  accompaniments, high tea). Read-only in the picker, always counts complete,
-  never free-increase eligible — **unless `free_choice` is set** (migration 0041, client
-  15 Oct 2026; today the two breakfast tiers): then the dishes are ticked, any number,
-  nought included, always complete, never an extra. Breakfast Gold → Breakfast Platinum is
-  a ladder of its own for the dish cascade (`TIER_LADDERS`, `lib/menu-ladder.ts`).
+- **`pick_count = NULL` means free choice** (breads, salad bar, accompaniments, breakfast,
+  high tea): the dishes are ticked, any number, nought included, always complete, never an
+  extra, never free-increase eligible. **There is no "all included" segment any more**
+  (client, 16 Oct 2026, migration 0042) — `free_choice = (pick_count IS NULL)` is a CHECK on
+  the master and on every booked menu, so nothing can bring one back. Breakfast Gold →
+  Breakfast Platinum is a ladder of its own for the dish cascade (`TIER_LADDERS`,
+  `lib/menu-ladder.ts`).

@@ -101,11 +101,11 @@ async function buildProposal(): Promise<{ eventId: string }> {
     .insert(schema.subEventMenus)
     .values({ subEventId: a!.id, tierId: silver, tierName: 'Silver', baseRatePaise: 65_000, surchargePaise: 5_000, isComplete: true })
     .returning({ id: schema.subEventMenus.id })
-  // One segment picked one over its base (the extra), one segment all-included (base_pick NULL).
+  // One segment picked one over its base (the extra), one free-choice segment (base_pick NULL).
   await db.execute(sql`
-    INSERT INTO sub_event_menu_categories (menu_id, category_name, base_pick, extra_picks) VALUES
-      (${menuA!.id}, 'Veg Starters', 4, 1),
-      (${menuA!.id}, 'Breads', NULL, 0)
+    INSERT INTO sub_event_menu_categories (menu_id, category_name, base_pick, extra_picks, free_choice) VALUES
+      (${menuA!.id}, 'Veg Starters', 4, 1, false),
+      (${menuA!.id}, 'Breads', NULL, 0, true)
   `)
   await db.execute(sql`
     INSERT INTO sub_event_menu_selections (menu_id, category_name, item_name, is_extra) VALUES

@@ -171,7 +171,7 @@ export const menuCategories = pgTable("menu_categories", {
 	pickCount: integer("pick_count"),
 	freeIncreaseEligible: boolean("free_increase_eligible").default(false).notNull(),
 	sortOrder: integer("sort_order").default(0).notNull(),
-	// Tick any number, nought included; no count (migration 0041).
+	// Tick any number, nought included — exactly when there is no count (migrations 0041, 0042).
 	freeChoice: boolean("free_choice").default(false).notNull(),
 }, (table) => [
 	foreignKey({
@@ -182,7 +182,7 @@ export const menuCategories = pgTable("menu_categories", {
 	unique("menu_categories_tier_id_name_key").on(table.tierId, table.name),
 	check("menu_categories_pick_count_check", sql`(pick_count IS NULL) OR (pick_count > 0)`),
 	check("menu_categories_check", sql`NOT ((pick_count IS NULL) AND free_increase_eligible)`),
-	check("menu_categories_free_choice_no_count", sql`NOT (free_choice AND (pick_count IS NOT NULL))`),
+	check("menu_categories_free_choice_iff_no_count", sql`free_choice = (pick_count IS NULL)`),
 ]);
 
 export const menuItems = pgTable("menu_items", {
@@ -904,7 +904,7 @@ export const subEventMenuCategories = pgTable("sub_event_menu_categories", {
 	primaryKey({ columns: [table.menuId, table.categoryName], name: "sub_event_menu_categories_pkey"}),
 	check("sub_event_menu_categories_base_pick_check", sql`(base_pick IS NULL) OR (base_pick > 0)`),
 	check("sub_event_menu_categories_check", sql`NOT ((base_pick IS NULL) AND (extra_picks > 0))`),
-	check("semc_free_choice_no_count", sql`NOT (free_choice AND (base_pick IS NOT NULL))`),
+	check("semc_free_choice_iff_no_count", sql`free_choice = (base_pick IS NULL)`),
 ]);
 
 // Chef delicacy requests: an off-menu ask the Chef prices per plate. See db/schema.sql.
