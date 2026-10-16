@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm'
 import { db } from '@/db/drizzle'
 import { percentOfPaise } from '@/lib/money'
 import { ADVANCE_PCT } from '@/lib/payment-schedule'
-import { priceProposal } from '@/lib/pricing'
+import { priceProposal, VENUE_DAY_START_TIME } from '@/lib/pricing'
 import { roomGstBp, STANDARD_GST_BP, taxOf } from '@/lib/tax'
 
 /**
@@ -63,13 +63,19 @@ export type DemoQuote = {
   missingVenueRates: string[]
 }
 
+/** What an instant is priced as before anyone picks an event type (client, 16 Oct 2026). */
+export const DEFAULT_EVENT_TYPE = 'wedding'
+
 export async function demoQuote(input: {
   eventType: string | null
   functions: DemoFunctionInput[]
   rooms: DemoRoomInput[]
 }): Promise<DemoQuote> {
+  // No event type picked yet → priced as a WEDDING (client, 16 Oct 2026): the halls get a rate
+  // and the plates carry the wedding surcharge, rather than the halls showing nothing at all.
+  const eventType = input.eventType || DEFAULT_EVENT_TYPE
   const [et] = (await db.execute(sql`
-    SELECT is_wedding AS "isWedding" FROM event_types WHERE code = ${input.eventType}
+    SELECT is_wedding AS "isWedding" FROM event_types WHERE code = ${eventType}
   `)) as unknown as { isWedding: boolean }[]
   const isWedding = Boolean(et?.isWedding)
 
@@ -78,14 +84,15 @@ export async function demoQuote(input: {
   const subs = input.functions
     .map((f, i) => ({ ...f, id: String(i) }))
     .sort((a, b) => ((a.eventDate ?? '9999') + (a.startTime ?? '')).localeCompare((b.eventDate ?? '9999') + (b.startTime ?? '')))
+  // The same rule as a real proposal (`priceProposal`): one hire per hall per venue-day, carried
+  // by the day's first function. A function with a date but no start time yet is placed in its
+  // own date's hire — as if it began at the 8 AM boundary — so its hall is priced, not dropped.
   const hallReady = subs.flatMap((s) =>
-    input.eventType && s.eventDate && s.startTime && (s.venueId || s.bundleId)
-      ? [{ ...s, eventDate: s.eventDate, startTime: s.startTime }]
+    s.eventDate && (s.venueId || s.bundleId)
+      ? [{ ...s, eventDate: s.eventDate, startTime: s.startTime || VENUE_DAY_START_TIME }]
       : [],
   )
-  const venuePricing = input.eventType
-    ? await priceProposal(input.eventType, hallReady)
-    : { rates: new Map<string, number>(), missing: [] as { name: string }[] }
+  const venuePricing = await priceProposal(eventType, hallReady)
 
   const names = (await db.execute(sql`
     SELECT id::text, name FROM venues UNION ALL SELECT id::text, name FROM venue_bundles

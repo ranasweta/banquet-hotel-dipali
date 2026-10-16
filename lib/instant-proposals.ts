@@ -46,6 +46,8 @@ export const draftSchema = z.object({
         roomType: z.string().min(1).max(40),
         count: z.number().int().positive(),
         nights: z.number().int().positive(),
+        /** The first night. Blank or missing means the proposal's From date (16 Oct 2026). */
+        checkIn: blankOr(ISO_DATE).optional(),
       }),
     )
     .max(50)

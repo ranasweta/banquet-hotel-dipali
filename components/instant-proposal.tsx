@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { CalendarSearch, Check, Pencil, Printer, Trash2, X } from 'lucide-react'
@@ -48,7 +48,8 @@ type Fn = {
   tierId: string
   dishes: Record<string, string[]>
 }
-type Room = { unitId: string; roomType: string; count: number; nights: number }
+/** `checkIn` blank or missing means the From date — the night conversion has always assumed. */
+type Room = { unitId: string; roomType: string; count: number; nights: number; checkIn?: string }
 type Draft = { fromDate: string; toDate: string; eventType: string; phone: string; functions: Fn[]; rooms: Room[] }
 type Saved = {
   id: string
@@ -208,13 +209,12 @@ export function InstantProposal({ id: initialId, canSeeAvailability }: { id?: st
 
   const summary = quote && (
     <>
-      <SummaryNotes quote={quote} fns={fns} eventType={eventType} />
+      <SummaryNotes quote={quote} fns={fns} eventType={eventType} rooms={rooms} fromDate={fromDate} />
       {/* On a phone the A4 sheet scrolls sideways inside its own box, never the page. */}
       <div className="overflow-x-auto print:overflow-visible">
         <InstantSummary
           quote={quote}
-          fns={fns}
-          tiers={tiers}
+          rooms={rooms}
           guestName={name}
           eventLabel={eventLabel}
           fromDate={fromDate}
@@ -342,7 +342,7 @@ export function InstantProposal({ id: initialId, canSeeAvailability }: { id?: st
 
       {step === 3 && (
         <StepCard title="Rooms">
-          <InstantRooms options={options} rooms={rooms} setRooms={setRooms} />
+          <InstantRooms options={options} rooms={rooms} setRooms={setRooms} fromDate={fromDate} />
           <Nav onBack={() => setStep(2)} onNext={() => setStep(4)} nextLabel="Show summary" />
         </StepCard>
       )}
@@ -373,9 +373,56 @@ export function InstantProposal({ id: initialId, canSeeAvailability }: { id?: st
   )
 }
 
-function SummaryNotes({ quote, fns, eventType }: { quote: DemoQuote; fns: Fn[]; eventType: string }) {
+function SummaryNotes({
+  quote,
+  fns,
+  eventType,
+  rooms,
+  fromDate,
+}: {
+  quote: DemoQuote
+  fns: Fn[]
+  eventType: string
+  rooms: Room[]
+  fromDate: string
+}) {
+  // Room lines that ask for more than the lodge has free, re-checked here so an impossible
+  // count cannot reach a printout unnoticed (the Rooms step flags the same lines).
+  const query = rooms.flatMap((r) => {
+    const from = r.checkIn || fromDate
+    return from ? [{ unit_id: r.unitId, room_type: r.roomType, count: r.count, check_in: from, check_out: addDaysISO(from, r.nights) }] : []
+  })
+  const queryKey = JSON.stringify(query)
+  const [short, setShort] = useState<{ key: string; lines: string[] } | null>(null)
+  useEffect(() => {
+    if (query.length === 0) return
+    api<{ lines: { available: number; total: number }[] }>('/rooms/availability', { method: 'POST', body: JSON.stringify({ lines: query }) })
+      .then((res) =>
+        setShort({
+          key: queryKey,
+          lines: query.flatMap((q, i) =>
+            res.lines[i] && q.count > res.lines[i]!.available
+              ? [`${q.count} × ${roomLabel(q.room_type)} (only ${res.lines[i]!.available} free)`]
+              : [],
+          ),
+        }),
+      )
+      .catch(() => setShort(null))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryKey])
   const notes: string[] = []
-  if (!eventType && fns.some((f) => f.target)) notes.push('Pick the event type to price the halls — a hall’s rate depends on it.')
+  if (short?.key === queryKey && short.lines.length) {
+    notes.push(`More rooms than are free: ${short.lines.join(', ')}. Reduce them on the Rooms step before sending this.`)
+  }
+  // What the quote ASSUMED, said out loud (lib/demo-quote.ts) — a price on an assumption is fine
+  // on an estimate only while the counter can see which assumption it rests on.
+  if (!eventType) notes.push('No event type picked yet — priced as a wedding (hall rates and the wedding plate rate).')
+  const untimed = fns.filter((f) => f.target && f.eventDate && !f.startTime).map((f) => f.name || 'Untitled function')
+  if (untimed.length) {
+    notes.push(`No start time yet for ${untimed.join(', ')} — the hall is priced as that date’s hire. A function before 8 AM belongs to the day before.`)
+  }
+  const undated = fns.filter((f) => f.target && !f.eventDate).map((f) => f.name || 'Untitled function')
+  if (undated.length) notes.push(`Set the date to price the hall for: ${undated.join(', ')}.`)
   if (quote.missingVenueRates.length > 0) {
     notes.push(`No hall rate for this event type at: ${quote.missingVenueRates.join(', ')}. The hall is left out of those functions.`)
   }
@@ -510,6 +557,14 @@ function InstantFunctions({
   const [form, setForm] = useState<Fn>({ ...BLANK_FN, eventDate: fromDate })
   const [editing, setEditing] = useState<number | null>(null)
   const [openMenu, setOpenMenu] = useState<number | null>(null)
+  // The form sits below the list, so with a few functions it is off-screen: pressing Edit
+  // filled it in where nobody could see, and the button read as dead (client, 16 Oct 2026).
+  const formRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (editing == null) return
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    formRef.current?.querySelector<HTMLInputElement>('input:not([type=date])')?.focus({ preventScroll: true })
+  }, [editing])
 
   function commit() {
     const next = editing == null ? [...fns, form] : fns.map((f, i) => (i === editing ? form : f))
@@ -584,7 +639,7 @@ function InstantFunctions({
         </ol>
       )}
 
-      <div className="rounded-lg border p-4">
+      <div ref={formRef} className={cn('rounded-lg border p-4', editing != null && 'ring-2 ring-primary/40')}>
         <h4 className="mb-3 text-sm font-medium">
           {editing != null
             ? `Edit ${fns[editing]?.name || 'function'}`
@@ -679,18 +734,68 @@ function InstantDishes({
   )
 }
 
-function InstantRooms({ options, rooms, setRooms }: { options: Options; rooms: Room[]; setRooms: (r: Room[]) => void }) {
+function InstantRooms({
+  options,
+  rooms,
+  setRooms,
+  fromDate,
+}: {
+  options: Options
+  rooms: Room[]
+  setRooms: (r: Room[]) => void
+  fromDate: string
+}) {
   const units = options.lodgingUnits ?? []
   const [unitId, setUnitId] = useState('')
   const [roomType, setRoomType] = useState('')
   const [count, setCount] = useState('')
   const [nights, setNights] = useState('1')
+  // Blank means "from the From date", so a run changed later still carries the rooms with it.
+  const [checkIn, setCheckIn] = useState('')
+
+  // Rooms are taken from what the lodge actually has free (client, 16 Oct 2026: "not like that
+  // to choose 100 rooms which has only 20"). The same check the real proposal runs — every line
+  // counted against the others of its category on the same nights — asked for the lines already
+  // here AND the one in the form, which goes last with a count of nought so it measures the room
+  // that is left rather than competing with itself. An instant still holds nothing: the real
+  // proposal re-checks on save, so a room taken by somebody else in between is caught there.
+  const start = checkIn || fromDate
+  const nightsN = Number(nights)
+  const lines = rooms.map((r) => ({ r, from: r.checkIn || fromDate }))
+  const query = [
+    ...lines.filter((l) => l.from).map(({ r, from }) => ({ unit_id: r.unitId, room_type: r.roomType, count: r.count, check_in: from, check_out: addDaysISO(from, r.nights) })),
+    ...(unitId && roomType && start && nightsN > 0
+      ? [{ unit_id: unitId, room_type: roomType, count: 0, check_in: start, check_out: addDaysISO(start, nightsN) }]
+      : []),
+  ]
+  const queryKey = JSON.stringify(query)
+  const [free, setFree] = useState<{ key: string; lines: { available: number; total: number }[] } | null>(null)
+  useEffect(() => {
+    if (query.length === 0) return
+    const t = setTimeout(() => {
+      api<{ lines: { available: number; total: number }[] }>('/rooms/availability', { method: 'POST', body: JSON.stringify({ lines: query }) })
+        .then((res) => setFree({ key: queryKey, lines: res.lines }))
+        .catch(() => setFree(null))
+    }, 250)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryKey])
+  const answered = free?.key === queryKey ? free.lines : null
+  const datedCount = lines.filter((l) => l.from).length
+  /** What the line at `i` of `rooms` has free, or undefined while unknown / undated. */
+  const freeFor = (i: number) => {
+    if (!answered || !lines[i]!.from) return undefined
+    return answered[lines.slice(0, i).filter((l) => l.from).length]
+  }
+  const formFree = answered && query.length > datedCount ? answered[datedCount] : undefined
 
   const unitItems = units.map((u) => ({ value: u.id, label: u.name }))
   const typeItems = options.roomRates
     .filter((r) => r.unitId === unitId)
     .map((r) => ({ value: r.roomType, label: `${r.roomType} · ${formatPaise(r.rackRatePaise)} / night` }))
-  const ready = Boolean(unitId && roomType && Number(count) > 0 && Number(nights) > 0)
+  // Never more than is free: the Add waits for the answer, and refuses a count above it.
+  const over = formFree != null && Number(count) > formFree.available
+  const ready = Boolean(unitId && roomType && start && Number(count) > 0 && nightsN > 0 && formFree && !over)
 
   return (
     <div className="space-y-4">
@@ -700,7 +805,18 @@ function InstantRooms({ options, rooms, setRooms }: { options: Options; rooms: R
           {rooms.map((r, i) => (
             <li key={i} className="flex items-center justify-between rounded-lg border bg-card p-3 text-sm">
               <span>
-                {r.count} × {r.roomType} · {units.find((u) => u.id === r.unitId)?.name} · {r.nights} night{r.nights === 1 ? '' : 's'}
+                {r.count} × {roomLabel(r.roomType)} · {units.find((u) => u.id === r.unitId)?.name} ·{' '}
+                {stayLabel(r.checkIn || fromDate, r.nights)}
+                {/* A line that fitted when it was added can stop fitting: its dates moved, or
+                    another booking took the rooms. Said in words, not just colour. */}
+                {(() => {
+                  const f = freeFor(i)
+                  return f && r.count > f.available ? (
+                    <span className="block text-xs font-medium text-red-600 dark:text-red-400">
+                      Only {f.available} of {f.total} free on these dates — reduce this line.
+                    </span>
+                  ) : null
+                })()}
               </span>
               <Button variant="ghost" size="icon" aria-label="Remove rooms" onClick={() => setRooms(rooms.filter((_, j) => j !== i))}>
                 <Trash2 className="size-4" />
@@ -709,7 +825,7 @@ function InstantRooms({ options, rooms, setRooms }: { options: Options; rooms: R
           ))}
         </ul>
       )}
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-5">
         <Field label="Lodge">
           <Select items={unitItems} value={unitId} onValueChange={(v) => { setUnitId(v ?? ''); setRoomType('') }}>
             <SelectTrigger><SelectValue placeholder="Lodge" /></SelectTrigger>
@@ -731,17 +847,31 @@ function InstantRooms({ options, rooms, setRooms }: { options: Options; rooms: R
           </Select>
         </Field>
         <Field label="Rooms">
-          <Input type="number" min={1} value={count} onChange={(e) => setCount(e.target.value)} />
+          <Input type="number" min={1} max={formFree?.available || undefined} value={count} onChange={(e) => setCount(e.target.value)} />
+        </Field>
+        <Field label="Check-in">
+          <Input type="date" value={checkIn || fromDate} onChange={(e) => setCheckIn(e.target.value === fromDate ? '' : e.target.value)} />
         </Field>
         <Field label="Nights">
           <Input type="number" min={1} value={nights} onChange={(e) => setNights(e.target.value)} />
         </Field>
       </div>
+      {unitId && roomType && (
+        <p className={cn('text-sm', over ? 'font-medium text-red-600 dark:text-red-400' : 'text-muted-foreground')}>
+          {!start
+            ? 'Pick a check-in date to see how many rooms are free.'
+            : !formFree
+              ? 'Checking what is free…'
+              : over
+                ? `Only ${formFree.available} of ${formFree.total} ${roomLabel(roomType)} free on these dates.`
+                : `${formFree.available} of ${formFree.total} ${roomLabel(roomType)} free on these dates.`}
+        </p>
+      )}
       <Button
         variant="outline"
         disabled={!ready}
         onClick={() => {
-          setRooms([...rooms, { unitId, roomType, count: Number(count), nights: Number(nights) }])
+          setRooms([...rooms, { unitId, roomType, count: Number(count), nights: Number(nights), ...(checkIn && { checkIn }) }])
           setCount('')
         }}
       >
@@ -752,51 +882,95 @@ function InstantRooms({ options, rooms, setRooms }: { options: Options; rooms: R
 }
 
 const inr = (paise: number) => formatPaise(paise, { symbol: false })
+/** Table cells: whole rupees when there are no paise ("2,10,000"), so eight columns fit an A4. */
+const inrShort = (paise: number) => {
+  const full = inr(paise)
+  return full.endsWith('.00') ? full.slice(0, -3) : full
+}
 const shortDate = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+/** "Wednesday, 10 February 2027" — a date heading. */
+const dayDate = (iso: string) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 const longDate = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
 
-/** The one-page summary the lead drew (booking-summary.html), filled from the quote. */
+/** "deluxe_other" → "Deluxe Other": room categories are stored as codes. */
+const roomLabel = (code: string) => code.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+/** "16 Oct → 18 Oct · 2 nights", or just the nights when there is no date to count from. */
+const stayLabel = (checkIn: string, nights: number) =>
+  `${checkIn ? `${shortDate(checkIn)} → ${shortDate(addDaysISO(checkIn, nights))} · ` : ''}${nights} night${nights === 1 ? '' : 's'}`
+const addDaysISO = (iso: string, days: number) => {
+  const d = new Date(`${iso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * The one-page summary the lead drew (booking-summary.html), filled from the quote.
+ *
+ * Every price on its own line (client, 16 Oct 2026): each function's hall, plate rate and food,
+ * and each room line with its lodge, category and nights — on ONE page, so the dish lists were
+ * taken off it. The dishes are still on the proposal itself, and on the real one once converted.
+ */
 function InstantSummary({
   quote,
-  fns,
-  tiers,
+  rooms,
   guestName,
   eventLabel,
   fromDate,
   toDate,
 }: {
   quote: DemoQuote
-  fns: Fn[]
-  tiers: Tier[]
+  /** The draft's rooms, in the order the quote priced them — for the dates the quote doesn't carry. */
+  rooms: Room[]
   guestName: string
   eventLabel: string
   fromDate: string
   toDate: string
 }) {
   const roomCount = quote.rooms.reduce((s, r) => s + r.count, 0)
-  // One block per distinct menu: functions on the same tier with the same dishes share one.
-  const menus = new Map<string, { names: string[]; tierName: string; perPlatePaise: number; lines: string[] }>()
-  quote.functions.forEach((qf) => {
-    const f = fns[qf.index]
-    const tier = f && tiers.find((t) => t.id === f.tierId)
-    if (!f || !tier || !qf.tierName || qf.perPlatePaise == null) return
-    const lines = tier.categories.flatMap((c) => {
-      if (c.pickCount == null && !c.freeChoice) return [c.name]
-      const picked = f.dishes[c.name] ?? []
-      if (c.freeChoice) return picked
-      return picked.length ? picked : [`${c.name} (any ${c.pickCount})`]
-    })
-    const key = `${f.tierId}|${lines.join('|')}`
-    const fnName = f.name || 'Untitled function'
-    const m = menus.get(key)
-    if (m) m.names.push(fnName)
-    else menus.set(key, { names: [fnName], tierName: qf.tierName, perPlatePaise: qf.perPlatePaise, lines })
-  })
   const from = fromDate || quote.functions.find((f) => f.eventDate)?.eventDate || ''
   const to = toDate || [...quote.functions].reverse().find((f) => f.eventDate)?.eventDate || from
   const dates = !from ? 'Dates to be fixed' : from === to ? longDate(from) : `${longDate(from)} – ${longDate(to)}`
+
+  // DATE-WISE (client, 16 Oct 2026): each date has its functions — hall, menu and the price of
+  // each — and the rooms occupied THAT night, so a guest reads what every day costs. A room booked
+  // for three nights appears under each of its three dates at one night's price; the hall is
+  // shown on its function's date, carried by the day's first function as on the bill.
+  type QuoteFn = DemoQuote['functions'][number]
+  type Night = { lodge: string; category: string; night: string; count: number; ratePaise: number; amountPaise: number; nights: number }
+  const byDate = new Map<string, { fns: QuoteFn[]; rooms: Night[]; totalPaise: number }>()
+  const dayOf = (date: string) => {
+    if (!byDate.has(date)) byDate.set(date, { fns: [], rooms: [], totalPaise: 0 })
+    return byDate.get(date)!
+  }
+  for (const f of quote.functions) {
+    const day = dayOf(f.eventDate ?? '')
+    day.fns.push(f)
+    day.totalPaise += (f.venuePaise ?? 0) + f.foodPaise
+  }
+  quote.rooms.forEach((r, i) => {
+    const start = rooms[i]?.checkIn || from
+    const base = { lodge: r.unitName, category: roomLabel(r.roomType), count: r.count, ratePaise: r.ratePaise, nights: r.nights }
+    if (!start) {
+      // Undated: the whole stay in one line under "Date to be fixed".
+      dayOf('').rooms.push({ ...base, night: '', amountPaise: r.amountPaise })
+      dayOf('').totalPaise += r.amountPaise
+      return
+    }
+    for (let n = 0; n < r.nights; n++) {
+      const night = addDaysISO(start, n)
+      const day = dayOf(night)
+      day.rooms.push({ ...base, night, amountPaise: r.ratePaise * r.count })
+      day.totalPaise += r.ratePaise * r.count
+    }
+  })
+  // Dated days in order; anything not yet dated last.
+  const days = [...byDate.entries()]
+    .sort(([a], [b]) => (a || '9999').localeCompare(b || '9999'))
+    .map(([date, d]) => ({ date, ...d }))
+
   return (
     <div className={styles.sheet}>
       <div className={styles.bar} />
@@ -823,50 +997,100 @@ function InstantSummary({
           </div>
         </div>
 
-        {quote.functions.length > 0 && (
-          <>
-            <div className={styles.sec}>FUNCTIONS</div>
-            <table className={styles.fn}>
-              <thead>
-                <tr><th>FUNCTION</th><th>VENUE</th><th>MENU</th><th className={styles.r}>PAX</th><th className={styles.r}>₹</th></tr>
-              </thead>
-              <tbody>
-                {quote.functions.map((f) => (
-                  <tr key={f.index}>
-                    <td>
-                      <b>{f.name || 'Function'}</b>
-                      <small>
-                        {[
-                          f.eventDate ? shortDate(f.eventDate) : 'Date to be fixed',
-                          f.startTime && f.endTime ? formatTimeRange(f.startTime, f.endTime) : null,
-                        ].filter(Boolean).join(' · ')}
-                      </small>
-                    </td>
-                    <td>{f.venueName ?? '—'}</td>
-                    <td className={styles.menuName}>{f.tierName ?? '—'}</td>
-                    <td className={styles.r}>{f.pax ?? '—'}</td>
-                    <td className={styles.r}>{inr((f.venuePaise ?? 0) + f.foodPaise)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
-        )}
-
-        {menus.size > 0 && (
-          <>
-            <div className={styles.sec}>MENUS</div>
-            <div className={styles.menus}>
-              {[...menus.entries()].map(([key, m]) => (
-                <div key={key}>
-                  <div className={styles.menuH}><span>{m.tierName}</span><em>₹{inr(m.perPlatePaise)} / plate</em></div>
-                  <p className={styles.menuFor}>{m.names.join(', ')}</p>
-                  <p>{m.lines.join(' · ')}</p>
-                </div>
-              ))}
+        {days.map((day) => (
+          <section key={day.date || 'tbd'} className={styles.day}>
+            <div className={styles.dayH}>
+              <span>{day.date ? dayDate(day.date) : 'Date to be fixed'}</span>
+              <span>Day total ₹{inr(day.totalPaise)}</span>
             </div>
-          </>
-        )}
+            {day.fns.length > 0 && (
+              <table className={cn(styles.tbl, styles.fnTbl)}>
+                <thead>
+                  <tr>
+                    <th>Function</th>
+                    <th>Item</th>
+                    <th>Details</th>
+                    <th className={styles.r}>Pax</th>
+                    <th className={styles.r}>₹ / plate</th>
+                    <th className={styles.r}>Amount ₹</th>
+                  </tr>
+                </thead>
+                {/* Venue and food on rows of their own (client, 16 Oct 2026), the function named
+                    once beside them. One <tbody> per function keeps the pair together. */}
+                {day.fns.map((f) => {
+                  const lines: { item: string; detail: string; pax: string; rate: string; amount: ReactNode }[] = []
+                  if (f.venueName) {
+                    lines.push({
+                      item: 'Venue',
+                      detail: f.venueName,
+                      pax: '',
+                      rate: '',
+                      // 0 is a hall already paid for that day (one hire a day), never "free".
+                      amount: f.venuePaise == null ? <small>To be quoted</small> : f.venuePaise === 0 ? <small>Included</small> : inrShort(f.venuePaise),
+                    })
+                  }
+                  if (f.tierName) {
+                    lines.push({
+                      item: 'Food',
+                      detail: f.tierName,
+                      pax: f.pax ? String(f.pax) : '—',
+                      rate: f.perPlatePaise != null ? inrShort(f.perPlatePaise) : '—',
+                      amount: inrShort(f.foodPaise),
+                    })
+                  }
+                  if (lines.length === 0) lines.push({ item: '—', detail: 'Venue and menu to be fixed', pax: f.pax ? String(f.pax) : '', rate: '', amount: '—' })
+                  return (
+                    <tbody key={f.index} className={styles.fnGroup}>
+                      {lines.map((l, i) => (
+                        <tr key={l.item}>
+                          {i === 0 && (
+                            <td rowSpan={lines.length} className={styles.fnName}>
+                              <b>{f.name || 'Function'}</b>
+                              <small>{f.startTime && f.endTime ? formatTimeRange(f.startTime, f.endTime) : 'Time to be fixed'}</small>
+                            </td>
+                          )}
+                          <td className={styles.item}>{l.item}</td>
+                          <td>{l.detail}</td>
+                          <td className={styles.r}>{l.pax}</td>
+                          <td className={styles.r}>{l.rate}</td>
+                          <td className={cn(styles.r, styles.amt)}>{l.amount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  )
+                })}
+              </table>
+            )}
+            {day.rooms.length > 0 && (
+              <table className={cn(styles.tbl, styles.roomTbl)}>
+                <thead>
+                  <tr>
+                    <th>Room</th>
+                    <th>{day.date ? 'Night' : 'Stay'}</th>
+                    <th className={styles.r}>Rooms</th>
+                    <th className={styles.r}>₹ / night</th>
+                    <th className={styles.r}>Amount ₹</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {day.rooms.map((r, i) => (
+                    <tr key={i}>
+                      <td><b>{r.lodge}</b> · {r.category}</td>
+                      <td>
+                        {r.night
+                          ? `${shortDate(r.night)} → check-out ${shortDate(addDaysISO(r.night, 1))}`
+                          : `${r.nights} night${r.nights === 1 ? '' : 's'}`}
+                      </td>
+                      <td className={styles.r}>{r.count}</td>
+                      <td className={styles.r}>{inrShort(r.ratePaise)}</td>
+                      <td className={cn(styles.r, styles.amt)}>{inrShort(r.amountPaise)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        ))}
       </div>
 
       <div className={styles.bottom}>

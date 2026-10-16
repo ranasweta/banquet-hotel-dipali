@@ -1614,6 +1614,21 @@ Existing dishes were **not** back-filled — Platinum's card today lacks some of
 (Assorted Paratha, Bombay Kaccha Sandwich and others), and whether a richer breakfast should
 contain them all is the client's call, not a cascade's.
 
+### F33. Instant proposals — priced on stated assumptions, rooms within what is free
+Client, 16 Oct 2026. An instant proposal is an estimate given at the counter before much is
+decided, and it now prices the way a real proposal does instead of leaving gaps:
+- **No event type picked → priced as a wedding** (`DEFAULT_EVENT_TYPE`, `lib/demo-quote.ts`):
+  wedding hall rates and the wedding plate surcharge. The screen says so above the summary.
+- **A function with a date but no start time** is placed in that date's hall hire (as if it
+  began at the 8 AM boundary), so its hall is priced rather than dropped; also said on screen.
+  A function that really starts before 8 AM belongs to the day before — setting the time fixes it.
+- **Rooms cannot exceed what the lodge has free** on those nights: the same availability check as
+  the booking wizard, counted against the instant's own other lines. An instant still holds
+  nothing, so the real proposal re-checks on save.
+- Room lines carry an optional **check-in date** (default: the From date), and the printed
+  estimate is laid out **date by date** — each date's functions (venue and food on their own
+  rows) and the rooms occupied that night, with a day total.
+
 ---
 
 ## E. Still needed from the client
