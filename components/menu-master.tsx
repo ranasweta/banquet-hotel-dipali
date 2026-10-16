@@ -592,7 +592,7 @@ function SegmentPanel({
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Soup" />
           </label>
           <label className="text-sm">
-            <span className="text-xs text-muted-foreground">Pick count (blank = all included)</span>
+            <span className="text-xs text-muted-foreground">Pick count (blank = any number)</span>
             <Input inputMode="numeric" value={pick} onChange={(e) => setPick(e.target.value)} placeholder="2" className="w-48" />
           </label>
           <Button
@@ -712,7 +712,7 @@ function SegmentRow({
                     body: JSON.stringify({
                       name: name.trim(),
                       pick_count: pick.trim() ? Number(pick) : null,
-                      // An all-included segment has nothing to increase; the DB refuses the
+                      // A segment with no count has no limit to increase; the DB refuses the
                       // combination, so don't let the form send it.
                       free_increase_eligible: pick.trim() ? free : false,
                       sort_order: cat.sortOrder,

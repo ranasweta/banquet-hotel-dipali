@@ -1629,6 +1629,15 @@ decided, and it now prices the way a real proposal does instead of leaving gaps:
   estimate is laid out **date by date** — each date's functions (venue and food on their own
   rows) and the rooms occupied that night, with a day total.
 
+### F34. No segment is "all included" any more
+Client, 16 Oct 2026, the day after §F32: *"all included should not be there, just you have to
+select items."* Every segment without a count — breads, salad bar, accompaniments, high tea,
+breakfast — is free choice (migration 0042): the guest ticks what they want, any number, none
+required. `free_choice = (pick_count IS NULL)` is now a CHECK on `menu_categories` and on
+`sub_event_menu_categories`, so the master, the seed and any hand-written statement agree.
+Booked menus kept every dish that had been copied in and became tickable. The printed card's
+"all included" lines (§B-series) are no longer reproduced as such: what prints is what was ticked.
+
 ---
 
 ## E. Still needed from the client

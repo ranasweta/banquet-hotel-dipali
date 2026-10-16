@@ -15,11 +15,9 @@ const category = z
   .object({
     name: z.string().min(1),
     printedAs: z.string().optional(),
-    /** null = every item included; see menu_categories.pick_count. */
+    /** null = free choice, any number of dishes; see menu_categories.pick_count. */
     pick: z.number().int().positive().nullable(),
     freeIncreaseEligible: z.boolean(),
-    /** Ticked, any number, nought included; needs pick null (migration 0041). */
-    freeChoice: z.boolean().default(false),
     items: z.array(z.string().min(1)).min(1),
   })
   .passthrough()
@@ -29,9 +27,6 @@ const category = z
         code: 'custom',
         message: `pick of ${c.pick} exceeds ${c.items.length} item(s) — the category could never be completed`,
       })
-    }
-    if (c.freeChoice && c.pick !== null) {
-      ctx.addIssue({ code: 'custom', message: 'a free-choice category has no pick count' })
     }
     if (c.pick === null && c.freeIncreaseEligible) {
       ctx.addIssue({

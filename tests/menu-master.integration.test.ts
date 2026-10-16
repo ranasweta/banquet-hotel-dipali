@@ -251,17 +251,24 @@ d('segments', () => {
     expect(dessert).toMatchObject({ name: 'Desserts', pickCount: 3, freeIncreaseEligible: false, sortOrder: 1 })
   }, 120_000)
 
-  it('treats a blank pick count as "all included"', async () => {
+  it('treats a blank pick count as free choice — there is no all-included segment (0042)', async () => {
     const { tierId } = await makeTier('AllIn', 50_000)
     const { id } = await master.createCategory(auditor, tierId, {
       name: 'Breads', pickCount: null, freeIncreaseEligible: false, sortOrder: 9,
     })
-    const t = await tierByName('AllIn')
-    expect(t.categories.find((c) => c.id === id)!.pickCount).toBeNull()
+    const seg = () => tierByName('AllIn').then((t) => t.categories.find((c) => c.id === id)!)
+    expect(await seg()).toMatchObject({ pickCount: null, freeChoice: true })
+    // Given a count it is "any N"; blank again, free choice again.
+    await master.updateCategory(auditor, id, { name: 'Breads', pickCount: 2, freeIncreaseEligible: false, sortOrder: 9 })
+    expect(await seg()).toMatchObject({ pickCount: 2, freeChoice: false })
+    await master.updateCategory(auditor, id, { name: 'Breads', pickCount: null, freeIncreaseEligible: false, sortOrder: 9 })
+    expect(await seg()).toMatchObject({ pickCount: null, freeChoice: true })
+    // And the database will not hold an all-included segment however it is written.
+    await expect(db.execute(sql`UPDATE menu_categories SET free_choice = false WHERE id = ${id}`)).rejects.toThrow()
   }, 120_000)
 
-  it('refuses an all-included segment that is also free-increase eligible', async () => {
-    // Mirrors the DB CHECK: there is nothing to increase when everything is already on.
+  it('refuses a segment with no count that is also free-increase eligible', async () => {
+    // Mirrors the DB CHECK: there is no limit to increase when there is no count.
     const { tierId } = await makeTier('Contradiction', 50_000)
     await expect(
       master.createCategory(auditor, tierId, {

@@ -6,8 +6,8 @@
  *     eligible category applies immediately (BR-M2/BR-M3);
  *   - the wedding surcharge is applied only for weddings (BR-M5).
  *
- * Plus the surrounding rules: incomplete saves allowed, over-pick rejected, all-included
- * categories auto-filled, ineligible-category increase → exception, add-ons in the
+ * Plus the surrounding rules: incomplete saves allowed, over-pick rejected, free-choice
+ * categories ticked freely, ineligible-category increase → exception, add-ons in the
  * proposal, and the locked-event guard. Drives the lib/menus service against the test DB.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
@@ -121,20 +121,13 @@ d('save + snapshot (BR-M1)', () => {
     expect(dessert.complete).toBe(false) // 0 of 2
   })
 
-  it('auto-fills all-included categories and forbids increasing them', async () => {
+  it('starts a no-count segment empty, for the guest to tick — there is no all-included (0042)', async () => {
     const sub = await makeSubEvent()
     await menus.saveSubEventMenu(actor, sub, { tierId: await tierId('Silver'), selections: {} })
-    const snap = await menus.getSubEventMenu(sub)
-    const bread = snap.menu!.categories.find((c) => c.categoryName === 'Assorted Indian Bread')!
-    expect(bread.effectivePick).toBeNull()
-    // The whole list is copied in — compare against the master rather than a magic number,
-    // which would drift every time a combined "A / B" line is split into separate dishes.
-    const silverBread = (await menus.getTierCatalog())
-      .find((t) => t.name === 'Silver')!
-      .categories.find((c) => c.name === 'Assorted Indian Bread')!
-    expect(bread.selected).toHaveLength(silverBread.items.length)
-    expect(bread.complete).toBe(true)
-    await expect(menus.increaseCategory(actor, sub, 'Assorted Indian Bread')).rejects.toThrow(/already included/)
+    const bread = (await menus.getSubEventMenu(sub)).menu!.categories.find((c) => c.categoryName === 'Assorted Indian Bread')!
+    // Nothing is copied in any more; it is complete with nought, and has no limit to increase.
+    expect(bread).toMatchObject({ freeChoice: true, effectivePick: null, selected: [], complete: true })
+    await expect(menus.increaseCategory(actor, sub, 'Assorted Indian Bread')).rejects.toThrow(/no limit/)
   })
 
   it('lets a breakfast be ticked freely — any number, none at all, never an extra', async () => {

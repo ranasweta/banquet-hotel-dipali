@@ -230,7 +230,7 @@ export async function seed(
         name: c.name,
         pick_count: c.pick,
         free_increase_eligible: c.freeIncreaseEligible,
-        free_choice: c.freeChoice,
+        free_choice: c.pick === null, // no count IS free choice (migration 0042)
         sort_order: i,
       })),
     )
